@@ -269,5 +269,35 @@ INSTANTIATE_TEST_SUITE_P(DimensionsUpTo4096, HighDimTest,
                          ::testing::Values(1u, 128u, 384u, 768u, 1536u, 3072u,
                                            4096u));
 
+TEST(HttpApi, RejectsOversizedDimensionAndBadDocId) {
+  const std::string dir = TempDir("aster_http_sec");
+  Catalog::Options opt;
+  opt.data_dir = dir;
+  opt.wal_sync = SyncPolicy::kNever;
+  auto cat = Catalog::Open(opt);
+  ASSERT_TRUE(cat.ok());
+  ApiHandler handler(cat.value().get());
+
+  auto huge = handler.Handle(HttpRequest{
+      "PUT", "/v1/collections/big", "",
+      R"({"dimension":99999,"metric":"cosine"})", ""});
+  EXPECT_EQ(huge.status, 400);
+
+  auto created = handler.Handle(HttpRequest{
+      "PUT", "/v1/collections/ok", "",
+      R"({"dimension":2,"metric":"l2"})", ""});
+  ASSERT_EQ(created.status, 201);
+
+  auto bad_id = handler.Handle(HttpRequest{
+      "PUT", "/v1/collections/ok/docs/..", "",
+      R"({"vector":[1,0],"timestamp":1})", ""});
+  EXPECT_EQ(bad_id.status, 400);
+
+  auto bad_topk = handler.Handle(HttpRequest{
+      "POST", "/v1/collections/ok/search", "",
+      R"({"vector":[1,0],"top_k":100000})", ""});
+  EXPECT_EQ(bad_topk.status, 400);
+}
+
 }  // namespace
 }  // namespace aster

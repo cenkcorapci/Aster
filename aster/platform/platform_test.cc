@@ -86,5 +86,19 @@ TEST(PosixStorage, TrailingSlashRoot) {
   EXPECT_TRUE(store.Exists("x"));
 }
 
+TEST(PosixStorage, RejectsPathTraversal) {
+  const std::string root = ::testing::TempDir() + "/aster_posix_trav";
+  ::mkdir(root.c_str(), 0755);
+  PosixStorage store(root);
+  EXPECT_FALSE(store.Put("../escape", "x").ok());
+  EXPECT_FALSE(store.Put("a/../../etc/passwd", "x").ok());
+  EXPECT_FALSE(store.Put("/etc/passwd", "x").ok());
+  EXPECT_FALSE(store.Exists("../escape"));
+  EXPECT_FALSE(store.Read("../escape").ok());
+  EXPECT_FALSE(store.Remove("foo/../bar").ok());
+  ASSERT_TRUE(store.Put("safe/nested.dat", "ok").ok());
+  EXPECT_EQ(store.Read("safe/nested.dat").value(), "ok");
+}
+
 }  // namespace
 }  // namespace aster

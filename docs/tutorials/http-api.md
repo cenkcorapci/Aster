@@ -33,6 +33,9 @@ bazel run //aster/cli:aster -- serve --data-dir /tmp/aster-data --port 8080
 
 Header when `--api-key` is set: `X-Api-Key: secret` or `Authorization: Bearer secret`.
 
+Default bind is `127.0.0.1` (not public). Request bodies are capped (16 MiB);
+dimension ≤ 8192; `top_k` ≤ 1000. Document ids cannot contain `/` or `..`.
+
 ## Example
 
 ```bash

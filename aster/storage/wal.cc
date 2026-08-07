@@ -14,6 +14,8 @@ namespace {
 
 constexpr uint32_t kRecordMagic = 0x41535452;  // "ASTR"
 constexpr uint64_t kGroupCommitMs = 5;
+constexpr uint32_t kMaxWalRecordBytes = 64u << 20;   // 64 MiB
+constexpr uint64_t kMaxWalFileBytes = 1ull << 30;     // 1 GiB
 
 std::array<uint32_t, 256> MakeCrcTable() {
   std::array<uint32_t, 256> table{};
@@ -106,6 +108,9 @@ Status WalWriter::Truncate() {
 }
 
 Status WalWriter::Append(const std::string& payload) {
+  if (payload.size() > kMaxWalRecordBytes) {
+    return Status::InvalidArgument("wal record too large");
+  }
   const uint32_t crc = Crc32(payload.data(), payload.size());
   const uint32_t length = static_cast<uint32_t>(payload.size());
 
@@ -150,6 +155,10 @@ Result<std::vector<std::string>> ReplayWal(const std::string& path) {
   ssize_t n;
   while ((n = ::read(fd, buf, sizeof(buf))) > 0) {
     contents.append(buf, static_cast<size_t>(n));
+    if (contents.size() > kMaxWalFileBytes) {
+      ::close(fd);
+      return Status::Corruption("wal exceeds size limit");
+    }
   }
   ::close(fd);
   if (n < 0) return Status::IoError("read failed: " + path);
@@ -162,6 +171,7 @@ Result<std::vector<std::string>> ReplayWal(const std::string& path) {
     std::memcpy(&crc, contents.data() + off + 4, 4);
     std::memcpy(&length, contents.data() + off + 8, 4);
     if (magic != kRecordMagic) break;                    // corrupt header
+    if (length > kMaxWalRecordBytes) break;              // hostile / corrupt
     if (off + 12 + length > contents.size()) break;      // torn record
     const char* payload = contents.data() + off + 12;
     if (Crc32(payload, length) != crc) break;            // corrupt payload

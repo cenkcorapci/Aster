@@ -6,6 +6,7 @@
 #include <unistd.h>
 
 #include <fstream>
+#include <string_view>
 
 namespace aster {
 namespace {
@@ -27,6 +28,22 @@ Status MkdirParents(const std::string& file_path) {
   return Status::Ok();
 }
 
+bool IsSafeRelativePath(const std::string& path) {
+  if (path.empty()) return true;
+  if (path[0] == '/' || path.find('\0') != std::string::npos) return false;
+  size_t i = 0;
+  while (i < path.size()) {
+    while (i < path.size() && path[i] == '/') ++i;
+    if (i >= path.size()) break;
+    size_t j = i;
+    while (j < path.size() && path[j] != '/') ++j;
+    const std::string_view part(path.data() + i, j - i);
+    if (part == ".." || part == ".") return false;
+    i = j;
+  }
+  return true;
+}
+
 }  // namespace
 
 PosixStorage::PosixStorage(std::string root) : root_(std::move(root)) {
@@ -34,13 +51,17 @@ PosixStorage::PosixStorage(std::string root) : root_(std::move(root)) {
 }
 
 std::string PosixStorage::Resolve(const std::string& path) const {
+  // Public helper used by tests; unsafe inputs yield empty string.
+  if (!IsSafeRelativePath(path)) return {};
   if (path.empty()) return root_;
-  if (path[0] == '/') return root_ + path;
   return root_ + "/" + path;
 }
 
 Status PosixStorage::Put(const std::string& path, const std::string& data) {
-  const std::string full = Resolve(path);
+  if (!IsSafeRelativePath(path) || path.empty()) {
+    return Status::InvalidArgument("path escapes storage root");
+  }
+  const std::string full = root_ + "/" + path;
   if (auto st = MkdirParents(full); !st.ok()) return st;
   const std::string tmp = full + ".tmp";
   {
@@ -56,7 +77,10 @@ Status PosixStorage::Put(const std::string& path, const std::string& data) {
 }
 
 Result<std::string> PosixStorage::Read(const std::string& path) {
-  const std::string full = Resolve(path);
+  if (!IsSafeRelativePath(path) || path.empty()) {
+    return Status::InvalidArgument("path escapes storage root");
+  }
+  const std::string full = root_ + "/" + path;
   std::ifstream in(full, std::ios::binary);
   if (!in) return Status::NotFound(path);
   return std::string((std::istreambuf_iterator<char>(in)),
@@ -64,7 +88,10 @@ Result<std::string> PosixStorage::Read(const std::string& path) {
 }
 
 Status PosixStorage::Remove(const std::string& path) {
-  const std::string full = Resolve(path);
+  if (!IsSafeRelativePath(path) || path.empty()) {
+    return Status::InvalidArgument("path escapes storage root");
+  }
+  const std::string full = root_ + "/" + path;
   if (::unlink(full.c_str()) != 0) {
     if (errno == ENOENT) return Status::NotFound(path);
     return Status::IoError("unlink failed: " + full);
@@ -73,8 +100,9 @@ Status PosixStorage::Remove(const std::string& path) {
 }
 
 Result<std::vector<std::string>> PosixStorage::List(const std::string& prefix) {
-  // List files under root whose relative path starts with prefix.
-  // Shallow: only direct children of root (enough for M3-T03 tests).
+  if (!IsSafeRelativePath(prefix)) {
+    return Status::InvalidArgument("path escapes storage root");
+  }
   std::vector<std::string> out;
   DIR* dir = ::opendir(root_.c_str());
   if (!dir) return Status::IoError("opendir failed: " + root_);
@@ -88,7 +116,8 @@ Result<std::vector<std::string>> PosixStorage::List(const std::string& prefix) {
 }
 
 bool PosixStorage::Exists(const std::string& path) {
-  const std::string full = Resolve(path);
+  if (!IsSafeRelativePath(path) || path.empty()) return false;
+  const std::string full = root_ + "/" + path;
   struct stat st {};
   return ::stat(full.c_str(), &st) == 0;
 }

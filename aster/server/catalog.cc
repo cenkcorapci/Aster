@@ -131,6 +131,9 @@ Status Catalog::CreateCollection(const CollectionInfo& info) {
   if (info.dimension == 0) {
     return Status::InvalidArgument("dimension must be > 0");
   }
+  if (info.dimension > 8192) {
+    return Status::InvalidArgument("dimension too large");
+  }
 
   std::lock_guard lock(mu_);
   if (infos_.count(info.name)) {

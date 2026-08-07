@@ -17,6 +17,34 @@
 namespace aster {
 namespace {
 
+constexpr size_t kMaxHeaderBytes = 64 * 1024;
+constexpr size_t kMaxBodyBytes = 16 * 1024 * 1024;  // 16 MiB JSON body cap
+constexpr uint32_t kMaxDimension = 8192;
+constexpr uint32_t kMaxTopK = 1000;
+constexpr size_t kMaxDocIdLen = 512;
+
+bool ConstantTimeEqual(const std::string& a, const std::string& b) {
+  // Length leak is acceptable for API keys; avoid early-exit on content.
+  const size_t n = a.size() > b.size() ? a.size() : b.size();
+  unsigned char diff = static_cast<unsigned char>(a.size() ^ b.size());
+  for (size_t i = 0; i < n; ++i) {
+    const unsigned char ac = i < a.size() ? static_cast<unsigned char>(a[i]) : 0;
+    const unsigned char bc = i < b.size() ? static_cast<unsigned char>(b[i]) : 0;
+    diff = static_cast<unsigned char>(diff | (ac ^ bc));
+  }
+  return diff == 0;
+}
+
+bool ValidDocId(const std::string& id) {
+  if (id.empty() || id.size() > kMaxDocIdLen) return false;
+  if (id.find('/') != std::string::npos || id.find('\\') != std::string::npos ||
+      id.find('\0') != std::string::npos) {
+    return false;
+  }
+  if (id == "." || id == ".." || id.find("..") != std::string::npos) return false;
+  return true;
+}
+
 HttpResponse JsonStatus(int code, const std::string& msg) {
   HttpResponse r;
   r.status = code;
@@ -106,7 +134,8 @@ HttpResponse ApiHandler::Handle(const HttpRequest& req) const {
     return {200, "application/json", "{\"ok\":true}"};
   }
 
-  if (!expected_api_key_.empty() && req.api_key != expected_api_key_) {
+  if (!expected_api_key_.empty() &&
+      !ConstantTimeEqual(req.api_key, expected_api_key_)) {
     return JsonStatus(401, "unauthorized");
   }
 
@@ -164,6 +193,9 @@ HttpResponse ApiHandler::Handle(const HttpRequest& req) const {
       info.name = name;
       auto dim = json::GetInt(req.body, "dimension");
       if (!dim || *dim <= 0) return JsonStatus(400, "dimension required");
+      if (*dim > static_cast<int64_t>(kMaxDimension)) {
+        return JsonStatus(400, "dimension too large");
+      }
       info.dimension = static_cast<uint32_t>(*dim);
       auto metric_s = json::GetString(req.body, "metric");
       auto metric = ParseMetric(metric_s.value_or("cosine"));
@@ -208,9 +240,15 @@ HttpResponse ApiHandler::Handle(const HttpRequest& req) const {
       SearchRequest search;
       search.vector = std::move(*vec);
       if (auto k = json::GetInt(req.body, "top_k")) {
+        if (*k <= 0 || *k > static_cast<int64_t>(kMaxTopK)) {
+          return JsonStatus(400, "top_k out of range");
+        }
         search.top_k = static_cast<uint32_t>(*k);
       }
       if (auto ef = json::GetInt(req.body, "ef_search")) {
+        if (*ef < 0 || *ef > 100000) {
+          return JsonStatus(400, "ef_search out of range");
+        }
         search.ef_search = static_cast<uint32_t>(*ef);
       }
       if (auto tags = json::GetStringArray(req.body, "tags")) {
@@ -247,6 +285,7 @@ HttpResponse ApiHandler::Handle(const HttpRequest& req) const {
       parts[3] == "docs") {
     const std::string& name = parts[2];
     const std::string& id = parts[4];
+    if (!ValidDocId(id)) return JsonStatus(400, "invalid document id");
     if (req.method == "GET") {
       auto row = catalog_->Get(name, id);
       if (!row.ok()) return FromStatus(row.status());
@@ -378,7 +417,7 @@ void HttpServer::HandleClient(int fd) {
       return;
     }
     raw.append(buf, static_cast<size_t>(n));
-    if (raw.size() > 1 << 20) {
+    if (raw.size() > kMaxHeaderBytes) {
       ::close(fd);
       return;
     }
@@ -400,6 +439,10 @@ void HttpServer::HandleClient(int fd) {
     rl >> req.method;
     std::string target;
     rl >> target;
+    if (target.size() > 2048) {
+      ::close(fd);
+      return;
+    }
     const size_t q = target.find('?');
     if (q == std::string::npos) {
       req.path = target;
@@ -407,6 +450,8 @@ void HttpServer::HandleClient(int fd) {
       req.path = target.substr(0, q);
       req.query = target.substr(q + 1);
     }
+    bool saw_length = false;
+    size_t want = 0;
     while (std::getline(hs, line)) {
       if (!line.empty() && line.back() == '\r') line.pop_back();
       const auto colon = line.find(':');
@@ -416,25 +461,70 @@ void HttpServer::HandleClient(int fd) {
       while (!val.empty() && val[0] == ' ') val.erase(val.begin());
       for (char& c : key) c = static_cast<char>(std::tolower(c));
       if (key == "content-length") {
-        const size_t want = static_cast<size_t>(std::stoul(val));
-        while (body.size() < want) {
-          const ssize_t n = ::recv(fd, buf, sizeof(buf), 0);
-          if (n <= 0) break;
-          body.append(buf, static_cast<size_t>(n));
+        // Reject non-digits / overflow before allocating.
+        if (val.empty() || val.size() > 10) {
+          ::close(fd);
+          return;
         }
-        if (body.size() > want) body.resize(want);
+        for (char c : val) {
+          if (c < '0' || c > '9') {
+            ::close(fd);
+            return;
+          }
+        }
+        want = static_cast<size_t>(std::stoul(val));
+        if (want > kMaxBodyBytes) {
+          ::close(fd);
+          return;
+        }
+        saw_length = true;
       } else if (key == "x-api-key") {
+        if (val.size() > 512) {
+          ::close(fd);
+          return;
+        }
         req.api_key = val;
       } else if (key == "authorization" && val.rfind("Bearer ", 0) == 0) {
         req.api_key = val.substr(7);
+        if (req.api_key.size() > 512) {
+          ::close(fd);
+          return;
+        }
       }
+    }
+    if (saw_length) {
+      while (body.size() < want) {
+        const ssize_t n = ::recv(fd, buf, sizeof(buf), 0);
+        if (n <= 0) break;
+        body.append(buf, static_cast<size_t>(n));
+        if (body.size() > kMaxBodyBytes) {
+          ::close(fd);
+          return;
+        }
+      }
+      if (body.size() > want) body.resize(want);
+      if (body.size() != want) {
+        ::close(fd);
+        return;
+      }
+    } else if (body.size() > kMaxBodyBytes) {
+      ::close(fd);
+      return;
     }
   }
   req.body = std::move(body);
 
   const HttpResponse resp = handler_.Handle(req);
   std::ostringstream out;
-  out << "HTTP/1.1 " << resp.status << " OK\r\n"
+  out << "HTTP/1.1 " << resp.status;
+  if (resp.status == 200) out << " OK";
+  else if (resp.status == 201) out << " Created";
+  else if (resp.status == 400) out << " Bad Request";
+  else if (resp.status == 401) out << " Unauthorized";
+  else if (resp.status == 404) out << " Not Found";
+  else if (resp.status == 405) out << " Method Not Allowed";
+  else out << " Error";
+  out << "\r\n"
       << "Content-Type: " << resp.content_type << "\r\n"
       << "Content-Length: " << resp.body.size() << "\r\n"
       << "Connection: close\r\n\r\n"

@@ -44,7 +44,9 @@ if [ "$#" -eq 0 ]; then
 fi
 
 if [ "$(id -u)" = "0" ] && grep -q '^aster:' /etc/passwd 2>/dev/null; then
-  chown -R aster:aster "$ASTER_DATA_DIR" /results || true
+  # Own the mount points only (no recursive chown — avoids following
+  # attacker-controlled symlinks under a shared volume).
+  chown aster:aster "$ASTER_DATA_DIR" /results || true
   if [ -x "$SU_EXEC" ]; then
     exec "$SU_EXEC" aster:aster "$ASTER_BIN" "$@"
   fi

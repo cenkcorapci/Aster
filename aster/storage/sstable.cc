@@ -4,6 +4,7 @@
 #include <cstring>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <map>
 #include <set>
 #include <utility>
@@ -23,6 +24,9 @@ constexpr size_t kFooterBytes = 40;
 constexpr size_t kNumBlocks = 7;
 constexpr uint32_t kNoVector = 0xFFFFFFFFu;
 constexpr uint32_t kFlagHasTags = 1u << 1;
+constexpr uint64_t kMaxRowsPerSstable = 50'000'000ull;
+constexpr uint32_t kMaxDimension = 16384u;
+constexpr uint64_t kMaxSstableFileBytes = 4ull << 30;  // 4 GiB
 
 
 struct BlockDesc {
@@ -422,6 +426,9 @@ Result<std::unique_ptr<SstableReader>> SstableReader::Open(
   if (!in) return Status::IoError("open failed: " + path);
   std::string data((std::istreambuf_iterator<char>(in)),
                    std::istreambuf_iterator<char>());
+  if (data.size() > kMaxSstableFileBytes) {
+    return Status::Corruption("sstable exceeds size limit");
+  }
   if (data.size() < kPreludeBytes + kFooterBytes) {
     return Status::Corruption("sstable too small");
   }
@@ -452,6 +459,17 @@ Result<std::unique_ptr<SstableReader>> SstableReader::Open(
   const uint32_t bloom_hashes = ReadU32(data, off);
   const uint64_t bloom_seed = ReadU64(data, off);
   (void)sparse_stride;
+
+  if (dimension > kMaxDimension) {
+    return Status::Corruption("sstable dimension too large");
+  }
+  if (row_count > kMaxRowsPerSstable || live_row_count > row_count) {
+    return Status::Corruption("sstable row_count invalid");
+  }
+  if (dimension > 0 && live_row_count >
+                           (std::numeric_limits<size_t>::max() / dimension)) {
+    return Status::Corruption("sstable vector block would overflow");
+  }
 
   // Footer checks.
   const size_t footer_off = data.size() - kFooterBytes;
