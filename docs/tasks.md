@@ -4,6 +4,9 @@ Atomic, claimable sub-tasks for the roadmap in
 [`development-plan.md`](development-plan.md). Agents (human or AI) pick work
 from here using the protocol in [`start-the-tasks.md`](start-the-tasks.md).
 
+Hands-on docs: [tutorials](tutorials/README.md). Progress snapshot lives in
+the development plan.
+
 ## How to read a task
 
 | Field | Meaning |
@@ -113,8 +116,8 @@ Status updates happen in this file (see start-the-tasks.md § Claiming).
 | M3-T03 | done | platform | M0 | PosixStorage backend (files + mmap) | `aster/platform/posix*` | Implements `StorageBackend`; Db can persist via it |
 | M3-T04 | open | platform | M3-T03 | S3 storage backend skeleton (Put/Get/List/Remove) | `aster/platform/s3*` | Integration test against LocalStack or mock; not production-complete |
 | M3-T05 | done | platform | — | Compile-time profiles: Tiny / Edge / Server | `aster/`, `.bazelrc` | Feature flags compile; Tiny excludes HNSW |
+| M3-T05a | done | platform | M3-T05 | Arduino / bare-metal `//aster/embedded` + BusyBox musl image | `aster/embedded/`, `deploy/docker/`, `scripts/` | `libembedded.a` builds; `aster:local` image runs demo |
 | M3-T06 | open | platform | M2-T09, M3-T05 | ARM (NEON) CI build for Edge profile | CI | Green arm64 job; local: `--config=raspberry_pi` / `build-matrix.sh --full` |
-
 | M3-T07 | open | platform | M1-T09 | Arena / slab allocators on write path + memory budget | `aster/core/memory*`, `aster/db/` | Budget exceeded → clear Status; no unbounded growth in soak |
 | M3-T08 | open | qa | M3-T05, M3-T03, M2-T04 | Pi/edge validation runbook + results | `docs/` | Documented RSS <128 MB with 1M vectors |
 
@@ -133,7 +136,7 @@ Status updates happen in this file (see start-the-tasks.md § Claiming).
 | M4-T05 | open | rpc | M4-T02 | TOML config loader for server | `aster/cli/`, config schema | Documented knobs load; bad config → clear error |
 | M4-T06 | done | obs | M0 | Prometheus `/metrics` endpoint (real counters/histograms) | `aster/metrics/` | scrapeable; key latency metrics present |
 | M4-T07 | open | obs | M4-T06 | Grafana dashboard JSON shipped in repo | `deploy/` or `docs/` | Import works against local Prometheus |
-| M4-T08 | open | release | M4-T02 | Static Docker image (<15 MB) | `deploy/docker/`, `scripts/docker-build.sh` | BusyBox musl image builds (~3.6 MB); RPC serve still needs M4-T02 |
+| M4-T08 | done | release | M4-T02 | Static Docker image (<15 MB) | `deploy/docker/`, `scripts/docker-build.sh` | BusyBox musl demo image builds (~3.6 MB); RPC serve still needs M4-T02 |
 
 
 | M4-T09 | open | qa | M4-T02, M4-T06 | 24h soak + ASan/TSan CI jobs | CI, `aster/qa/` | Soak report; sanitizer jobs green |

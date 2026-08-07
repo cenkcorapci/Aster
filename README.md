@@ -16,13 +16,20 @@ bazel run //aster/cli:aster     # local demo
 ./scripts/docker-build.sh       # BusyBox image → aster:local
 ```
 
+## Tutorials
+
+- [Database management](docs/tutorials/database-management.md) — open, upsert, search, flush, compact, Docker
+- [Client libraries](docs/tutorials/client-libraries.md) — seven-language facades (transport = M5)
+
+Full docs index: [docs/README.md](docs/README.md).
+
 ## Layout
 
 | Path | What |
 | --- | --- |
 | `aster/` | Engine (`db`, `embedded`, storage, index, …) |
 | `clients/` | Client SDKs ([README](clients/README.md)) |
-| `docs/` | Design, indexing, roadmap |
+| `docs/` | Design, tutorials, roadmap |
 | `tla/` | Formal specs ([README](tla/README.md)) |
 
 ## More

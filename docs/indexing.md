@@ -1,17 +1,17 @@
 # Aster indexing reference
 
-This document is the normative reference for how vector indexing works in
-Aster: the HNSW algorithm itself, how immutable per-segment HNSW graphs are
-managed inside the LSM storage engine, and how indexing behaves correctly
-and performantly in the distributed (peer-to-peer, replicated) setting.
+Normative reference for vector indexing: HNSW, immutable per-segment
+graphs inside the LSM engine, and distributed search behavior.
 
-The lifecycle and invariants described here are formally specified and
-model-checked in [`tla/AsterLsmIndex.tla`](../tla/AsterLsmIndex.tla)
-(single node) and [`tla/AsterReplication.tla`](../tla/AsterReplication.tla)
-(distributed). Implementations must not change these semantics without
-updating the specs first.
+**Implementation status:** search today uses the **exact** index
+(`BuildExactIndex`). Segmented HNSW is milestone **M2**. Lifecycle
+invariants are already specified in
+[`tla/AsterLsmIndex.tla`](../tla/AsterLsmIndex.tla) and
+[`tla/AsterReplication.tla`](../tla/AsterReplication.tla) — do not change
+those semantics without updating the specs.
 
 Contents:
+
 
 1. [Background: the ANN problem](#1-background-the-ann-problem)
 2. [HNSW: the algorithm](#2-hnsw-the-algorithm)

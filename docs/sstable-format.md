@@ -1,8 +1,7 @@
 # Aster SSTable binary format (RFC)
 
-**Status:** draft for M1  
-**Task:** M1-T01  
-**Audience:** implementers of the SSTable writer (`M1-T02`) and reader (`M1-T03`)
+**Status:** implemented for M1 (compression / HNSW side-car still open)  
+**Audience:** SSTable writer/reader in `aster/storage/sstable.*`
 
 This document is the normative on-disk layout for an Aster **immutable
 segment file** (`.ast`). It matches the logical segment contents in

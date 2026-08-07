@@ -1,3 +1,19 @@
+# Aster design
+
+Architecture for a Cassandra-style, peer-to-peer vector database with
+LSM storage and per-segment HNSW indexes.
+
+**Implementation status (pre-alpha):** single-node `Db` with memtable,
+WAL, SSTables, exact search, and compaction is usable. Segmented HNSW,
+Thrift server, gossip, and replication are still roadmap items — see
+[development-plan.md](development-plan.md) and
+[tutorials](tutorials/README.md).
+
+This document is the long-form target architecture. Normative indexing
+lifecycle: [indexing.md](indexing.md) + `tla/`.
+
+---
+
 This architecture is feasible and, in my view, has a strong differentiator: a Cassandra-style decentralized storage engine with an HNSW-based vector layer that is designed for dynamic writes and low-resource deployments. The key challenge is not HNSW search itself; it is maintaining high write throughput while preserving graph quality over time. Recent work on dynamic HNSW and LSM-integrated vector indexes suggests a better approach than a single mutable graph: treat vectors like an LSM tree, where writes land in immutable segments that each own an HNSW graph, and background compaction merges graphs incrementally. That preserves Cassandra-like write characteristics while avoiding expensive global graph mutations. HNSW supports incremental inserts well, but long-running update-heavy workloads can degrade graph connectivity unless maintenance is performed. LSM-style graph organization and connectivity-aware graph maintenance significantly improve update throughput and long-term recall.
 
 blog.vectorchord.ai +3
