@@ -1,0 +1,18 @@
+# Top-level aliases for the engines people actually link against.
+
+package(default_visibility = ["//visibility:public"])
+
+alias(
+    name = "db",
+    actual = "//aster/db",
+)
+
+alias(
+    name = "embedded",
+    actual = "//aster/embedded",
+)
+
+alias(
+    name = "cli",
+    actual = "//aster/cli:aster",
+)

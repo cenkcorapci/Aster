@@ -6,6 +6,10 @@ cc_test(
     name = "integration_test",
     size = "small",
     srcs = ["integration_test.cc"],
+    target_compatible_with = select({
+        "//platforms:is_baremetal": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    }),
     deps = [
         "//aster/db",
         "//aster/distributed",

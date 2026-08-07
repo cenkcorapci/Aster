@@ -32,6 +32,17 @@ use_repo(toolchains_musl, "musl_toolchains_hub")
 
 register_toolchains("@musl_toolchains_hub//:all")
 
+# Hermetic zig-cc for cross-compiling to Intel/ARM Linux (and optional
+# Darwin/Windows). Toolchains are NOT registered globally — configs pull
+# them in via --extra_toolchains so Apple/host clang stays default.
+bazel_dep(name = "hermetic_cc_toolchain", version = "4.3.0")
+
+zig = use_extension(
+    "@hermetic_cc_toolchain//toolchain:ext.bzl",
+    "toolchains",
+)
+use_repo(zig, "zig_sdk")
+
 
 # Client-library rulesets are wired in per milestone M6 (see
 # docs/development-plan.md). They are intentionally not added yet so that

@@ -3,21 +3,16 @@ load("@rules_cc//cc:cc_test.bzl", "cc_test")
 
 package(default_visibility = ["//visibility:public"])
 
+# In-memory LSM pieces (memtable + sealed segments). Safe for MCU / Tiny.
 cc_library(
-    name = "storage",
+    name = "memory",
     srcs = [
-        "manifest.cc",
         "memtable.cc",
         "segment.cc",
-        "sstable.cc",
-        "wal.cc",
     ],
     hdrs = [
-        "manifest.h",
         "memtable.h",
         "segment.h",
-        "sstable.h",
-        "wal.h",
     ],
     deps = [
         "//aster/core",
@@ -25,10 +20,46 @@ cc_library(
     ],
 )
 
+# Durable on-disk formats (WAL / SSTable / manifest). Hosted POSIX only.
+cc_library(
+    name = "disk",
+    srcs = [
+        "manifest.cc",
+        "sstable.cc",
+        "wal.cc",
+    ],
+    hdrs = [
+        "manifest.h",
+        "sstable.h",
+        "wal.h",
+    ],
+    target_compatible_with = select({
+        "//platforms:is_baremetal": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    }),
+    deps = [
+        ":memory",
+        "//aster/core",
+        "//aster/index",
+    ],
+)
+
+cc_library(
+    name = "storage",
+    deps = [":memory"] + select({
+        "//platforms:is_baremetal": [],
+        "//conditions:default": [":disk"],
+    }),
+)
+
 cc_test(
     name = "storage_test",
     size = "small",
     srcs = ["storage_test.cc"],
+    target_compatible_with = select({
+        "//platforms:is_baremetal": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    }),
     deps = [
         ":storage",
         "@googletest//:gtest_main",

@@ -9,6 +9,9 @@ build --cxxopt=-Wextra
 # Test output.
 test --test_output=errors
 
+# Prefer platform-based toolchain resolution.
+common --enable_platform_specific_config
+
 # Convenience configs.
 build:opt --compilation_mode=opt
 build:dbg --compilation_mode=dbg
@@ -17,8 +20,10 @@ build:asan --cxxopt=-fsanitize=address --linkopt=-fsanitize=address
 build:tsan --compilation_mode=dbg
 build:tsan --cxxopt=-fsanitize=thread --linkopt=-fsanitize=thread
 
-# Compile-time deployment profiles (see aster/core/features.h).
-# Default (no --config) is Server. Exactly one profile macro is set.
+# ---------------------------------------------------------------------------
+# Deployment profiles (aster/core/features.h). Orthogonal to CPU/OS platforms.
+# Default (no --config) is Server.
+# ---------------------------------------------------------------------------
 build:tiny --cxxopt=-DASTER_PROFILE_TINY
 build:tiny --host_cxxopt=-DASTER_PROFILE_TINY
 build:edge --cxxopt=-DASTER_PROFILE_EDGE
@@ -26,8 +31,53 @@ build:edge --host_cxxopt=-DASTER_PROFILE_EDGE
 build:server --cxxopt=-DASTER_PROFILE_SERVER
 build:server --host_cxxopt=-DASTER_PROFILE_SERVER
 
+# ---------------------------------------------------------------------------
+# Hosted CPU / OS platforms (Apple Silicon, Intel Mac, Linux).
+# Use the host toolchain when the platform matches the machine; otherwise
+# pair with a zig --config below for cross-compile.
+# ---------------------------------------------------------------------------
+build:macos_arm64 --platforms=//platforms:macos_arm64
+build:macos_amd64 --platforms=//platforms:macos_amd64
+build:linux_amd64 --platforms=//platforms:linux_amd64
+build:linux_arm64 --platforms=//platforms:linux_arm64
+build:linux_armv7 --platforms=//platforms:linux_armv7
+build:windows_amd64 --platforms=//platforms:windows_amd64
+
+# Friendly aliases.
+build:apple_silicon --config=macos_arm64
+build:apple_intel --config=macos_amd64
+build:intel --config=linux_amd64
+build:raspberry_pi --config=linux_arm64 --config=edge
+
+# ---------------------------------------------------------------------------
+# Cross-compile with hermetic zig-cc (no global register — opt-in only).
+# ---------------------------------------------------------------------------
+build:zig_linux_amd64 --platforms=@zig_sdk//platform:linux_amd64
+build:zig_linux_amd64 --extra_toolchains=@zig_sdk//toolchain:linux_amd64_musl
+build:zig_linux_amd64 --compilation_mode=opt
+build:zig_linux_amd64 --strip=always
+
+build:zig_linux_arm64 --platforms=@zig_sdk//platform:linux_arm64
+build:zig_linux_arm64 --extra_toolchains=@zig_sdk//toolchain:linux_arm64_musl
+build:zig_linux_arm64 --compilation_mode=opt
+build:zig_linux_arm64 --strip=always
+
+# Darwin cross (e.g. build Intel Mac binary from Apple Silicon).
+build:zig_macos_amd64 --platforms=@zig_sdk//platform:darwin_amd64
+build:zig_macos_amd64 --extra_toolchains=@zig_sdk//toolchain:darwin_amd64
+build:zig_macos_amd64 --compilation_mode=opt
+
+build:zig_macos_arm64 --platforms=@zig_sdk//platform:darwin_arm64
+build:zig_macos_arm64 --extra_toolchains=@zig_sdk//toolchain:darwin_arm64
+build:zig_macos_arm64 --compilation_mode=opt
+
+build:zig_windows_amd64 --platforms=@zig_sdk//platform:windows_amd64
+build:zig_windows_amd64 --extra_toolchains=@zig_sdk//toolchain:windows_amd64
+build:zig_windows_amd64 --compilation_mode=opt
+
+# ---------------------------------------------------------------------------
 # Fully-static musl Linux binaries for BusyBox (see deploy/docker/).
-# Cross-compiles from macOS or Linux; does not affect default host builds.
+# ---------------------------------------------------------------------------
 build:linux_musl_amd64 --platforms=//platforms:linux_amd64_musl
 build:linux_musl_amd64 --compilation_mode=opt
 build:linux_musl_amd64 --features=fully_static_link
@@ -39,6 +89,17 @@ build:linux_musl_arm64 --compilation_mode=opt
 build:linux_musl_arm64 --features=fully_static_link
 build:linux_musl_arm64 --dynamic_mode=off
 build:linux_musl_arm64 --strip=always
+
+# ---------------------------------------------------------------------------
+# Arduino / MCU (Tiny profile, no POSIX disk backends).
+# Builds //aster/embedded — link the .a from PlatformIO / ESP-IDF / Arduino.
+# ---------------------------------------------------------------------------
+build:arduino --config=tiny
+build:arduino --define=aster_runtime=baremetal
+build:arduino --cxxopt=-DASTER_BAREMETAL=1
+build:arduino --cxxopt=-fno-exceptions
+build:arduino --cxxopt=-fno-rtti
+build:arduino --compilation_mode=opt
 
 # Users can keep private flags out of version control.
 try-import %workspace%/.bazelrc.user

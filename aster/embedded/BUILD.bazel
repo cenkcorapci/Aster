@@ -1,0 +1,30 @@
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_cc//cc:cc_test.bzl", "cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+# Tiny in-memory engine for Arduino / ESP32 / bare-metal embeds.
+# No POSIX, WAL, or SSTable — link from MCU toolchains or build with
+#   bazel build --config=arduino //aster/embedded
+cc_library(
+    name = "embedded",
+    srcs = ["db.cc"],
+    hdrs = ["db.h"],
+    deps = [
+        "//aster/core",
+        "//aster/index",
+        "//aster/platform:memory",
+        "//aster/query",
+        "//aster/storage:memory",
+    ],
+)
+
+cc_test(
+    name = "embedded_test",
+    size = "small",
+    srcs = ["embedded_test.cc"],
+    deps = [
+        ":embedded",
+        "@googletest//:gtest_main",
+    ],
+)

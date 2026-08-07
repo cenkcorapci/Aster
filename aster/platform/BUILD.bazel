@@ -3,24 +3,49 @@ load("@rules_cc//cc:cc_test.bzl", "cc_test")
 
 package(default_visibility = ["//visibility:public"])
 
+# Always available (Arduino / MCU / hosted).
 cc_library(
-    name = "platform",
-    srcs = [
-        "memory_storage.cc",
-        "posix_storage.cc",
-    ],
+    name = "memory",
+    srcs = ["memory_storage.cc"],
     hdrs = [
         "memory_storage.h",
-        "posix_storage.h",
         "storage_backend.h",
     ],
     deps = ["//aster/core"],
+)
+
+# POSIX filesystem backend — excluded for --config=arduino (baremetal).
+cc_library(
+    name = "posix",
+    srcs = ["posix_storage.cc"],
+    hdrs = ["posix_storage.h"],
+    target_compatible_with = select({
+        "//platforms:is_baremetal": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    }),
+    deps = [
+        ":memory",
+        "//aster/core",
+    ],
+)
+
+# Umbrella matching historical //aster/platform:platform.
+cc_library(
+    name = "platform",
+    deps = [":memory"] + select({
+        "//platforms:is_baremetal": [],
+        "//conditions:default": [":posix"],
+    }),
 )
 
 cc_test(
     name = "platform_test",
     size = "small",
     srcs = ["platform_test.cc"],
+    target_compatible_with = select({
+        "//platforms:is_baremetal": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    }),
     deps = [
         ":platform",
         "@googletest//:gtest_main",

@@ -1,9 +1,17 @@
-# Target platforms for fully-static musl Linux binaries (BusyBox / scratch).
+# Aster target platforms and capability constraints.
 #
-# The musl toolchain is gated on the `musl_static` constraint so default
-# host builds (macOS or glibc Linux) keep using the system C++ toolchain.
+# Profiles (Tiny / Edge / Server) are orthogonal compile-time feature sets
+# (--config=tiny|edge|server). Platforms select OS/CPU/toolchain.
+#
+#   Apple Silicon Mac:   //platforms:macos_arm64  (or host default)
+#   Intel Mac:           //platforms:macos_amd64
+#   Linux servers:       //platforms:linux_{amd64,arm64}
+#   BusyBox / scratch:   //platforms:linux_{amd64,arm64}_musl
+#   Arduino / MCU Tiny:  --config=arduino  → //aster/embedded
 
 package(default_visibility = ["//visibility:public"])
+
+# --- libc / linkage ----------------------------------------------------------
 
 constraint_setting(name = "libc")
 
@@ -11,6 +19,83 @@ constraint_value(
     name = "musl_static",
     constraint_setting = ":libc",
 )
+
+constraint_value(
+    name = "host_libc",
+    constraint_setting = ":libc",
+)
+
+# --- Runtime mode via --define=aster_runtime=... -----------------------------
+# Used by select() to drop POSIX disk backends for MCU / Arduino builds.
+
+config_setting(
+    name = "is_baremetal",
+    define_values = {"aster_runtime": "baremetal"},
+)
+
+config_setting(
+    name = "is_hosted_posix",
+    define_values = {"aster_runtime": "posix"},
+)
+
+# --- Hosted OS/CPU platforms -------------------------------------------------
+
+platform(
+    name = "macos_arm64",
+    constraint_values = [
+        "@platforms//os:macos",
+        "@platforms//cpu:arm64",
+        ":host_libc",
+    ],
+)
+
+platform(
+    name = "macos_amd64",
+    constraint_values = [
+        "@platforms//os:macos",
+        "@platforms//cpu:x86_64",
+        ":host_libc",
+    ],
+)
+
+platform(
+    name = "linux_amd64",
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:x86_64",
+        ":host_libc",
+    ],
+)
+
+platform(
+    name = "linux_arm64",
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:arm64",
+        ":host_libc",
+    ],
+)
+
+# Raspberry Pi–class 32-bit ARM (pair with --config=edge).
+platform(
+    name = "linux_armv7",
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:arm",
+        ":host_libc",
+    ],
+)
+
+platform(
+    name = "windows_amd64",
+    constraint_values = [
+        "@platforms//os:windows",
+        "@platforms//cpu:x86_64",
+        ":host_libc",
+    ],
+)
+
+# --- Static musl (BusyBox / scratch) ----------------------------------------
 
 platform(
     name = "linux_amd64_musl",
