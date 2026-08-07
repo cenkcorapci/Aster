@@ -130,8 +130,7 @@ Status updates happen in this file (see start-the-tasks.md § Claiming).
 | M4-T03 | open | rpc | M4-T02 | Optional TLS transport | `aster/rpc/` | TLS accept + insecure still works |
 | M4-T04 | open | rpc | M4-T02 | Collection create/drop/configure API | `aster/db/`, `aster/rpc/` | Matches `client-api.md` lifecycle states |
 | M4-T05 | open | rpc | M4-T02 | TOML config loader for server | `aster/cli/`, config schema | Documented knobs load; bad config → clear error |
-| M4-T06 | in_progress | obs | M0 | Prometheus `/metrics` endpoint (real counters/histograms) | `aster/metrics/` | scrapeable; key latency metrics present |
-<!-- claim: M4-T06 | agent: wave1-obs | branch: main | since: 2026-08-07 -->
+| M4-T06 | done | obs | M0 | Prometheus `/metrics` endpoint (real counters/histograms) | `aster/metrics/` | scrapeable; key latency metrics present |
 | M4-T07 | open | obs | M4-T06 | Grafana dashboard JSON shipped in repo | `deploy/` or `docs/` | Import works against local Prometheus |
 | M4-T08 | open | release | M4-T02 | Static Docker image (<15 MB) | `Dockerfile`, CI | Image builds; container serves RPC |
 | M4-T09 | open | qa | M4-T02, M4-T06 | 24h soak + ASan/TSan CI jobs | CI, `aster/qa/` | Soak report; sanitizer jobs green |
