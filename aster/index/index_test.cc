@@ -54,5 +54,19 @@ TEST(ExactIndex, TopKLargerThanIndex) {
   EXPECT_EQ(hits.size(), 1u);
 }
 
+#if ASTER_ENABLE_HNSW
+TEST(HnswParams, DefaultsPresentWhenEnabled) {
+  HnswParams p;
+  EXPECT_EQ(p.m, 16u);
+  EXPECT_EQ(p.ef_construction, 128u);
+}
+#else
+TEST(HnswParams, TypeOmittedUnderTiny) {
+  // HnswParams is not declared when ASTER_ENABLE_HNSW == 0.
+  static_assert(ASTER_ENABLE_HNSW == 0);
+  SUCCEED();
+}
+#endif
+
 }  // namespace
 }  // namespace aster

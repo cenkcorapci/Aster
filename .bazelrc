@@ -17,5 +17,14 @@ build:asan --cxxopt=-fsanitize=address --linkopt=-fsanitize=address
 build:tsan --compilation_mode=dbg
 build:tsan --cxxopt=-fsanitize=thread --linkopt=-fsanitize=thread
 
+# Compile-time deployment profiles (see aster/core/features.h).
+# Default (no --config) is Server. Exactly one profile macro is set.
+build:tiny --cxxopt=-DASTER_PROFILE_TINY
+build:tiny --host_cxxopt=-DASTER_PROFILE_TINY
+build:edge --cxxopt=-DASTER_PROFILE_EDGE
+build:edge --host_cxxopt=-DASTER_PROFILE_EDGE
+build:server --cxxopt=-DASTER_PROFILE_SERVER
+build:server --host_cxxopt=-DASTER_PROFILE_SERVER
+
 # Users can keep private flags out of version control.
 try-import %workspace%/.bazelrc.user

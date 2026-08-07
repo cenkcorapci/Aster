@@ -7,6 +7,7 @@ cc_library(
     name = "core",
     srcs = ["hash.cc"],
     hdrs = [
+        "features.h",
         "hash.h",
         "status.h",
         "types.h",
@@ -17,6 +18,16 @@ cc_test(
     name = "core_test",
     size = "small",
     srcs = ["core_test.cc"],
+    deps = [
+        ":core",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cc_test(
+    name = "features_test",
+    size = "small",
+    srcs = ["features_test.cc"],
     deps = [
         ":core",
         "@googletest//:gtest_main",

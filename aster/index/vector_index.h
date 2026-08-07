@@ -3,18 +3,22 @@
 #include <memory>
 #include <vector>
 
+#include "aster/core/features.h"
 #include "aster/core/types.h"
 
 namespace aster {
 
+#if ASTER_ENABLE_HNSW
 // HNSW build/search parameters. See docs/indexing.md for the full reference
 // on how these interact with recall, latency, and memory.
+// Omitted entirely under ASTER_PROFILE_TINY (ASTER_ENABLE_HNSW == 0).
 struct HnswParams {
   uint32_t m = 16;               // max neighbors per node (layers > 0)
   uint32_t ef_construction = 128;
   uint32_t ef_search_default = 64;
   uint32_t max_layers = 16;
 };
+#endif
 
 // Immutable per-segment vector index. Built once when a memtable is flushed
 // or when segments are compacted, then never mutated (see docs/indexing.md,
@@ -43,8 +47,10 @@ struct IndexEntry {
 std::unique_ptr<VectorIndex> BuildExactIndex(Metric metric,
                                              std::vector<IndexEntry> entries);
 
+#if ASTER_ENABLE_HNSW
 // Segmented HNSW build lands in milestone M2 (docs/development-plan.md):
 // std::unique_ptr<VectorIndex> BuildHnswIndex(Metric, HnswParams,
 //                                             std::vector<IndexEntry>);
+#endif
 
 }  // namespace aster
