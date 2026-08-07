@@ -1,13 +1,28 @@
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_cc//cc:cc_test.bzl", "cc_test")
 
 package(default_visibility = ["//visibility:public"])
 
 cc_library(
     name = "platform",
-    srcs = ["memory_storage.cc"],
+    srcs = [
+        "memory_storage.cc",
+        "posix_storage.cc",
+    ],
     hdrs = [
         "memory_storage.h",
+        "posix_storage.h",
         "storage_backend.h",
     ],
     deps = ["//aster/core"],
+)
+
+cc_test(
+    name = "platform_test",
+    size = "small",
+    srcs = ["platform_test.cc"],
+    deps = [
+        ":platform",
+        "@googletest//:gtest_main",
+    ],
 )
