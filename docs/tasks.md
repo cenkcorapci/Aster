@@ -60,7 +60,8 @@ Status updates happen in this file (see start-the-tasks.md § Claiming).
 
 | ID | Status | Lane | Depends | Title | Touch | Done when |
 | --- | --- | --- | --- | --- | --- | --- |
-| M1-T01 | open | storage | — | Spec SSTable binary layout (header, blocks, footer CRC) as a short RFC in `docs/` | `docs/sstable-format.md` (new) | Format doc reviewed; block order + CRC rules unambiguous |
+| M1-T01 | in_progress | storage | — | Spec SSTable binary layout (header, blocks, footer CRC) as a short RFC in `docs/` | `docs/sstable-format.md` (new) | Format doc reviewed; block order + CRC rules unambiguous |
+<!-- claim: M1-T01 | agent: wave1-storage | branch: main | since: 2026-08-07 -->
 | M1-T02 | open | storage | M1-T01 | Implement SSTable writer (encode one segment to disk) | `aster/storage/sstable*` | Round-trip unit test: write N rows → file exists → byte layout matches RFC |
 | M1-T03 | open | storage | M1-T02 | Implement SSTable reader (mmap or pread) with ID binary search | `aster/storage/sstable*` | `Get(id)` from disk matches in-memory segment for fixture data |
 | M1-T04 | open | storage | M1-T02 | Bloom filter + sparse index in SSTable | `aster/storage/`, `aster/index/bloom*` | Negative lookups skip disk I/O in test; false-positive rate documented |
@@ -112,7 +113,8 @@ Status updates happen in this file (see start-the-tasks.md § Claiming).
 | M3-T02 | open | release | M3-T01 | Amalgamated / installable embedded library target | `aster/`, BUILD files | Downstream can depend on one `cc_library` or release tarball |
 | M3-T03 | open | platform | M0 | PosixStorage backend (files + mmap) | `aster/platform/posix*` | Implements `StorageBackend`; Db can persist via it |
 | M3-T04 | open | platform | M3-T03 | S3 storage backend skeleton (Put/Get/List/Remove) | `aster/platform/s3*` | Integration test against LocalStack or mock; not production-complete |
-| M3-T05 | open | platform | — | Compile-time profiles: Tiny / Edge / Server | `aster/`, `.bazelrc` | Feature flags compile; Tiny excludes HNSW |
+| M3-T05 | in_progress | platform | — | Compile-time profiles: Tiny / Edge / Server | `aster/`, `.bazelrc` | Feature flags compile; Tiny excludes HNSW |
+<!-- claim: M3-T05 | agent: wave1-platform | branch: main | since: 2026-08-07 -->
 | M3-T06 | open | platform | M2-T09, M3-T05 | ARM (NEON) CI build for Edge profile | CI | Green arm64 job |
 | M3-T07 | open | platform | M1-T09 | Arena / slab allocators on write path + memory budget | `aster/core/memory*`, `aster/db/` | Budget exceeded → clear Status; no unbounded growth in soak |
 | M3-T08 | open | qa | M3-T05, M3-T03, M2-T04 | Pi/edge validation runbook + results | `docs/` | Documented RSS <128 MB with 1M vectors |
@@ -130,7 +132,8 @@ Status updates happen in this file (see start-the-tasks.md § Claiming).
 | M4-T03 | open | rpc | M4-T02 | Optional TLS transport | `aster/rpc/` | TLS accept + insecure still works |
 | M4-T04 | open | rpc | M4-T02 | Collection create/drop/configure API | `aster/db/`, `aster/rpc/` | Matches `client-api.md` lifecycle states |
 | M4-T05 | open | rpc | M4-T02 | TOML config loader for server | `aster/cli/`, config schema | Documented knobs load; bad config → clear error |
-| M4-T06 | open | obs | M0 | Prometheus `/metrics` endpoint (real counters/histograms) | `aster/metrics/` | scrapeable; key latency metrics present |
+| M4-T06 | in_progress | obs | M0 | Prometheus `/metrics` endpoint (real counters/histograms) | `aster/metrics/` | scrapeable; key latency metrics present |
+<!-- claim: M4-T06 | agent: wave1-obs | branch: main | since: 2026-08-07 -->
 | M4-T07 | open | obs | M4-T06 | Grafana dashboard JSON shipped in repo | `deploy/` or `docs/` | Import works against local Prometheus |
 | M4-T08 | open | release | M4-T02 | Static Docker image (<15 MB) | `Dockerfile`, CI | Image builds; container serves RPC |
 | M4-T09 | open | qa | M4-T02, M4-T06 | 24h soak + ASan/TSan CI jobs | CI, `aster/qa/` | Soak report; sanitizer jobs green |
@@ -169,7 +172,8 @@ Status updates happen in this file (see start-the-tasks.md § Claiming).
 | M6-T04 | open | release | M6-T01 | Maven Central (Java + Scala) dry-run | CI | Dry-run succeeds |
 | M6-T05 | open | release | M6-T01 | npm publish dry-run | CI | Dry-run succeeds |
 | M6-T06 | open | release | M6-T01 | Go module tag + Docker Hub + GitHub release assets | CI | Tag pipeline documented and rehearsed |
-| M6-T07 | open | release | — | Single-version policy + CHANGELOG automation | docs, scripts | `vX.Y.Z` bumps all packages together |
+| M6-T07 | in_progress | release | — | Single-version policy + CHANGELOG automation | docs, scripts | `vX.Y.Z` bumps all packages together |
+<!-- claim: M6-T07 | agent: wave1-release | branch: main | since: 2026-08-07 -->
 | M6-T08 | open | release | M6-T02…T07 | Rehearse `v0.1.0-rc` end-to-end | CI | Checklist signed off |
 
 ---
