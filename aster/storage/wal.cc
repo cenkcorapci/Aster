@@ -4,6 +4,7 @@
 #include <unistd.h>
 
 #include <array>
+#include <chrono>
 #include <cstring>
 #include <utility>
 
@@ -12,6 +13,7 @@ namespace aster {
 namespace {
 
 constexpr uint32_t kRecordMagic = 0x41535452;  // "ASTR"
+constexpr uint64_t kGroupCommitMs = 5;
 
 std::array<uint32_t, 256> MakeCrcTable() {
   std::array<uint32_t, 256> table{};
@@ -36,6 +38,13 @@ bool WriteAll(int fd, const void* data, size_t size) {
   return true;
 }
 
+uint64_t NowMs() {
+  using namespace std::chrono;
+  return static_cast<uint64_t>(
+      duration_cast<milliseconds>(steady_clock::now().time_since_epoch())
+          .count());
+}
+
 }  // namespace
 
 uint32_t Crc32(const void* data, size_t size) {
@@ -49,17 +58,25 @@ uint32_t Crc32(const void* data, size_t size) {
 }
 
 WalWriter::~WalWriter() {
-  if (fd_ >= 0) ::close(fd_);
+  if (fd_ >= 0) {
+    if (policy_ == SyncPolicy::kEveryMs) {
+      ::fsync(fd_);
+    }
+    ::close(fd_);
+  }
 }
 
 WalWriter::WalWriter(WalWriter&& other) noexcept
-    : fd_(std::exchange(other.fd_, -1)), policy_(other.policy_) {}
+    : fd_(std::exchange(other.fd_, -1)),
+      policy_(other.policy_),
+      last_sync_ms_(other.last_sync_ms_) {}
 
 WalWriter& WalWriter::operator=(WalWriter&& other) noexcept {
   if (this != &other) {
     if (fd_ >= 0) ::close(fd_);
     fd_ = std::exchange(other.fd_, -1);
     policy_ = other.policy_;
+    last_sync_ms_ = other.last_sync_ms_;
   }
   return *this;
 }
@@ -67,7 +84,25 @@ WalWriter& WalWriter::operator=(WalWriter&& other) noexcept {
 Result<WalWriter> WalWriter::Open(const std::string& path, SyncPolicy policy) {
   const int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0644);
   if (fd < 0) return Status::IoError("open failed: " + path);
-  return WalWriter(fd, policy);
+  WalWriter writer(fd, policy);
+  writer.last_sync_ms_ = NowMs();
+  return writer;
+}
+
+Status WalWriter::Sync() {
+  if (fd_ < 0) return Status::IoError("wal closed");
+  if (::fsync(fd_) != 0) return Status::IoError("wal fsync failed");
+  last_sync_ms_ = NowMs();
+  return Status::Ok();
+}
+
+Status WalWriter::Truncate() {
+  if (fd_ < 0) return Status::IoError("wal closed");
+  if (::ftruncate(fd_, 0) != 0) return Status::IoError("wal truncate failed");
+  if (::lseek(fd_, 0, SEEK_SET) < 0) {
+    return Status::IoError("wal seek failed");
+  }
+  return Sync();
 }
 
 Status WalWriter::Append(const std::string& payload) {
@@ -85,8 +120,24 @@ Status WalWriter::Append(const std::string& payload) {
     return Status::IoError("wal append failed");
   }
   if (policy_ == SyncPolicy::kAlways) {
-    if (::fsync(fd_) != 0) return Status::IoError("wal fsync failed");
+    return Sync();
   }
+  if (policy_ == SyncPolicy::kEveryMs) {
+    const uint64_t now = NowMs();
+    if (now - last_sync_ms_ >= kGroupCommitMs) {
+      return Sync();
+    }
+  }
+  return Status::Ok();
+}
+
+Status TruncateWalFile(const std::string& path) {
+  const int fd = ::open(path.c_str(), O_WRONLY | O_CREAT, 0644);
+  if (fd < 0) return Status::IoError("open failed: " + path);
+  const int rc = ::ftruncate(fd, 0);
+  if (rc == 0) ::fsync(fd);
+  ::close(fd);
+  if (rc != 0) return Status::IoError("truncate failed: " + path);
   return Status::Ok();
 }
 
