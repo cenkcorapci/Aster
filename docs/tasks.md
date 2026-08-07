@@ -169,8 +169,7 @@ Status updates happen in this file (see start-the-tasks.md § Claiming).
 | M6-T04 | open | release | M6-T01 | Maven Central (Java + Scala) dry-run | CI | Dry-run succeeds |
 | M6-T05 | open | release | M6-T01 | npm publish dry-run | CI | Dry-run succeeds |
 | M6-T06 | open | release | M6-T01 | Go module tag + Docker Hub + GitHub release assets | CI | Tag pipeline documented and rehearsed |
-| M6-T07 | in_progress | release | — | Single-version policy + CHANGELOG automation | docs, scripts | `vX.Y.Z` bumps all packages together |
-<!-- claim: M6-T07 | agent: wave1-release | branch: main | since: 2026-08-07 -->
+| M6-T07 | done | release | — | Single-version policy + CHANGELOG automation | docs, scripts | `vX.Y.Z` bumps all packages together |
 | M6-T08 | open | release | M6-T02…T07 | Rehearse `v0.1.0-rc` end-to-end | CI | Checklist signed off |
 
 ---
