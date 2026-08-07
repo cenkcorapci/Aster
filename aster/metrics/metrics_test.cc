@@ -40,6 +40,24 @@ TEST(MetricsRegistry, CounterAndGaugeSamples) {
   EXPECT_NE(text.find("replication_lag 42\n"), std::string::npos);
 }
 
+TEST(MetricsRegistry, GaugeDecAndCustomNames) {
+  MetricsRegistry registry;
+  registry.Gauge("segment_count").Set(10);
+  registry.Gauge("segment_count").Dec(3);
+  EXPECT_EQ(registry.Gauge("segment_count").Value(), 7);
+
+  registry.Counter("custom_events").Inc();
+  registry.Counter("custom_events").Inc(4);
+  EXPECT_EQ(registry.Counter("custom_events").Value(), 5u);
+
+  auto& hist = registry.Histogram("custom_latency");
+  hist.Observe(0.5);
+  const std::string text = registry.Render();
+  EXPECT_NE(text.find("# TYPE custom_events counter"), std::string::npos);
+  EXPECT_NE(text.find("# TYPE custom_latency histogram"), std::string::npos);
+  EXPECT_NE(text.find("custom_latency_count 1\n"), std::string::npos);
+}
+
 TEST(MetricsRegistry, HistogramObserveAndBuckets) {
   MetricsRegistry registry;
   auto& hist = registry.Histogram("read_latency_ms");
@@ -70,6 +88,31 @@ TEST(MetricsRegistry, WriteAndHnswHistogramsPresent) {
   EXPECT_NE(text.find("write_latency_ms_count 1\n"), std::string::npos);
   EXPECT_NE(text.find("hnsw_search_latency_count 1\n"), std::string::npos);
   EXPECT_NE(text.find("write_latency_ms_sum 1.5\n"), std::string::npos);
+}
+
+TEST(MetricsRegistry, SingletonInstanceSharesState) {
+  MetricsRegistry::Instance().Counter("gossip_messages").Inc(1);
+  // Render should include the default metric; value is process-global.
+  const std::string text = MetricsRegistry::Instance().Render();
+  EXPECT_NE(text.find("# TYPE gossip_messages counter"), std::string::npos);
+}
+
+TEST(Histogram, DefaultLatencyBucketsAreSorted) {
+  auto buckets = DefaultLatencyBucketsMs();
+  ASSERT_FALSE(buckets.empty());
+  for (size_t i = 1; i < buckets.size(); ++i) {
+    EXPECT_LT(buckets[i - 1], buckets[i]);
+  }
+}
+
+TEST(Histogram, ObserveAboveAllBucketsStillCountsInf) {
+  Histogram hist({1.0, 2.0});
+  hist.Observe(100.0);
+  EXPECT_EQ(hist.BucketCount(0), 0u);
+  EXPECT_EQ(hist.BucketCount(1), 0u);
+  EXPECT_EQ(hist.InfCount(), 1u);
+  EXPECT_EQ(hist.Count(), 1u);
+  EXPECT_FLOAT_EQ(hist.Sum(), 100.0);
 }
 
 }  // namespace

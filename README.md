@@ -20,8 +20,9 @@ Requires [Bazel](https://bazel.build) (see `.bazelversion`) and a C++20
 compiler.
 
 ```bash
-bazel test //aster/...        # build everything, run all tests
+bazel test //aster/...        # unit + integration tests
 bazel run //aster/cli:aster   # single-node demo: insert, search, compact
+./scripts/run-coverage.sh     # LLVM LCOV report; gates >=90% on aster libs
 ```
 
 Model-check the formal specs (requires Java 11+):

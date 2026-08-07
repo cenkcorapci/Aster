@@ -1,0 +1,19 @@
+load("@rules_cc//cc:cc_test.bzl", "cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+cc_test(
+    name = "integration_test",
+    size = "small",
+    srcs = ["integration_test.cc"],
+    deps = [
+        "//aster/db",
+        "//aster/distributed",
+        "//aster/index",
+        "//aster/metrics",
+        "//aster/platform",
+        "//aster/query",
+        "//aster/storage",
+        "@googletest//:gtest_main",
+    ],
+)

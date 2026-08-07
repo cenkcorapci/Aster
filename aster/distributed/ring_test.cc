@@ -19,8 +19,6 @@ TEST(Ring, ReplicasAreDistinctAndStable) {
   EXPECT_NE(replicas[0], replicas[1]);
   EXPECT_NE(replicas[1], replicas[2]);
   EXPECT_NE(replicas[0], replicas[2]);
-
-  // Deterministic placement.
   EXPECT_EQ(ring.GetReplicas("some-key", 3), replicas);
 }
 
@@ -43,7 +41,6 @@ TEST(Ring, LoadIsRoughlyBalanced) {
   for (int i = 0; i < kKeys; ++i) {
     primary_count[ring.GetReplicas("key-" + std::to_string(i), 1)[0]]++;
   }
-  // Each node should own a meaningful share (>15% of primaries).
   for (const auto& [node, count] : primary_count) {
     EXPECT_GT(count, kKeys * 15 / 100) << node;
   }
@@ -65,11 +62,46 @@ TEST(Ring, RemovingNodeOnlyMovesItsKeys) {
   for (const auto& [key, owner] : before) {
     const NodeId now = ring.GetReplicas(key, 1)[0];
     if (owner != "c") {
-      EXPECT_EQ(now, owner) << key;  // consistent hashing: no reshuffle
+      EXPECT_EQ(now, owner) << key;
     } else {
       EXPECT_NE(now, "c") << key;
     }
   }
+}
+
+TEST(Ring, EmptyAndZeroRf) {
+  Ring ring(8);
+  EXPECT_TRUE(ring.GetReplicas("k", 1).empty());
+  ring.AddNode("a");
+  EXPECT_TRUE(ring.GetReplicas("k", 0).empty());
+}
+
+TEST(Ring, AddDuplicateIsNoOp) {
+  Ring ring(8);
+  ring.AddNode("a");
+  ring.AddNode("a");
+  EXPECT_EQ(ring.node_count(), 1u);
+  EXPECT_TRUE(ring.HasNode("a"));
+  EXPECT_FALSE(ring.HasNode("b"));
+}
+
+TEST(Ring, RemoveMissingIsNoOp) {
+  Ring ring(8);
+  ring.AddNode("a");
+  ring.RemoveNode("missing");
+  EXPECT_EQ(ring.node_count(), 1u);
+  ring.RemoveNode("a");
+  EXPECT_EQ(ring.node_count(), 0u);
+  EXPECT_TRUE(ring.GetReplicas("k", 1).empty());
+}
+
+TEST(Ring, RfTwoOnTwoNodes) {
+  Ring ring(32);
+  ring.AddNode("a");
+  ring.AddNode("b");
+  auto reps = ring.GetReplicas("key", 2);
+  ASSERT_EQ(reps.size(), 2u);
+  EXPECT_NE(reps[0], reps[1]);
 }
 
 }  // namespace

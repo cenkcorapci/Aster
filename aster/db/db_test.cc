@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <set>
 #include <string>
 #include <vector>
 
@@ -43,7 +44,7 @@ TEST(Db, SearchSpansMemtableAndSegments) {
 TEST(Db, DeleteHidesRowEvenIfIndexedInSegment) {
   Db db(SmallDb());
   ASSERT_TRUE(db.Upsert(MakeRow("a", {1.0f, 0.0f}, 10)).ok());
-  ASSERT_TRUE(db.Flush().ok());  // "a" is now baked into a segment index
+  ASSERT_TRUE(db.Flush().ok());
   ASSERT_TRUE(db.Delete("a", 20).ok());
 
   EXPECT_FALSE(db.Get("a").has_value());
@@ -57,7 +58,6 @@ TEST(Db, UpdateInMemtableShadowsSegmentVersion) {
   Db db(SmallDb());
   ASSERT_TRUE(db.Upsert(MakeRow("a", {1.0f, 0.0f}, 10)).ok());
   ASSERT_TRUE(db.Flush().ok());
-  // Move "a" far away from the query point.
   ASSERT_TRUE(db.Upsert(MakeRow("a", {-1.0f, 0.0f}, 20)).ok());
 
   SearchRequest req;
@@ -65,8 +65,7 @@ TEST(Db, UpdateInMemtableShadowsSegmentVersion) {
   req.top_k = 1;
   auto hits = db.Search(req);
   ASSERT_EQ(hits.size(), 1u);
-  // Score must reflect the latest vector, not the stale segment copy.
-  EXPECT_FLOAT_EQ(hits[0].score, -4.0f);  // -L2^2 of (1,0) vs (-1,0)
+  EXPECT_FLOAT_EQ(hits[0].score, -4.0f);
 }
 
 TEST(Db, TagFiltering) {
@@ -124,7 +123,6 @@ TEST(Db, DurableOpenRecoversFlushedAndWalRows) {
     ASSERT_TRUE(db.value()->Flush().ok());
     ASSERT_TRUE(
         db.value()->Upsert(MakeRow("wal-only", {0.0f, 1.0f}, 20)).ok());
-    // Destroy without flush: wal-only must come back via replay.
   }
 
   Db::Options options = SmallDb();
@@ -136,6 +134,103 @@ TEST(Db, DurableOpenRecoversFlushedAndWalRows) {
   ASSERT_TRUE(db.value()->Get("flushed").has_value());
   ASSERT_TRUE(db.value()->Get("wal-only").has_value());
   EXPECT_FLOAT_EQ(db.value()->Get("wal-only")->vector[1], 1.0f);
+}
+
+TEST(Db, OpenRequiresDataDir) {
+  Db::Options options = SmallDb();
+  auto db = Db::Open(options);
+  ASSERT_FALSE(db.ok());
+  EXPECT_EQ(db.status().code(), StatusCode::kInvalidArgument);
+}
+
+TEST(Db, FlushEmptyAndCompactSingleAreNoops) {
+  Db db(SmallDb());
+  ASSERT_TRUE(db.Flush().ok());
+  ASSERT_TRUE(db.Compact().ok());
+  EXPECT_EQ(db.segment_count(), 0u);
+  ASSERT_TRUE(db.Upsert(MakeRow("a", {1.0f, 0.0f}, 1)).ok());
+  ASSERT_TRUE(db.Flush().ok());
+  ASSERT_TRUE(db.Compact().ok());  // single segment: no-op
+  EXPECT_EQ(db.segment_count(), 1u);
+}
+
+TEST(Db, AutoFlushOnMemtableSize) {
+  Db::Options options = SmallDb();
+  options.memtable_flush_bytes = 64;  // tiny threshold
+  Db db(options);
+  ASSERT_TRUE(db.Upsert(MakeRow("a", {1.0f, 0.0f}, 1)).ok());
+  // One modest row should exceed 64 bytes accounting and flush.
+  EXPECT_GE(db.segment_count(), 1u);
+  EXPECT_EQ(db.memtable_rows(), 0u);
+}
+
+TEST(Db, MissingGetAndEmptySearch) {
+  Db db(SmallDb());
+  EXPECT_FALSE(db.Get("missing").has_value());
+  SearchRequest req;
+  req.vector = {1.0f, 0.0f};
+  EXPECT_TRUE(db.Search(req).empty());
+}
+
+TEST(Db, DurableDeleteSurvivesReopen) {
+  const std::string dir = ::testing::TempDir() + "/aster_db_del";
+  {
+    Db::Options options = SmallDb();
+    options.data_dir = dir;
+    options.wal_sync = SyncPolicy::kNever;
+    auto db = Db::Open(options);
+    ASSERT_TRUE(db.ok());
+    ASSERT_TRUE(db.value()->Upsert(MakeRow("a", {1.0f, 0.0f}, 10)).ok());
+    ASSERT_TRUE(db.value()->Flush().ok());
+    ASSERT_TRUE(db.value()->Delete("a", 20).ok());
+    ASSERT_TRUE(db.value()->Flush().ok());
+  }
+  Db::Options options = SmallDb();
+  options.data_dir = dir;
+  auto db = Db::Open(options);
+  ASSERT_TRUE(db.ok());
+  EXPECT_FALSE(db.value()->Get("a").has_value());
+}
+
+TEST(Db, DurableCompactRewritesManifest) {
+  const std::string dir = ::testing::TempDir() + "/aster_db_compact";
+  Db::Options options = SmallDb();
+  options.data_dir = dir;
+  options.wal_sync = SyncPolicy::kNever;
+  auto db = Db::Open(options);
+  ASSERT_TRUE(db.ok());
+  ASSERT_TRUE(db.value()->Upsert(MakeRow("a", {1.0f, 0.0f}, 1)).ok());
+  ASSERT_TRUE(db.value()->Flush().ok());
+  ASSERT_TRUE(db.value()->Upsert(MakeRow("b", {0.0f, 1.0f}, 2)).ok());
+  ASSERT_TRUE(db.value()->Flush().ok());
+  ASSERT_EQ(db.value()->segment_count(), 2u);
+  ASSERT_TRUE(db.value()->Compact().ok());
+  EXPECT_EQ(db.value()->segment_count(), 1u);
+
+  // Reopen and confirm both rows still visible from compacted SSTable.
+  db.value().reset();
+  auto reopened = Db::Open(options);
+  ASSERT_TRUE(reopened.ok());
+  EXPECT_EQ(reopened.value()->segment_count(), 1u);
+  EXPECT_TRUE(reopened.value()->Get("a").has_value());
+  EXPECT_TRUE(reopened.value()->Get("b").has_value());
+}
+
+TEST(Db, TagFilterRequiresAllTags) {
+  Db db(SmallDb());
+  ASSERT_TRUE(db.Upsert(MakeRow("x", {1.0f, 0.0f}, 1, {"red"})).ok());
+  SearchRequest req;
+  req.vector = {1.0f, 0.0f};
+  req.tags = {"red", "sale"};
+  EXPECT_TRUE(db.Search(req).empty());
+}
+
+TEST(Db, TombstoneUpsertAllowedWithoutDimension) {
+  Db db(SmallDb());
+  ASSERT_TRUE(db.Upsert(MakeRow("a", {1.0f, 0.0f}, 1)).ok());
+  // Delete path uses tombstone with empty vector.
+  ASSERT_TRUE(db.Delete("a", 2).ok());
+  EXPECT_FALSE(db.Get("a").has_value());
 }
 
 }  // namespace

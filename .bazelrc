@@ -28,3 +28,19 @@ build:server --host_cxxopt=-DASTER_PROFILE_SERVER
 
 # Users can keep private flags out of version control.
 try-import %workspace%/.bazelrc.user
+
+# ---------------------------------------------------------------------------
+# Coverage (macOS + Clang LLVM instrumentation)
+#
+# Apple Clang emits .profraw; collect_cc_coverage.sh needs llvm-profdata and
+# llvm-cov on PATH via test/repo env. Prefer scripts/run-coverage.sh which
+# resolves xcrun paths and gates on >=90% line coverage.
+# See: https://github.com/bazelbuild/bazel/issues/14970
+# ---------------------------------------------------------------------------
+coverage --combined_report=lcov
+coverage --instrumentation_filter=^//aster
+coverage --experimental_generate_llvm_lcov
+coverage --copt=-ffile-compilation-dir=.
+# Stable relative paths in coverage maps (avoids /proc/self/cwd on Darwin).
+coverage --test_env=GENERATE_LLVM_LCOV=1
+coverage --test_env=BAZEL_USE_LLVM_NATIVE_COVERAGE=1
