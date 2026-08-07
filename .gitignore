@@ -84,3 +84,4 @@ tla/*.jar
 
 # Vibe coding
 prompt.md
+__pycache__/
