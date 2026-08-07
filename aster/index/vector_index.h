@@ -47,6 +47,10 @@ struct IndexEntry {
 std::unique_ptr<VectorIndex> BuildExactIndex(Metric metric,
                                              std::vector<IndexEntry> entries);
 
+// Zero-copy build over Segment-owned rows (vectors live once in `rows`).
+std::unique_ptr<VectorIndex> BuildExactIndex(
+    Metric metric, std::shared_ptr<const std::vector<Row>> rows);
+
 #if ASTER_ENABLE_HNSW
 // Segmented HNSW build lands in milestone M2 (docs/development-plan.md):
 // std::unique_ptr<VectorIndex> BuildHnswIndex(Metric, HnswParams,

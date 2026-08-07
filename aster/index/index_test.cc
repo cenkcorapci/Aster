@@ -71,7 +71,7 @@ TEST(ExactIndex, TopKLargerThanIndex) {
 }
 
 TEST(ExactIndex, EmptyIndex) {
-  auto index = BuildExactIndex(Metric::kDot, {});
+  auto index = BuildExactIndex(Metric::kDot, std::vector<IndexEntry>{});
   EXPECT_EQ(index->size(), 0u);
   const std::vector<float> q = {1.0f};
   EXPECT_TRUE(index->Search(q, 5, 0).empty());

@@ -6,24 +6,26 @@
 
 namespace aster {
 
+std::shared_ptr<const Segment> Segment::Build(
+    uint64_t id, Metric metric, std::shared_ptr<std::vector<Row>> rows) {
+  std::shared_ptr<const std::vector<Row>> shared = std::move(rows);
+  auto index = BuildExactIndex(metric, shared);
+  return std::shared_ptr<const Segment>(
+      new Segment(id, std::move(shared), std::move(index)));
+}
+
 std::shared_ptr<const Segment> Segment::Build(uint64_t id, Metric metric,
                                               std::vector<Row> rows) {
-  std::vector<IndexEntry> entries;
-  entries.reserve(rows.size());
-  for (const Row& row : rows) {
-    if (row.tombstone) continue;
-    entries.push_back({row.id, row.vector});
-  }
-  auto index = BuildExactIndex(metric, std::move(entries));
-  return std::shared_ptr<const Segment>(
-      new Segment(id, std::move(rows), std::move(index)));
+  return Build(id, metric,
+               std::make_shared<std::vector<Row>>(std::move(rows)));
 }
 
 std::optional<Row> Segment::Get(const RowId& row_id) const {
+  const auto& rows = *rows_;
   auto it = std::lower_bound(
-      rows_.begin(), rows_.end(), row_id,
+      rows.begin(), rows.end(), row_id,
       [](const Row& row, const RowId& id) { return row.id < id; });
-  if (it == rows_.end() || it->id != row_id) return std::nullopt;
+  if (it == rows.end() || it->id != row_id) return std::nullopt;
   return *it;
 }
 
@@ -49,11 +51,11 @@ std::shared_ptr<const Segment> CompactSegments(
     }
   }
 
-  std::vector<Row> rows;
-  rows.reserve(merged.size());
+  auto rows = std::make_shared<std::vector<Row>>();
+  rows->reserve(merged.size());
   for (auto& [_, row] : merged) {
     if (drop_tombstones && row.tombstone) continue;
-    rows.push_back(std::move(row));
+    rows->push_back(std::move(row));
   }
   return Segment::Build(new_id, metric, std::move(rows));
 }

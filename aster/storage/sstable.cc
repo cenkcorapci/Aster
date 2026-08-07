@@ -628,4 +628,56 @@ std::vector<Row> SstableReader::LoadAll() const {
   return out;
 }
 
+std::vector<Row> SstableReader::TakeAll() {
+  std::vector<Row> out;
+  out.reserve(id_entries_.size());
+  for (size_t i = 0; i < id_entries_.size(); ++i) {
+    IdEntry& e = id_entries_[i];
+    Row row;
+    row.id = std::move(e.id);
+    row.timestamp = e.timestamp;
+    row.version = e.version;
+    row.tombstone = (e.flags & 0x01) != 0;
+    if (!row.tombstone && e.vector_slot != kNoVector && dimension_ > 0) {
+      const size_t base = static_cast<size_t>(e.vector_slot) * dimension_;
+      const size_t end = base + dimension_;
+      if (end <= vectors_.size()) {
+        row.vector.resize(dimension_);
+        std::move(vectors_.begin() + static_cast<std::ptrdiff_t>(base),
+                  vectors_.begin() + static_cast<std::ptrdiff_t>(end),
+                  row.vector.begin());
+      }
+    }
+    if (e.metadata_len > 0 &&
+        e.metadata_offset + e.metadata_len <= metadata_blob_.size()) {
+      row.metadata =
+          metadata_blob_.substr(e.metadata_offset, e.metadata_len);
+    }
+    if (i < row_tags_.size()) {
+      row.tags = std::move(row_tags_[i]);
+    }
+    out.push_back(std::move(row));
+  }
+
+  // Drop file + index scratch; caller owns the rows now.
+  data_.clear();
+  data_.shrink_to_fit();
+  id_entries_.clear();
+  id_entries_.shrink_to_fit();
+  id_payload_.clear();
+  id_payload_.shrink_to_fit();
+  vectors_.clear();
+  vectors_.shrink_to_fit();
+  metadata_blob_.clear();
+  metadata_blob_.shrink_to_fit();
+  row_tags_.clear();
+  row_tags_.shrink_to_fit();
+  sparse_.clear();
+  sparse_.shrink_to_fit();
+  bloom_ = BloomFilter();
+  row_count_ = 0;
+  live_row_count_ = 0;
+  return out;
+}
+
 }  // namespace aster

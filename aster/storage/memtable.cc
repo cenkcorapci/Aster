@@ -40,4 +40,14 @@ std::vector<Row> Memtable::Scan() const {
   return out;
 }
 
+std::vector<Row> Memtable::Take() {
+  std::map<RowId, Row> local;
+  local.swap(rows_);
+  approximate_bytes_ = 0;
+  std::vector<Row> out;
+  out.reserve(local.size());
+  for (auto& [_, row] : local) out.push_back(std::move(row));
+  return out;
+}
+
 }  // namespace aster

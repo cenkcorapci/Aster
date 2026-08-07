@@ -40,6 +40,18 @@ TEST(Memtable, LastWriteWins) {
   EXPECT_GT(mt.approximate_bytes(), 0u);
 }
 
+TEST(Memtable, TakeMovesRowsAndClears) {
+  Memtable mt;
+  mt.Apply(MakeRow("a", {1.0f}, 1));
+  mt.Apply(MakeRow("b", {2.0f}, 2));
+  auto rows = mt.Take();
+  ASSERT_EQ(rows.size(), 2u);
+  EXPECT_TRUE(mt.empty());
+  EXPECT_EQ(mt.approximate_bytes(), 0u);
+  EXPECT_EQ(rows[0].id, "a");
+  EXPECT_EQ(rows[1].id, "b");
+}
+
 TEST(Memtable, TombstonesAreKept) {
   Memtable mt;
   mt.Apply(MakeRow("a", {1.0f}, 10));
@@ -212,7 +224,7 @@ TEST(Segment, GetAndSearchSkipTombstones) {
 }
 
 TEST(Segment, EmptySegment) {
-  auto segment = Segment::Build(7, Metric::kCosine, {});
+  auto segment = Segment::Build(7, Metric::kCosine, std::vector<Row>{});
   EXPECT_EQ(segment->row_count(), 0u);
   EXPECT_TRUE(segment->Search(std::vector<float>{1.0f}, 5, 0).empty());
 }
@@ -290,6 +302,28 @@ TEST(Sstable, WriteReadRoundTrip) {
 
   auto all = reader.value()->LoadAll();
   EXPECT_EQ(all.size(), 3u);
+  std::remove(path.c_str());
+}
+
+TEST(Sstable, TakeAllMovesVectors) {
+  const std::string path = ::testing::TempDir() + "/seg_takeall.ast";
+  std::remove(path.c_str());
+  std::vector<Row> rows = {
+      MakeRow("a", {1.0f, 0.0f}, 10, false, {"t"}),
+      MakeRow("b", {0.0f, 1.0f}, 11),
+  };
+  ASSERT_TRUE(WriteSstable(path, 2, Metric::kCosine, rows).ok());
+  auto reader = SstableReader::Open(path);
+  ASSERT_TRUE(reader.ok());
+  auto taken = reader.value()->TakeAll();
+  ASSERT_EQ(taken.size(), 2u);
+  EXPECT_EQ(taken[0].id, "a");
+  ASSERT_EQ(taken[0].vector.size(), 2u);
+  EXPECT_FLOAT_EQ(taken[0].vector[0], 1.0f);
+  EXPECT_EQ(taken[0].tags, (std::set<std::string>{"t"}));
+  EXPECT_EQ(taken[1].id, "b");
+  EXPECT_EQ(reader.value()->row_count(), 0u);
+  EXPECT_FALSE(reader.value()->Get("a").has_value());
   std::remove(path.c_str());
 }
 

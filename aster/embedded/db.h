@@ -29,6 +29,8 @@ class Db {
     Metric metric = Metric::kCosine;
     // Soft cap: Flush() is called automatically when memtable rows exceed this.
     size_t memtable_flush_rows = 256;
+    // Compact after Flush when segment count reaches this (0 = never auto).
+    size_t max_segments_before_compact = 8;
   };
 
   explicit Db(Options options);
@@ -47,6 +49,7 @@ class Db {
 
  private:
   Row Reconcile(const RowId& id) const;
+  Status MaybeCompact();
 
   Options options_;
   Memtable memtable_;

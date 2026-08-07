@@ -10,6 +10,10 @@ namespace aster {
 float L2Squared(VectorView a, VectorView b);
 float Dot(VectorView a, VectorView b);
 float CosineSimilarity(VectorView a, VectorView b);
+// Fast path when both L2 norms are already known (exact index build caches
+// database-side norms; callers pass the query norm once per Search).
+float CosineSimilarityPreNorm(VectorView a, float norm_a, VectorView b,
+                              float norm_b);
 
 // Uniform "higher is better" score for a metric, so that top-k merging
 // across segments and replicas never has to branch on metric direction.

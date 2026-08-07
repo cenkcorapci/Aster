@@ -35,6 +35,15 @@ float CosineSimilarity(VectorView a, VectorView b) {
   return dot / denom;
 }
 
+float CosineSimilarityPreNorm(VectorView a, float norm_a, VectorView b,
+                              float norm_b) {
+  assert(a.size() == b.size());
+  if (norm_a == 0.0f || norm_b == 0.0f) return 0.0f;
+  float dot = 0.0f;
+  for (size_t i = 0; i < a.size(); ++i) dot += a[i] * b[i];
+  return dot / (norm_a * norm_b);
+}
+
 float Score(Metric metric, VectorView a, VectorView b) {
   switch (metric) {
     case Metric::kL2:

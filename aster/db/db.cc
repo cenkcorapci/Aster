@@ -5,7 +5,9 @@
 #include <sys/stat.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
+#include <queue>
 #include <utility>
 
 #include "aster/index/distance.h"
@@ -19,6 +21,48 @@ namespace {
 bool HasAllTags(const Row& row, const std::set<std::string>& wanted) {
   return std::includes(row.tags.begin(), row.tags.end(), wanted.begin(),
                        wanted.end());
+}
+
+// Bounded top-k over the memtable without materializing an O(n) hit list.
+std::vector<SearchHit> MemtableTopK(const Memtable& memtable, Metric metric,
+                                    VectorView query, uint32_t top_k) {
+  if (top_k == 0 || query.empty() || memtable.empty()) return {};
+
+  float qnorm = 0.0f;
+  if (metric == Metric::kCosine) {
+    for (float x : query) qnorm += x * x;
+    qnorm = std::sqrt(qnorm);
+  }
+
+  using Node = std::pair<float, const Row*>;
+  auto worse = [](const Node& a, const Node& b) { return a.first > b.first; };
+  std::priority_queue<Node, std::vector<Node>, decltype(worse)> heap(worse);
+
+  memtable.ForEach([&](const Row& row) {
+    if (row.tombstone || row.vector.empty()) return;
+    float score;
+    if (metric == Metric::kCosine) {
+      float n2 = 0.0f;
+      for (float x : row.vector) n2 += x * x;
+      score = CosineSimilarityPreNorm(query, qnorm, row.vector, std::sqrt(n2));
+    } else {
+      score = Score(metric, query, row.vector);
+    }
+    if (heap.size() < top_k) {
+      heap.emplace(score, &row);
+    } else if (score > heap.top().first) {
+      heap.pop();
+      heap.emplace(score, &row);
+    }
+  });
+
+  std::vector<SearchHit> hits(heap.size());
+  for (size_t i = hits.size(); i > 0; --i) {
+    const auto [score, row] = heap.top();
+    heap.pop();
+    hits[i - 1] = {row->id, score};
+  }
+  return hits;
 }
 
 void PutU32(std::string& b, uint32_t v) {
@@ -154,7 +198,9 @@ Result<std::unique_ptr<Db>> Db::Open(Options options) {
                              : JoinPath(options.data_dir, entry.path);
       auto reader = SstableReader::Open(path);
       if (!reader.ok()) return reader.status();
-      auto rows = reader.value()->LoadAll();
+      // TakeAll moves vectors out of the reader so Open does not hold two
+      // full copies of every float while building the segment index.
+      auto rows = reader.value()->TakeAll();
       db->segments_.push_back(
           Segment::Build(entry.segment_id, options.metric, std::move(rows)));
       db->next_segment_id_ =
@@ -243,18 +289,11 @@ std::optional<Row> Db::Get(const RowId& id) const {
 }
 
 std::vector<SearchHit> Db::Search(const SearchRequest& request) const {
-  std::vector<std::vector<SearchHit>> candidates;
-  {
-    std::vector<SearchHit> hits;
-    for (const Row& row : memtable_.Scan()) {
-      if (row.tombstone) continue;
-      hits.push_back(
-          {row.id, Score(options_.metric, request.vector, row.vector)});
-    }
-    candidates.push_back(std::move(hits));
-  }
-
   const uint32_t fetch_k = request.top_k * 2 + 16;
+  std::vector<std::vector<SearchHit>> candidates;
+  candidates.reserve(1 + segments_.size());
+  candidates.push_back(
+      MemtableTopK(memtable_, options_.metric, request.vector, fetch_k));
   for (const auto& segment : segments_) {
     candidates.push_back(
         segment->Search(request.vector, fetch_k, request.ef_search));
@@ -262,11 +301,14 @@ std::vector<SearchHit> Db::Search(const SearchRequest& request) const {
 
   std::vector<SearchHit> merged = MergeTopK(candidates, fetch_k);
   std::vector<SearchHit> results;
+  results.reserve(request.top_k);
   for (const SearchHit& hit : merged) {
     if (results.size() >= request.top_k) break;
     const Row row = Reconcile(hit.id);
     if (row.tombstone) continue;
     if (!request.tags.empty() && !HasAllTags(row, request.tags)) continue;
+    // Re-score against the LWW-reconciled vector (memtable may supersede a
+    // segment hit for the same id).
     results.push_back(
         {hit.id, Score(options_.metric, request.vector, row.vector)});
   }
@@ -280,18 +322,17 @@ std::vector<SearchHit> Db::Search(const SearchRequest& request) const {
 Status Db::Flush() {
   if (memtable_.empty()) return Status::Ok();
   const uint64_t id = next_segment_id_++;
-  auto rows = memtable_.Scan();
+  auto rows = std::make_shared<std::vector<Row>>(memtable_.Take());
   auto segment = Segment::Build(id, options_.metric, rows);
 
   if (!options_.data_dir.empty()) {
-    if (auto st = WriteSstable(SegmentPath(id), id, options_.metric, rows);
+    if (auto st = WriteSstable(SegmentPath(id), id, options_.metric, *rows);
         !st.ok()) {
       return st;
     }
   }
 
   segments_.push_back(std::move(segment));
-  memtable_ = Memtable();
 
   if (!options_.data_dir.empty()) {
     if (auto st = PublishManifest(); !st.ok()) return st;
@@ -299,7 +340,15 @@ Status Db::Flush() {
       if (auto st = wal_->Truncate(); !st.ok()) return st;
     }
   }
-  return Status::Ok();
+  return MaybeCompact();
+}
+
+Status Db::MaybeCompact() {
+  if (options_.max_segments_before_compact == 0) return Status::Ok();
+  if (segments_.size() < options_.max_segments_before_compact) {
+    return Status::Ok();
+  }
+  return Compact();
 }
 
 Status Db::Compact() {

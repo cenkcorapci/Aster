@@ -45,6 +45,10 @@ class SstableReader {
   // Materialize all rows (including tombstones) in id order.
   std::vector<Row> LoadAll() const;
 
+  // Like LoadAll, but moves vector/tag payloads out of the reader and clears
+  // large buffers. Use once when handing rows to Segment::Build on Open.
+  std::vector<Row> TakeAll();
+
  private:
   SstableReader() = default;
 

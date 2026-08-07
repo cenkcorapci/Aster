@@ -28,6 +28,9 @@ class Db {
     size_t memtable_flush_bytes = 64 << 20;
     std::string data_dir;  // empty = in-memory only
     SyncPolicy wal_sync = SyncPolicy::kAlways;
+    // After Flush, compact when the segment count reaches this (keeps RAM
+    // and search fan-out bounded without under-utilizing memory).
+    size_t max_segments_before_compact = 8;
   };
 
   explicit Db(Options options);
@@ -57,6 +60,7 @@ class Db {
   Row Reconcile(const RowId& id) const;
   Status AppendWal(const Row& row);
   Status PublishManifest();
+  Status MaybeCompact();
   std::string SegmentPath(uint64_t id) const;
   std::string ManifestPath() const;
   std::string WalPath() const;

@@ -143,6 +143,21 @@ TEST(Db, OpenRequiresDataDir) {
   EXPECT_EQ(db.status().code(), StatusCode::kInvalidArgument);
 }
 
+TEST(Db, AutoCompactOnMaxSegments) {
+  Db::Options options = SmallDb();
+  options.max_segments_before_compact = 2;
+  Db db(options);
+  ASSERT_TRUE(db.Upsert(MakeRow("a", {1.0f, 0.0f}, 1)).ok());
+  ASSERT_TRUE(db.Flush().ok());
+  EXPECT_EQ(db.segment_count(), 1u);
+  ASSERT_TRUE(db.Upsert(MakeRow("b", {0.0f, 1.0f}, 2)).ok());
+  ASSERT_TRUE(db.Flush().ok());
+  // Second flush trips auto-compact into a single segment.
+  EXPECT_EQ(db.segment_count(), 1u);
+  EXPECT_TRUE(db.Get("a").has_value());
+  EXPECT_TRUE(db.Get("b").has_value());
+}
+
 TEST(Db, FlushEmptyAndCompactSingleAreNoops) {
   Db db(SmallDb());
   ASSERT_TRUE(db.Flush().ok());

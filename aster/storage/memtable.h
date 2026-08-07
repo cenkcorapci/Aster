@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <map>
 #include <optional>
+#include <utility>
 #include <vector>
 
 #include "aster/core/types.h"
@@ -24,8 +25,17 @@ class Memtable {
   // Live row lookup. Tombstoned rows report as not found via `tombstone`.
   std::optional<Row> Get(const RowId& id) const;
 
-  // All rows including tombstones, in id order. Used by flush and search.
+  // All rows including tombstones, in id order (copy). Prefer Take()/ForEach.
   std::vector<Row> Scan() const;
+
+  // Move rows out for flush — avoids an extra full copy of the working set.
+  std::vector<Row> Take();
+
+  // Zero-copy iteration for search / stats.
+  template <typename Fn>
+  void ForEach(Fn&& fn) const {
+    for (const auto& [_, row] : rows_) fn(row);
+  }
 
   size_t row_count() const { return rows_.size(); }
   size_t approximate_bytes() const { return approximate_bytes_; }
