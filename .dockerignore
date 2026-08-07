@@ -1,0 +1,13 @@
+# Keep the Docker build context tiny when building from the repo root.
+.git
+.bazelrc.user
+bazel-*
+**/__pycache__/
+**/*.pyc
+tla/*.jar
+tla/states/
+docs/
+clients/
+**/*_test.cc
+**/testdata/
+deploy/docker/.build/

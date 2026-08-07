@@ -2,6 +2,7 @@
 
 #include <cstdio>
 #include <fstream>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -16,12 +17,14 @@ namespace aster {
 namespace {
 
 Row MakeRow(const std::string& id, std::vector<float> vec, Timestamp ts,
-            bool tombstone = false) {
+            bool tombstone = false,
+            std::set<std::string> tags = {}) {
   Row row;
   row.id = id;
   row.vector = std::move(vec);
   row.timestamp = ts;
   row.tombstone = tombstone;
+  row.tags = std::move(tags);
   return row;
 }
 
@@ -252,9 +255,9 @@ TEST(Sstable, WriteReadRoundTrip) {
   std::remove(path.c_str());
 
   std::vector<Row> rows = {
-      MakeRow("a", {1.0f, 0.0f}, 10),
+      MakeRow("a", {1.0f, 0.0f}, 10, false, {"even", "hot"}),
       MakeRow("b", {0.0f, 1.0f}, 11, /*tombstone=*/true),
-      MakeRow("c", {0.5f, 0.5f}, 12),
+      MakeRow("c", {0.5f, 0.5f}, 12, false, {"odd"}),
   };
   rows[0].metadata = "meta-a";
   ASSERT_TRUE(WriteSstable(path, /*segment_id=*/1, Metric::kL2, rows).ok());
@@ -272,10 +275,15 @@ TEST(Sstable, WriteReadRoundTrip) {
   ASSERT_EQ(a->vector.size(), 2u);
   EXPECT_FLOAT_EQ(a->vector[0], 1.0f);
   EXPECT_EQ(a->metadata, "meta-a");
+  EXPECT_EQ(a->tags, (std::set<std::string>{"even", "hot"}));
 
   auto b = reader.value()->Get("b");
   ASSERT_TRUE(b.has_value());
   EXPECT_TRUE(b->tombstone);
+
+  auto c = reader.value()->Get("c");
+  ASSERT_TRUE(c.has_value());
+  EXPECT_EQ(c->tags, (std::set<std::string>{"odd"}));
 
   EXPECT_FALSE(reader.value()->Get("zzz").has_value());
   EXPECT_FALSE(reader.value()->MayContain("zzz"));

@@ -23,6 +23,8 @@ compiler.
 bazel test //aster/...        # unit + integration tests
 bazel run //aster/cli:aster   # single-node demo: insert, search, compact
 ./scripts/run-coverage.sh     # LLVM LCOV report; gates >=90% on aster libs
+./scripts/docker-build.sh     # static musl binary + BusyBox image (aster:local)
+docker run --rm -v aster-data:/data aster:local
 ```
 
 Model-check the formal specs (requires Java 11+):

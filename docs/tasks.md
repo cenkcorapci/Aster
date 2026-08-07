@@ -132,7 +132,9 @@ Status updates happen in this file (see start-the-tasks.md § Claiming).
 | M4-T05 | open | rpc | M4-T02 | TOML config loader for server | `aster/cli/`, config schema | Documented knobs load; bad config → clear error |
 | M4-T06 | done | obs | M0 | Prometheus `/metrics` endpoint (real counters/histograms) | `aster/metrics/` | scrapeable; key latency metrics present |
 | M4-T07 | open | obs | M4-T06 | Grafana dashboard JSON shipped in repo | `deploy/` or `docs/` | Import works against local Prometheus |
-| M4-T08 | open | release | M4-T02 | Static Docker image (<15 MB) | `Dockerfile`, CI | Image builds; container serves RPC |
+| M4-T08 | open | release | M4-T02 | Static Docker image (<15 MB) | `deploy/docker/`, `scripts/docker-build.sh` | BusyBox musl image builds (~3.6 MB); RPC serve still needs M4-T02 |
+
+
 | M4-T09 | open | qa | M4-T02, M4-T06 | 24h soak + ASan/TSan CI jobs | CI, `aster/qa/` | Soak report; sanitizer jobs green |
 
 ---

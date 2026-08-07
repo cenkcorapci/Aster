@@ -13,9 +13,25 @@ module(
     compatibility_level = 1,
 )
 
-bazel_dep(name = "rules_cc", version = "0.2.17")
+bazel_dep(name = "rules_cc", version = "0.2.18")
 bazel_dep(name = "platforms", version = "1.0.0")
 bazel_dep(name = "googletest", version = "1.17.0.bcr.2", dev_dependency = True)
+
+# Fully-static musl Linux toolchain for BusyBox / scratch container images.
+# Gated behind //platforms:musl_static so host builds are unaffected.
+bazel_dep(name = "toolchains_musl", version = "0.1.27.bcr.1")
+
+toolchains_musl = use_extension(
+    "@toolchains_musl//:toolchains_musl.bzl",
+    "toolchains_musl",
+)
+toolchains_musl.config(
+    extra_target_compatible_with = ["//platforms:musl_static"],
+)
+use_repo(toolchains_musl, "musl_toolchains_hub")
+
+register_toolchains("@musl_toolchains_hub//:all")
+
 
 # Client-library rulesets are wired in per milestone M6 (see
 # docs/development-plan.md). They are intentionally not added yet so that

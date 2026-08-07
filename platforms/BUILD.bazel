@@ -1,0 +1,31 @@
+# Target platforms for fully-static musl Linux binaries (BusyBox / scratch).
+#
+# The musl toolchain is gated on the `musl_static` constraint so default
+# host builds (macOS or glibc Linux) keep using the system C++ toolchain.
+
+package(default_visibility = ["//visibility:public"])
+
+constraint_setting(name = "libc")
+
+constraint_value(
+    name = "musl_static",
+    constraint_setting = ":libc",
+)
+
+platform(
+    name = "linux_amd64_musl",
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:x86_64",
+        ":musl_static",
+    ],
+)
+
+platform(
+    name = "linux_arm64_musl",
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:arm64",
+        ":musl_static",
+    ],
+)

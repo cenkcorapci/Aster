@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -71,6 +72,7 @@ class SstableReader {
   std::string id_payload_;
   std::vector<float> vectors_;     // live_row_count * dimension
   std::string metadata_blob_;
+  std::vector<std::set<std::string>> row_tags_;  // by row ordinal
   std::vector<std::pair<std::string, uint32_t>> sparse_;  // id -> ordinal
 };
 

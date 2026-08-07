@@ -3,6 +3,9 @@
 #include <algorithm>
 #include <cstring>
 #include <fstream>
+#include <iterator>
+#include <map>
+#include <set>
 #include <utility>
 
 #include "aster/storage/wal.h"  // Crc32
@@ -19,6 +22,8 @@ constexpr size_t kPreludeBytes = kHeaderBytes + kDirectoryBytes;  // 240
 constexpr size_t kFooterBytes = 40;
 constexpr size_t kNumBlocks = 7;
 constexpr uint32_t kNoVector = 0xFFFFFFFFu;
+constexpr uint32_t kFlagHasTags = 1u << 1;
+
 
 struct BlockDesc {
   uint64_t offset = 0;
@@ -179,6 +184,67 @@ std::string BuildVectorPayload(const std::vector<Row>& rows, uint32_t dimension,
   return payload;
 }
 
+// Tag bitmap block (§7.6). Until full portable Roaring (M2), each tag's
+// roaring_blob is a dense little-endian bitset over row ordinals.
+std::string BuildTagsPayload(const std::vector<Row>& rows) {
+  std::map<std::string, std::vector<uint32_t>> tag_to_ords;
+  for (uint32_t i = 0; i < rows.size(); ++i) {
+    for (const auto& tag : rows[i].tags) {
+      tag_to_ords[tag].push_back(i);
+    }
+  }
+  if (tag_to_ords.empty()) return {};
+
+  const uint32_t nbytes =
+      static_cast<uint32_t>((rows.size() + 7) / 8);
+  std::string payload;
+  AppendU32(payload, static_cast<uint32_t>(tag_to_ords.size()));
+  for (const auto& [tag, ords] : tag_to_ords) {
+    AppendU16(payload, static_cast<uint16_t>(tag.size()));
+    payload.append(tag);
+    std::string bits(nbytes, '\0');
+    for (uint32_t o : ords) {
+      bits[o / 8] = static_cast<char>(
+          static_cast<uint8_t>(bits[o / 8]) | (1u << (o % 8)));
+    }
+    AppendU32(payload, static_cast<uint32_t>(bits.size()));
+    payload.append(bits);
+  }
+  return payload;
+}
+
+Status ParseTagsPayload(const std::string& payload, size_t row_count,
+                        std::vector<std::set<std::string>>* out) {
+  out->assign(row_count, {});
+  if (payload.empty()) return Status::Ok();
+  size_t off = 0;
+  if (off + 4 > payload.size()) return Status::Corruption("tags truncated");
+  const uint32_t tag_count = ReadU32(payload, off);
+  for (uint32_t t = 0; t < tag_count; ++t) {
+    if (off + 2 > payload.size()) return Status::Corruption("tags truncated");
+    const uint16_t tag_len = ReadU16(payload, off);
+    if (off + tag_len + 4 > payload.size()) {
+      return Status::Corruption("tags truncated");
+    }
+    const std::string tag = payload.substr(off, tag_len);
+    off += tag_len;
+    const uint32_t blob_len = ReadU32(payload, off);
+    if (off + blob_len > payload.size()) {
+      return Status::Corruption("tags bitmap truncated");
+    }
+    for (size_t i = 0; i < row_count; ++i) {
+      const size_t byte_i = i / 8;
+      if (byte_i >= blob_len) break;
+      if ((static_cast<uint8_t>(payload[off + byte_i]) & (1u << (i % 8))) != 0) {
+        (*out)[i].insert(tag);
+      }
+    }
+    off += blob_len;
+  }
+  return Status::Ok();
+}
+
+
 std::string BuildMetadataPayload(const std::vector<Row>& rows,
                                  std::vector<uint32_t>* offsets,
                                  std::vector<uint32_t>* lens) {
@@ -241,6 +307,7 @@ Status WriteSstable(const std::string& path, uint64_t segment_id, Metric metric,
       BuildSparsePayload(rows, options.sparse_stride, id_record_offsets);
   std::string bloom_payload = BuildBloomPayload(bloom);
   std::string vector_payload = BuildVectorPayload(rows, dimension, live);
+  std::string tags_payload = BuildTagsPayload(rows);
 
   std::string blocks_raw[kNumBlocks];
   blocks_raw[0] = WrapBlock(bloom_payload);
@@ -250,7 +317,7 @@ Status WriteSstable(const std::string& path, uint64_t segment_id, Metric metric,
   blocks_raw[4] = meta_payload.empty() && rows.empty()
                       ? std::string()
                       : WrapBlock(meta_payload);
-  blocks_raw[5] = std::string();  // tags empty (HAS_TAGS clear)
+  blocks_raw[5] = tags_payload.empty() ? std::string() : WrapBlock(tags_payload);
   blocks_raw[6] = std::string();  // tree empty
 
   BlockDesc descs[kNumBlocks];
@@ -281,7 +348,8 @@ Status WriteSstable(const std::string& path, uint64_t segment_id, Metric metric,
     AppendU32(hdr, kMagic);
     AppendU16(hdr, kFormatVersion);
     AppendU16(hdr, static_cast<uint16_t>(kHeaderBytes));
-    uint32_t flags = 0;  // HAS_TREE=0 HAS_TAGS=0
+    uint32_t flags = 0;  // HAS_TREE=0
+    if (!tags_payload.empty()) flags |= kFlagHasTags;
     AppendU32(hdr, flags);
     AppendU32(hdr, dimension);
     AppendU8(hdr, static_cast<uint8_t>(metric));
@@ -439,6 +507,8 @@ Result<std::unique_ptr<SstableReader>> SstableReader::Open(
   if (!vector_payload.ok()) return vector_payload.status();
   auto meta_payload = unwrap(4);
   if (!meta_payload.ok()) return meta_payload.status();
+  auto tags_payload = unwrap(5);
+  if (!tags_payload.ok()) return tags_payload.status();
 
   auto reader = std::unique_ptr<SstableReader>(new SstableReader());
   reader->data_ = std::move(data);
@@ -495,6 +565,13 @@ Result<std::unique_ptr<SstableReader>> SstableReader::Open(
 
   reader->metadata_blob_ = meta_payload.value();
 
+  if (auto st = ParseTagsPayload(tags_payload.value(),
+                                 static_cast<size_t>(row_count),
+                                 &reader->row_tags_);
+      !st.ok()) {
+    return st;
+  }
+
   // Sparse (optional acceleration; Get uses binary search on id_entries_).
   if (!sparse_payload.value().empty()) {
     const std::string& sp = sparse_payload.value();
@@ -533,6 +610,11 @@ std::optional<Row> SstableReader::Get(const RowId& id) const {
   if (it->metadata_len > 0 &&
       it->metadata_offset + it->metadata_len <= metadata_blob_.size()) {
     row.metadata = metadata_blob_.substr(it->metadata_offset, it->metadata_len);
+  }
+  const size_t ordinal =
+      static_cast<size_t>(std::distance(id_entries_.begin(), it));
+  if (ordinal < row_tags_.size()) {
+    row.tags = row_tags_[ordinal];
   }
   return row;
 }

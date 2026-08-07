@@ -1,0 +1,15 @@
+services:
+  aster:
+    image: aster:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - aster-data:/data
+    environment:
+      ASTER_DATA_DIR: /data
+    # One-shot demo today; replace with long-running server when M4 RPC lands.
+    restart: "no"
+
+volumes:
+  aster-data:

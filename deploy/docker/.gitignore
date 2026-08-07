@@ -1,0 +1,4 @@
+# Staging dir used by scripts/docker-build.sh
+.build/
+aster
+su-exec

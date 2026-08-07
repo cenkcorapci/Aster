@@ -26,6 +26,20 @@ build:edge --host_cxxopt=-DASTER_PROFILE_EDGE
 build:server --cxxopt=-DASTER_PROFILE_SERVER
 build:server --host_cxxopt=-DASTER_PROFILE_SERVER
 
+# Fully-static musl Linux binaries for BusyBox (see deploy/docker/).
+# Cross-compiles from macOS or Linux; does not affect default host builds.
+build:linux_musl_amd64 --platforms=//platforms:linux_amd64_musl
+build:linux_musl_amd64 --compilation_mode=opt
+build:linux_musl_amd64 --features=fully_static_link
+build:linux_musl_amd64 --dynamic_mode=off
+build:linux_musl_amd64 --strip=always
+
+build:linux_musl_arm64 --platforms=//platforms:linux_arm64_musl
+build:linux_musl_arm64 --compilation_mode=opt
+build:linux_musl_arm64 --features=fully_static_link
+build:linux_musl_arm64 --dynamic_mode=off
+build:linux_musl_arm64 --strip=always
+
 # Users can keep private flags out of version control.
 try-import %workspace%/.bazelrc.user
 
