@@ -1,9 +1,12 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <cmath>
 #include <cstdio>
+#include <sstream>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include "aster/server/catalog.h"
 #include "aster/server/http_api.h"
@@ -16,6 +19,31 @@ std::string TempDir(const char* name) {
   std::string path = std::string(::testing::TempDir()) + "/" + name;
   ::remove((path + "/CATALOG").c_str());
   return path;
+}
+
+std::vector<float> MakeUnitVector(uint32_t dim, uint32_t seed) {
+  std::vector<float> v(dim);
+  double norm2 = 0.0;
+  for (uint32_t i = 0; i < dim; ++i) {
+    // Deterministic pseudo-random in [-1, 1].
+    const uint32_t x = (seed * 1664525u + i * 1013904223u);
+    v[i] = static_cast<float>((x % 2001) / 1000.0 - 1.0);
+    norm2 += static_cast<double>(v[i]) * v[i];
+  }
+  const float inv = norm2 > 0.0 ? static_cast<float>(1.0 / std::sqrt(norm2)) : 1.0f;
+  for (float& x : v) x *= inv;
+  return v;
+}
+
+std::string VectorJson(const std::vector<float>& v) {
+  std::ostringstream os;
+  os << '[';
+  for (size_t i = 0; i < v.size(); ++i) {
+    if (i) os << ',';
+    os << v[i];
+  }
+  os << ']';
+  return os.str();
 }
 
 TEST(Json, RoundTripBasics) {
@@ -137,6 +165,109 @@ TEST(HttpApi, EndToEndLocalhost) {
   server.Stop();
   th.join();
 }
+
+class HighDimTest : public ::testing::TestWithParam<uint32_t> {};
+
+TEST_P(HighDimTest, CatalogUpsertSearchFlushReopen) {
+  const uint32_t dim = GetParam();
+  const std::string dir =
+      TempDir(("aster_dim_" + std::to_string(dim)).c_str());
+  Catalog::Options opt;
+  opt.data_dir = dir;
+  opt.wal_sync = SyncPolicy::kNever;
+  auto cat = Catalog::Open(opt);
+  ASSERT_TRUE(cat.ok()) << cat.status().message();
+
+  CollectionInfo info;
+  info.name = "d" + std::to_string(dim);
+  info.dimension = dim;
+  info.metric = Metric::kCosine;
+  ASSERT_TRUE(cat.value()->CreateCollection(info).ok());
+
+  const auto target = MakeUnitVector(dim, /*seed=*/7);
+  auto decoy = MakeUnitVector(dim, /*seed=*/99);
+  // Guarantee decoy is not identical/near-identical to the query (dim=1 cosine).
+  if (dim == 1) {
+    decoy[0] = -target[0];
+  } else {
+    decoy[0] = -decoy[0];
+  }
+  {
+    Row row;
+    row.id = "target";
+    row.vector = target;
+    row.timestamp = 1;
+    ASSERT_TRUE(cat.value()->Upsert(info.name, std::move(row)).ok());
+  }
+  {
+    Row row;
+    row.id = "decoy";
+    row.vector = decoy;
+    row.timestamp = 2;
+    ASSERT_TRUE(cat.value()->Upsert(info.name, std::move(row)).ok());
+  }
+
+  SearchRequest req;
+  req.vector = target;
+  req.top_k = 2;
+  auto hits = cat.value()->Search(info.name, req);
+  ASSERT_TRUE(hits.ok()) << hits.status().message();
+  ASSERT_GE(hits.value().size(), 1u);
+  EXPECT_EQ(hits.value()[0].id, "target");
+
+  ASSERT_TRUE(cat.value()->Flush(info.name).ok());
+  cat.value().reset();
+
+  auto reopened = Catalog::Open(opt);
+  ASSERT_TRUE(reopened.ok()) << reopened.status().message();
+  auto got = reopened.value()->Get(info.name, "target");
+  ASSERT_TRUE(got.ok());
+  ASSERT_TRUE(got.value().has_value());
+  ASSERT_EQ(got.value()->vector.size(), dim);
+  EXPECT_FLOAT_EQ(got.value()->vector[0], target[0]);
+  EXPECT_FLOAT_EQ(got.value()->vector[dim - 1], target[dim - 1]);
+
+  hits = reopened.value()->Search(info.name, req);
+  ASSERT_TRUE(hits.ok());
+  ASSERT_GE(hits.value().size(), 1u);
+  EXPECT_EQ(hits.value()[0].id, "target");
+}
+
+TEST_P(HighDimTest, HttpApiUpsertSearch) {
+  const uint32_t dim = GetParam();
+  const std::string dir =
+      TempDir(("aster_http_dim_" + std::to_string(dim)).c_str());
+  Catalog::Options opt;
+  opt.data_dir = dir;
+  opt.wal_sync = SyncPolicy::kNever;
+  auto cat = Catalog::Open(opt);
+  ASSERT_TRUE(cat.ok());
+  ApiHandler handler(cat.value().get());
+
+  const std::string coll = "c" + std::to_string(dim);
+  auto created = handler.Handle(HttpRequest{
+      "PUT", "/v1/collections/" + coll, "",
+      "{\"dimension\":" + std::to_string(dim) + ",\"metric\":\"cosine\"}", ""});
+  ASSERT_EQ(created.status, 201) << created.body;
+
+  const auto vec = MakeUnitVector(dim, /*seed=*/3);
+  const std::string body =
+      std::string("{\"vector\":") + VectorJson(vec) + ",\"timestamp\":1}";
+  auto upserted = handler.Handle(HttpRequest{
+      "PUT", "/v1/collections/" + coll + "/docs/doc1", "", body, ""});
+  ASSERT_EQ(upserted.status, 200) << upserted.body;
+
+  const std::string search_body =
+      std::string("{\"vector\":") + VectorJson(vec) + ",\"top_k\":5}";
+  auto searched = handler.Handle(HttpRequest{
+      "POST", "/v1/collections/" + coll + "/search", "", search_body, ""});
+  ASSERT_EQ(searched.status, 200) << searched.body;
+  EXPECT_NE(searched.body.find("doc1"), std::string::npos);
+}
+
+INSTANTIATE_TEST_SUITE_P(DimensionsUpTo4096, HighDimTest,
+                         ::testing::Values(1u, 128u, 384u, 768u, 1536u, 3072u,
+                                           4096u));
 
 }  // namespace
 }  // namespace aster
