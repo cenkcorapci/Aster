@@ -71,5 +71,14 @@ Testing/
 # Intellij
 .idea
 
+# Bazel
+bazel-*
+.bazelrc.user
+MODULE.bazel.lock
+
+# TLA+ model checker output
+tla/states/
+tla/*.jar
+
 # Vibe coding
 prompt.md

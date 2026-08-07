@@ -1,0 +1,9 @@
+# Switches to java_library + rules_jvm_external Maven publishing in
+# milestone M6 (docs/development-plan.md). Coordinates: io.aster:aster-client.
+
+package(default_visibility = ["//visibility:public"])
+
+filegroup(
+    name = "srcs",
+    srcs = glob(["src/**/*.java"]),
+)

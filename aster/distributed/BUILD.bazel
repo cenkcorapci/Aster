@@ -1,0 +1,21 @@
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_cc//cc:cc_test.bzl", "cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+cc_library(
+    name = "distributed",
+    srcs = ["ring.cc"],
+    hdrs = ["ring.h"],
+    deps = ["//aster/core"],
+)
+
+cc_test(
+    name = "distributed_test",
+    size = "small",
+    srcs = ["ring_test.cc"],
+    deps = [
+        ":distributed",
+        "@googletest//:gtest_main",
+    ],
+)

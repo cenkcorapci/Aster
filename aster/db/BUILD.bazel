@@ -1,0 +1,26 @@
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_cc//cc:cc_test.bzl", "cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+cc_library(
+    name = "db",
+    srcs = ["db.cc"],
+    hdrs = ["db.h"],
+    deps = [
+        "//aster/core",
+        "//aster/index",
+        "//aster/query",
+        "//aster/storage",
+    ],
+)
+
+cc_test(
+    name = "db_test",
+    size = "small",
+    srcs = ["db_test.cc"],
+    deps = [
+        ":db",
+        "@googletest//:gtest_main",
+    ],
+)

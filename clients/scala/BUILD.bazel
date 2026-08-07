@@ -1,0 +1,9 @@
+# Switches to rules_scala scala_library + Maven publishing in milestone M6
+# (docs/development-plan.md). Coordinates: io.aster:aster-client-scala.
+
+package(default_visibility = ["//visibility:public"])
+
+filegroup(
+    name = "srcs",
+    srcs = glob(["src/**/*.scala"]),
+)

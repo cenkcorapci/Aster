@@ -1,0 +1,9 @@
+# Switches to rules_rust rust_library + crate publishing in milestone M6
+# (docs/development-plan.md).
+
+package(default_visibility = ["//visibility:public"])
+
+filegroup(
+    name = "srcs",
+    srcs = glob(["src/**/*.rs"]) + ["Cargo.toml"],
+)

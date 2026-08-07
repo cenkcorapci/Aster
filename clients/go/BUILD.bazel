@@ -1,0 +1,9 @@
+# Switches to rules_go go_library in milestone M6 (docs/development-plan.md).
+# Go consumers can already `go get` this module directly via git tags.
+
+package(default_visibility = ["//visibility:public"])
+
+filegroup(
+    name = "srcs",
+    srcs = glob(["**/*.go"]) + ["go.mod"],
+)

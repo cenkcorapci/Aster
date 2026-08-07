@@ -1,0 +1,10 @@
+[package]
+name = "aster-client"
+version = "0.1.0"
+edition = "2021"
+description = "Rust client for Aster, the peer-to-peer vector database"
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/aster-db/aster"
+
+[dependencies]
+# thrift and tokio are added when the transport lands (milestone M5).

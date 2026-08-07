@@ -1,0 +1,9 @@
+# Thrift code generation is wired in milestone M5 (docs/development-plan.md).
+# Until then the IDL is exported so client packages can reference it.
+
+package(default_visibility = ["//visibility:public"])
+
+filegroup(
+    name = "thrift_idl",
+    srcs = ["aster.thrift"],
+)

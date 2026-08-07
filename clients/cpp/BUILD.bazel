@@ -1,0 +1,10 @@
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+# Facade header only until the Thrift transport lands (milestone M5).
+cc_library(
+    name = "aster_client",
+    hdrs = ["aster_client.h"],
+    include_prefix = "aster/client",
+)

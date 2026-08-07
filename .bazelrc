@@ -1,0 +1,21 @@
+# C++20 everywhere.
+build --cxxopt=-std=c++20
+build --host_cxxopt=-std=c++20
+
+# Warnings: keep the template honest from day one.
+build --cxxopt=-Wall
+build --cxxopt=-Wextra
+
+# Test output.
+test --test_output=errors
+
+# Convenience configs.
+build:opt --compilation_mode=opt
+build:dbg --compilation_mode=dbg
+build:asan --compilation_mode=dbg
+build:asan --cxxopt=-fsanitize=address --linkopt=-fsanitize=address
+build:tsan --compilation_mode=dbg
+build:tsan --cxxopt=-fsanitize=thread --linkopt=-fsanitize=thread
+
+# Users can keep private flags out of version control.
+try-import %workspace%/.bazelrc.user

@@ -1,0 +1,13 @@
+# Switches to rules_python py_library + py_wheel in milestone M6
+# (docs/development-plan.md); filegroup keeps `bazel build //...` green
+# until then.
+
+package(default_visibility = ["//visibility:public"])
+
+filegroup(
+    name = "srcs",
+    srcs = glob(["**/*.py"]) + [
+        "README.md",
+        "pyproject.toml",
+    ],
+)

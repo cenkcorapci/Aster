@@ -1,0 +1,13 @@
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+cc_library(
+    name = "platform",
+    srcs = ["memory_storage.cc"],
+    hdrs = [
+        "memory_storage.h",
+        "storage_backend.h",
+    ],
+    deps = ["//aster/core"],
+)

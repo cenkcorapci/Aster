@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aster-client"
+version = "0.1.0"
+description = "Python client for Aster, the peer-to-peer vector database"
+readme = "README.md"
+license = "AGPL-3.0-or-later"
+requires-python = ">=3.9"
+dependencies = [
+    "thrift>=0.19",
+]
+
+[project.urls]
+Homepage = "https://github.com/aster-db/aster"
+
+[tool.setuptools.packages.find]
+include = ["aster*"]

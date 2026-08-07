@@ -1,0 +1,29 @@
+"""Aster: a peer-to-peer, low-resource vector database.
+
+Monorepo layout:
+  //aster/...    C++ core engine (kernel, storage, index, distributed, query, rpc)
+  //clients/...  Client libraries (C++, Python, Go, Rust, Java, Scala, JavaScript)
+  //tla/...      TLA+ formal specifications
+  //docs/...     Design and reference documentation
+"""
+
+module(
+    name = "aster",
+    version = "0.1.0",
+    compatibility_level = 1,
+)
+
+bazel_dep(name = "rules_cc", version = "0.2.17")
+bazel_dep(name = "platforms", version = "1.0.0")
+bazel_dep(name = "googletest", version = "1.17.0.bcr.2", dev_dependency = True)
+
+# Client-library rulesets are wired in per milestone M6 (see
+# docs/development-plan.md). They are intentionally not added yet so that
+# `bazel build //...` stays fast and hermetic while the core engine is the
+# focus:
+#   bazel_dep(name = "rules_python", ...)       # //clients/python wheel
+#   bazel_dep(name = "rules_go", ...)           # //clients/go
+#   bazel_dep(name = "rules_rust", ...)         # //clients/rust crate
+#   bazel_dep(name = "rules_jvm_external", ...) # //clients/java + //clients/scala
+#   bazel_dep(name = "rules_scala", ...)
+#   bazel_dep(name = "aspect_rules_js", ...)    # //clients/javascript npm package
