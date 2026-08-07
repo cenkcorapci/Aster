@@ -1,0 +1,41 @@
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_cc//cc:cc_test.bzl", "cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+cc_library(
+    name = "server",
+    srcs = [
+        "catalog.cc",
+        "http_api.cc",
+        "json.cc",
+    ],
+    hdrs = [
+        "catalog.h",
+        "http_api.h",
+        "json.h",
+    ],
+    target_compatible_with = select({
+        "//platforms:is_baremetal": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    }),
+    deps = [
+        "//aster/core",
+        "//aster/db",
+        "//aster/metrics",
+    ],
+)
+
+cc_test(
+    name = "server_test",
+    size = "small",
+    srcs = ["server_test.cc"],
+    target_compatible_with = select({
+        "//platforms:is_baremetal": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    }),
+    deps = [
+        ":server",
+        "@googletest//:gtest_main",
+    ],
+)

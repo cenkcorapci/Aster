@@ -13,6 +13,7 @@ aster/
 ├── query/          top-k merge across segments / replicas
 ├── distributed/    consistent-hash ring + vnodes
 ├── db/             hosted single-node Db (POSIX durable path)
+├── server/         multi-collection catalog + HTTP JSON API
 ├── embedded/       Tiny in-memory Db (Arduino / bare metal)
 ├── rpc/            aster.thrift (server = M4)
 ├── platform/       IStorageBackend: memory + POSIX (+ S3 later)

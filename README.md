@@ -12,6 +12,7 @@ Needs [Bazel](https://bazel.build) (`.bazelversion`) and a C++20 compiler.
 
 ```bash
 bazel test //aster/...          # tests
+bazel run //aster/cli:aster -- serve --data-dir /tmp/aster --port 8080
 bazel run //aster/cli:aster     # local demo
 ./scripts/docker-build.sh       # BusyBox image → aster:local
 ```
@@ -19,6 +20,7 @@ bazel run //aster/cli:aster     # local demo
 ## Tutorials
 
 - [Database management](docs/tutorials/database-management.md) — open, upsert, search, flush, compact, Docker
+- [HTTP API](docs/tutorials/http-api.md) — multi-collection JSON server (`aster serve`)
 - [Client libraries](docs/tutorials/client-libraries.md) — seven-language facades (transport = M5)
 
 Full docs index: [docs/README.md](docs/README.md).

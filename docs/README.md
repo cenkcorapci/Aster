@@ -3,6 +3,7 @@
 | Doc | Purpose |
 | --- | --- |
 | [Tutorials](tutorials/README.md) | Hands-on guides (start here) |
+| [Business plan](business-plan.md) | SaaS positioning and phased delivery |
 | [Development plan](development-plan.md) | Milestones and roadmap |
 | [Design](design.md) | Architecture (LSM + segmented HNSW + ring) |
 | [Code structure](code-structure.md) | Layers, packages, profiles |

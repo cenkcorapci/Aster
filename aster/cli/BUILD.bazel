@@ -12,5 +12,6 @@ cc_binary(
     deps = [
         "//aster/db",
         "//aster/distributed",
+        "//aster/server",
     ],
 )

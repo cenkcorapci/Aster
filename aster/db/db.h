@@ -54,6 +54,8 @@ class Db {
 
   size_t segment_count() const { return segments_.size(); }
   size_t memtable_rows() const { return memtable_.row_count(); }
+  // Memtable + all segment rows (includes tombstones until compacted).
+  size_t approximate_row_count() const;
   const std::string& data_dir() const { return options_.data_dir; }
 
  private:

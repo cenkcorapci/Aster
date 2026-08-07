@@ -27,8 +27,10 @@ Companion docs: [design](design.md), [code structure](code-structure.md),
 | M1 Durable engine | **Partial** — SSTable, manifest, WAL open/replay, flush/compact, auto-compact; background threads / compression / CBOR still open |
 | M2 Segmented HNSW | Not started (exact index only) |
 | M3 Embedded & profiles | **Partial** — Tiny/Edge/Server, Arduino `embedded`, BusyBox musl image, memory sharing |
-| M4+ Server / clients / cluster | Not started (Thrift IDL + client facades/stubs only) |
+| M4 Server | **Partial** — multi-collection catalog + HTTP JSON API (`aster serve`), Prometheus `/metrics`; Thrift RPC still open |
+| M5+ Clients / cluster | Not started (Thrift IDL + client facades/stubs only) |
 | CI | GitHub Actions: `bazel test //aster/...` on `main` |
+| Business-plan Phase 1 | **Kernel ready** — collections + CRUD/search HTTP + usage meters; HNSW/compression/SaaS control plane still open |
 
 ## Milestones
 

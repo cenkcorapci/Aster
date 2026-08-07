@@ -371,4 +371,10 @@ Status Db::Compact() {
   return Status::Ok();
 }
 
+size_t Db::approximate_row_count() const {
+  size_t n = memtable_.row_count();
+  for (const auto& segment : segments_) n += segment->row_count();
+  return n;
+}
+
 }  // namespace aster
