@@ -9,7 +9,8 @@ and deployment targets from microcontrollers to S3-backed cloud clusters.
 
 | Path | Contents |
 | --- | --- |
-| `aster/` | C++20 core engine: `core`, `storage` (WAL/memtable/segments), `index` (distance kernels, vector indexes), `distributed` (consistent-hash ring), `query`, `db` (single-node engine), `rpc` (Thrift IDL), `platform`, `metrics`, `cli` |
+| `aster/` | C++20 core engine: `core`, `storage`, `index`, `distributed`, `query`, `db` (hosted), `embedded` (MCU/Tiny), `rpc`, `platform`, `metrics`, `cli` |
+
 | `clients/` | Client libraries for C++, Python, Go, Rust, Java, Scala, JavaScript — one protocol, one release train ([clients/README.md](clients/README.md)) |
 | `docs/` | Design & architecture docs, incl. the [development plan](docs/development-plan.md), [task board](docs/tasks.md), [parallel-agent playbook](docs/start-the-tasks.md), and [indexing reference](docs/indexing.md) |
 | `tla/` | TLA+ formal specifications of the indexing lifecycle and replication protocol, model-checked with TLC ([tla/README.md](tla/README.md)) |
