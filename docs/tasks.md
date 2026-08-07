@@ -60,8 +60,7 @@ Status updates happen in this file (see start-the-tasks.md § Claiming).
 
 | ID | Status | Lane | Depends | Title | Touch | Done when |
 | --- | --- | --- | --- | --- | --- | --- |
-| M1-T01 | in_progress | storage | — | Spec SSTable binary layout (header, blocks, footer CRC) as a short RFC in `docs/` | `docs/sstable-format.md` (new) | Format doc reviewed; block order + CRC rules unambiguous |
-<!-- claim: M1-T01 | agent: wave1-storage | branch: main | since: 2026-08-07 -->
+| M1-T01 | done | storage | — | Spec SSTable binary layout (header, blocks, footer CRC) as a short RFC in `docs/` | `docs/sstable-format.md` (new) | Format doc reviewed; block order + CRC rules unambiguous |
 | M1-T02 | open | storage | M1-T01 | Implement SSTable writer (encode one segment to disk) | `aster/storage/sstable*` | Round-trip unit test: write N rows → file exists → byte layout matches RFC |
 | M1-T03 | open | storage | M1-T02 | Implement SSTable reader (mmap or pread) with ID binary search | `aster/storage/sstable*` | `Get(id)` from disk matches in-memory segment for fixture data |
 | M1-T04 | open | storage | M1-T02 | Bloom filter + sparse index in SSTable | `aster/storage/`, `aster/index/bloom*` | Negative lookups skip disk I/O in test; false-positive rate documented |
