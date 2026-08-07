@@ -28,7 +28,7 @@ Db::Options SmallDb() {
 TEST(Db, SearchSpansMemtableAndSegments) {
   Db db(SmallDb());
   ASSERT_TRUE(db.Upsert(MakeRow("seg-row", {1.0f, 0.0f}, 10)).ok());
-  db.Flush();
+  ASSERT_TRUE(db.Flush().ok());
   ASSERT_TRUE(db.Upsert(MakeRow("mem-row", {0.9f, 0.0f}, 20)).ok());
 
   SearchRequest req;
@@ -43,7 +43,7 @@ TEST(Db, SearchSpansMemtableAndSegments) {
 TEST(Db, DeleteHidesRowEvenIfIndexedInSegment) {
   Db db(SmallDb());
   ASSERT_TRUE(db.Upsert(MakeRow("a", {1.0f, 0.0f}, 10)).ok());
-  db.Flush();  // "a" is now baked into a segment index
+  ASSERT_TRUE(db.Flush().ok());  // "a" is now baked into a segment index
   ASSERT_TRUE(db.Delete("a", 20).ok());
 
   EXPECT_FALSE(db.Get("a").has_value());
@@ -56,7 +56,7 @@ TEST(Db, DeleteHidesRowEvenIfIndexedInSegment) {
 TEST(Db, UpdateInMemtableShadowsSegmentVersion) {
   Db db(SmallDb());
   ASSERT_TRUE(db.Upsert(MakeRow("a", {1.0f, 0.0f}, 10)).ok());
-  db.Flush();
+  ASSERT_TRUE(db.Flush().ok());
   // Move "a" far away from the query point.
   ASSERT_TRUE(db.Upsert(MakeRow("a", {-1.0f, 0.0f}, 20)).ok());
 
@@ -86,13 +86,13 @@ TEST(Db, CompactionPurgesTombstonesAndKeepsLatest) {
   Db db(SmallDb());
   ASSERT_TRUE(db.Upsert(MakeRow("a", {1.0f, 0.0f}, 10)).ok());
   ASSERT_TRUE(db.Upsert(MakeRow("b", {0.0f, 1.0f}, 10)).ok());
-  db.Flush();
+  ASSERT_TRUE(db.Flush().ok());
   ASSERT_TRUE(db.Delete("b", 20).ok());
   ASSERT_TRUE(db.Upsert(MakeRow("a", {0.5f, 0.5f}, 30)).ok());
-  db.Flush();
+  ASSERT_TRUE(db.Flush().ok());
   ASSERT_EQ(db.segment_count(), 2u);
 
-  db.Compact();
+  ASSERT_TRUE(db.Compact().ok());
   ASSERT_EQ(db.segment_count(), 1u);
   EXPECT_FALSE(db.Get("b").has_value());
   ASSERT_TRUE(db.Get("a").has_value());
@@ -108,6 +108,34 @@ TEST(Db, CompactionPurgesTombstonesAndKeepsLatest) {
 TEST(Db, DimensionValidation) {
   Db db(SmallDb());
   EXPECT_FALSE(db.Upsert(MakeRow("bad", {1.0f}, 10)).ok());
+}
+
+TEST(Db, DurableOpenRecoversFlushedAndWalRows) {
+  const std::string dir = ::testing::TempDir() + "/aster_db_durable";
+  {
+    Db::Options options = SmallDb();
+    options.data_dir = dir;
+    options.wal_sync = SyncPolicy::kNever;
+    auto db = Db::Open(options);
+    ASSERT_TRUE(db.ok()) << db.status().message();
+    ASSERT_TRUE(db.value()
+                    ->Upsert(MakeRow("flushed", {1.0f, 0.0f}, 10))
+                    .ok());
+    ASSERT_TRUE(db.value()->Flush().ok());
+    ASSERT_TRUE(
+        db.value()->Upsert(MakeRow("wal-only", {0.0f, 1.0f}, 20)).ok());
+    // Destroy without flush: wal-only must come back via replay.
+  }
+
+  Db::Options options = SmallDb();
+  options.data_dir = dir;
+  options.wal_sync = SyncPolicy::kNever;
+  auto db = Db::Open(options);
+  ASSERT_TRUE(db.ok()) << db.status().message();
+  EXPECT_EQ(db.value()->segment_count(), 1u);
+  ASSERT_TRUE(db.value()->Get("flushed").has_value());
+  ASSERT_TRUE(db.value()->Get("wal-only").has_value());
+  EXPECT_FLOAT_EQ(db.value()->Get("wal-only")->vector[1], 1.0f);
 }
 
 }  // namespace

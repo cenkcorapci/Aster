@@ -65,7 +65,7 @@ Status updates happen in this file (see start-the-tasks.md § Claiming).
 | M1-T03 | done | storage | M1-T02 | Implement SSTable reader (mmap or pread) with ID binary search | `aster/storage/sstable*` | `Get(id)` from disk matches in-memory segment for fixture data |
 | M1-T04 | done | storage | M1-T02 | Bloom filter + sparse index in SSTable | `aster/storage/`, `aster/index/bloom*` | Negative lookups skip disk I/O in test; false-positive rate documented |
 | M1-T05 | done | storage | M1-T03 | Segment manifest with atomic swap (temp + rename) | `aster/storage/manifest*` | Crash between write and rename leaves previous generation intact |
-| M1-T06 | open | storage | M1-T05, M0-T03 | Crash recovery: load manifest + replay WAL into memtable | `aster/db/`, `aster/storage/` | Property test: random write/flush/kill sequence → acked state restored (`WalTruncationSafe`) |
+| M1-T06 | done | storage | M1-T05, M0-T03 | Crash recovery: load manifest + replay WAL into memtable | `aster/db/`, `aster/storage/` | Property test: random write/flush/kill sequence → acked state restored (`WalTruncationSafe`) |
 | M1-T07 | done | storage | M0-T03 | WAL group-commit (`EVERY_MS`) + truncate after successful flush | `aster/storage/wal*` | Group-commit latency measured; truncate leaves only post-flush records |
 | M1-T08 | open | storage | M1-T02 | Binary RowId (16-byte UUID) with string conversion helpers | `aster/core/types*`, callers | Wire + disk use binary; API still accepts string; migration note in RFC |
 

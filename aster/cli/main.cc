@@ -35,7 +35,9 @@ int main() {
     row.timestamp = static_cast<aster::Timestamp>(i + 1);
     row.tags.insert(i % 2 == 0 ? "even" : "odd");
     if (!db.Upsert(std::move(row)).ok()) return 1;
-    if ((i + 1) % 250 == 0) db.Flush();  // spread rows across segments
+    if ((i + 1) % 250 == 0) {
+      if (!db.Flush().ok()) return 1;  // spread rows across segments
+    }
   }
   std::printf("inserted %d rows across %zu segments (+ memtable rows: %zu)\n",
               kRows, db.segment_count(), db.memtable_rows());
@@ -52,7 +54,7 @@ int main() {
     std::printf("  %-10s score=%.4f\n", hit.id.c_str(), hit.score);
   }
 
-  db.Compact();
+  if (!db.Compact().ok()) return 1;
   std::printf("\nafter full compaction: %zu segment(s)\n", db.segment_count());
 
   // Ring placement preview: where would these rows live in a cluster?
