@@ -10,7 +10,6 @@ and deployment targets from microcontrollers to S3-backed cloud clusters.
 | Path | Contents |
 | --- | --- |
 | `aster/` | C++20 core engine: `core`, `storage`, `index`, `distributed`, `query`, `db` (hosted), `embedded` (MCU/Tiny), `rpc`, `platform`, `metrics`, `cli` |
-
 | `clients/` | Client libraries for C++, Python, Go, Rust, Java, Scala, JavaScript — one protocol, one release train ([clients/README.md](clients/README.md)) |
 | `docs/` | Design & architecture docs, incl. the [development plan](docs/development-plan.md), [task board](docs/tasks.md), [parallel-agent playbook](docs/start-the-tasks.md), and [indexing reference](docs/indexing.md) |
 | `tla/` | TLA+ formal specifications of the indexing lifecycle and replication protocol, model-checked with TLC ([tla/README.md](tla/README.md)) |
@@ -28,6 +27,8 @@ bazel run //aster/cli:aster   # single-node demo: insert, search, compact
 docker run --rm -v aster-data:/data aster:local
 ./scripts/build-matrix.sh     # host + Tiny/Edge/Server + Arduino + musl
 ./scripts/build-matrix.sh --full   # also zig-cross Linux/Darwin
+make bench-local              # 50-node kind soak, local storage
+make bench-minio              # 50-node kind soak + MinIO S3 stand-in
 ```
 
 ## Target platforms

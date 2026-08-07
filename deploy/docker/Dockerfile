@@ -1,10 +1,6 @@
-# Aster runtime image: BusyBox (musl) + fully-static Aster binary.
+# Aster runtime image: BusyBox (musl) + static aster + aster-bench.
 #
-# Build (from repo root):
-#   ./scripts/docker-build.sh
-#
-# The binary is cross-compiled with toolchains_musl so it has zero shared
-# library dependencies and runs on busybox:*-musl and scratch alike.
+# Build: ./scripts/docker-build.sh
 
 # syntax=docker/dockerfile:1.7
 
@@ -17,26 +13,26 @@ LABEL org.opencontainers.image.title="Aster" \
       org.opencontainers.image.source="https://github.com/cenkcorapci/Aster" \
       org.opencontainers.image.licenses="AGPL-3.0"
 
-# Non-root runtime identity (uid/gid 1000). Entrypoint starts as root only
-# long enough to chown the data volume, then drops to this user.
 RUN addgroup -g 1000 aster \
  && adduser -D -H -u 1000 -G aster aster \
- && mkdir -p /data \
- && chown aster:aster /data
+ && mkdir -p /data /results \
+ && chown aster:aster /data /results
 
 COPY aster /usr/local/bin/aster
+COPY aster-bench /usr/local/bin/aster-bench
 COPY su-exec /usr/local/sbin/su-exec
 COPY entrypoint.sh /entrypoint.sh
-RUN chmod 755 /usr/local/bin/aster /usr/local/sbin/su-exec /entrypoint.sh
+RUN chmod 755 /usr/local/bin/aster /usr/local/bin/aster-bench \
+              /usr/local/sbin/su-exec /entrypoint.sh
 
 ENV ASTER_DATA_DIR=/data \
-    ASTER_BIN=/usr/local/bin/aster
+    ASTER_BIN=/usr/local/bin/aster \
+    ASTER_BENCH_BIN=/usr/local/bin/aster-bench \
+    ASTER_MODE=demo
 
-VOLUME ["/data"]
+VOLUME ["/data", "/results"]
 WORKDIR /data
 
-# Root for volume bootstrap; entrypoint drops to uid 1000.
 USER root
 ENTRYPOINT ["/entrypoint.sh"]
-# Default: durable single-node demo against /data.
 CMD []

@@ -1,4 +1,5 @@
 # Staging dir used by scripts/docker-build.sh
 .build/
 aster
+aster-bench
 su-exec

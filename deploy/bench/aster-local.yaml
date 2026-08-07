@@ -1,0 +1,122 @@
+# Local / embedded storage bench: Aster BusyBox nodes with emptyDir.
+# Placeholders __REPLICAS__, __VECTORS__, __DIMENSION__, __DURATION__, __IMAGE__
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: aster-node
+  namespace: aster-bench
+  labels:
+    app: aster-bench
+    storage: local
+spec:
+  serviceName: aster-node
+  replicas: __REPLICAS__
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app: aster-bench
+  template:
+    metadata:
+      labels:
+        app: aster-bench
+        storage: local
+    spec:
+      serviceAccountName: aster-bench
+      terminationGracePeriodSeconds: 20
+      initContainers:
+        - name: shard-env
+          image: __IMAGE__
+          imagePullPolicy: Never
+          command:
+            - /bin/sh
+            - -c
+            - |
+              NAME="${POD_NAME}"
+              ORD="${NAME##*-}"
+              VECTORS="${ASTER_VECTORS}"
+              BASE=$(expr "$ORD" \* "$VECTORS")
+              printf '%s' "$ORD" > /shared/node-ordinal
+              printf '%s' "$BASE" > /shared/id-base
+              echo "shard ordinal=$ORD id_base=$BASE vectors=$VECTORS"
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: ASTER_VECTORS
+              value: "__VECTORS__"
+          volumeMounts:
+            - name: shared
+              mountPath: /shared
+      containers:
+        - name: aster
+          image: __IMAGE__
+          imagePullPolicy: Never
+          env:
+            - name: ASTER_MODE
+              value: bench
+            - name: ASTER_DATA_DIR
+              value: /data
+            - name: ASTER_DIMENSION
+              value: "__DIMENSION__"
+            - name: ASTER_VECTORS
+              value: "__VECTORS__"
+            - name: ASTER_DURATION
+              value: "__DURATION__"
+            - name: ASTER_REPORT_EVERY
+              value: "5"
+            - name: ASTER_TOP_K
+              value: "10"
+            - name: ASTER_FLUSH_EVERY
+              value: "500"
+          command:
+            - /bin/sh
+            - -c
+            - |
+              ORD=$(cat /shared/node-ordinal)
+              BASE=$(cat /shared/id-base)
+              export ASTER_NODE_ID="$ORD"
+              export ASTER_ID_BASE="$BASE"
+              # Run soak, then sleep so StatefulSet does not restart and wipe logs.
+              set +e
+              /entrypoint.sh
+              EC=$?
+              echo "{\"phase\":\"bench_exit\",\"node\":\"$ORD\",\"exit_code\":$EC}"
+              sleep infinity
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "256Mi"
+            limits:
+              cpu: "750m"
+              memory: "1536Mi"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: results
+              mountPath: /results
+            - name: shared
+              mountPath: /shared
+      volumes:
+        - name: data
+          emptyDir:
+            sizeLimit: 4Gi
+        - name: results
+          emptyDir:
+            sizeLimit: 64Mi
+        - name: shared
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: aster-node
+  namespace: aster-bench
+spec:
+  clusterIP: None
+  selector:
+    app: aster-bench
+  ports:
+    - name: unused
+      port: 9090
+      targetPort: 9090

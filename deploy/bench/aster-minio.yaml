@@ -1,0 +1,163 @@
+# Aster nodes + MinIO sync sidecars (S3-simulated durable backend).
+# Placeholders __REPLICAS__, __VECTORS__, __DIMENSION__, __DURATION__, __IMAGE__
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: aster-node
+  namespace: aster-bench
+  labels:
+    app: aster-bench
+    storage: minio
+spec:
+  serviceName: aster-node
+  replicas: __REPLICAS__
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app: aster-bench
+  template:
+    metadata:
+      labels:
+        app: aster-bench
+        storage: minio
+    spec:
+      serviceAccountName: aster-bench
+      terminationGracePeriodSeconds: 25
+      initContainers:
+        - name: shard-env
+          image: __IMAGE__
+          imagePullPolicy: Never
+          command:
+            - /bin/sh
+            - -c
+            - |
+              NAME="${POD_NAME}"
+              ORD="${NAME##*-}"
+              VECTORS="${ASTER_VECTORS}"
+              BASE=$(expr "$ORD" \* "$VECTORS")
+              printf '%s' "$ORD" > /shared/node-ordinal
+              printf '%s' "$BASE" > /shared/id-base
+              echo "shard ordinal=$ORD id_base=$BASE vectors=$VECTORS"
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: ASTER_VECTORS
+              value: "__VECTORS__"
+          volumeMounts:
+            - name: shared
+              mountPath: /shared
+      containers:
+        - name: aster
+          image: __IMAGE__
+          imagePullPolicy: Never
+          env:
+            - name: ASTER_MODE
+              value: bench
+            - name: ASTER_DATA_DIR
+              value: /data
+            - name: ASTER_DIMENSION
+              value: "__DIMENSION__"
+            - name: ASTER_VECTORS
+              value: "__VECTORS__"
+            - name: ASTER_DURATION
+              value: "__DURATION__"
+            - name: ASTER_REPORT_EVERY
+              value: "5"
+            - name: ASTER_TOP_K
+              value: "10"
+            - name: ASTER_FLUSH_EVERY
+              value: "500"
+          command:
+            - /bin/sh
+            - -c
+            - |
+              ORD=$(cat /shared/node-ordinal)
+              BASE=$(cat /shared/id-base)
+              export ASTER_NODE_ID="$ORD"
+              export ASTER_ID_BASE="$BASE"
+              set +e
+              /entrypoint.sh
+              EC=$?
+              echo "{\"phase\":\"bench_exit\",\"node\":\"$ORD\",\"exit_code\":$EC}"
+              sleep infinity
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "256Mi"
+            limits:
+              cpu: "750m"
+              memory: "1536Mi"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: shared
+              mountPath: /shared
+        - name: minio-sync
+          image: minio/mc:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: MINIO_ROOT_USER
+              valueFrom:
+                secretKeyRef:
+                  name: minio-creds
+                  key: rootUser
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: minio-creds
+                  key: rootPassword
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              for i in $(seq 1 90); do
+                mc alias set local http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" && break
+                sleep 2
+              done
+              PREFIX="local/aster-bench/nodes/${POD_NAME}"
+              mc mb -p "$PREFIX" || true
+              # Continuous mirror of local LSM files to MinIO (S3 stand-in).
+              while true; do
+                mc mirror --overwrite --remove /data "$PREFIX/" || true
+                # Object count for scrapeable progress.
+                COUNT=$(mc ls --recursive "$PREFIX" 2>/dev/null | wc -l | tr -d ' ')
+                echo "{\"phase\":\"minio_sync\",\"pod\":\"${POD_NAME}\",\"objects\":${COUNT}}"
+                sleep 10
+              done
+          resources:
+            requests:
+              cpu: "25m"
+              memory: "64Mi"
+            limits:
+              cpu: "250m"
+              memory: "256Mi"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          emptyDir:
+            sizeLimit: 4Gi
+        - name: shared
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: aster-node
+  namespace: aster-bench
+spec:
+  clusterIP: None
+  selector:
+    app: aster-bench
+  ports:
+    - name: unused
+      port: 9090
+      targetPort: 9090

@@ -1,0 +1,15 @@
+load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
+
+package(default_visibility = ["//visibility:public"])
+
+cc_binary(
+    name = "aster-bench",
+    srcs = ["bench.cc"],
+    target_compatible_with = select({
+        "//platforms:is_baremetal": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    }),
+    deps = [
+        "//aster/db",
+    ],
+)

@@ -47,8 +47,8 @@ STAGING="$ROOT/deploy/docker/.build"
 mkdir -p "$STAGING"
 trap 'rm -rf "$STAGING"' EXIT
 
-echo "==> bazel build --config=${BAZEL_CONFIG} //aster/cli:aster //deploy/docker:su-exec"
-bazel build --config="${BAZEL_CONFIG}" //aster/cli:aster //deploy/docker:su-exec
+echo "==> bazel build --config=${BAZEL_CONFIG} //aster/cli:aster //aster/bench:aster-bench //deploy/docker:su-exec"
+bazel build --config="${BAZEL_CONFIG}" //aster/cli:aster //aster/bench:aster-bench //deploy/docker:su-exec
 
 resolve_bin() {
   local target="$1"
@@ -68,24 +68,24 @@ resolve_bin() {
 }
 
 ASTER_BIN="$(resolve_bin //aster/cli:aster bazel-bin/aster/cli/aster)"
+BENCH_BIN="$(resolve_bin //aster/bench:aster-bench bazel-bin/aster/bench/aster-bench)"
 SUEXEC_BIN="$(resolve_bin //deploy/docker:su-exec bazel-bin/deploy/docker/su-exec)"
 
 cp -f "$ASTER_BIN" "$STAGING/aster"
+cp -f "$BENCH_BIN" "$STAGING/aster-bench"
 cp -f "$SUEXEC_BIN" "$STAGING/su-exec"
 cp -f "$ROOT/deploy/docker/entrypoint.sh" "$STAGING/entrypoint.sh"
-chmod 755 "$STAGING/aster" "$STAGING/su-exec" "$STAGING/entrypoint.sh"
+chmod 755 "$STAGING/aster" "$STAGING/aster-bench" "$STAGING/su-exec" "$STAGING/entrypoint.sh"
 
 echo "==> static link check"
 if command -v file >/dev/null; then
-  file "$STAGING/aster" "$STAGING/su-exec" || true
+  file "$STAGING/aster" "$STAGING/aster-bench" "$STAGING/su-exec" || true
 fi
-# A musl-static binary should not need a dynamic loader line for shared libs.
 if command -v otool >/dev/null 2>&1 && [[ "$(uname -s)" == Darwin ]]; then
-  : # host otool cannot usefully inspect ELF; skip
+  :
 elif command -v readelf >/dev/null 2>&1; then
   if readelf -d "$STAGING/aster" 2>/dev/null | grep -q NEEDED; then
     echo "error: aster has shared library NEEDED entries; expected fully static" >&2
-    readelf -d "$STAGING/aster" || true
     exit 1
   fi
   echo "    aster: no DT_NEEDED (fully static)"
