@@ -61,12 +61,12 @@ Status updates happen in this file (see start-the-tasks.md § Claiming).
 | ID | Status | Lane | Depends | Title | Touch | Done when |
 | --- | --- | --- | --- | --- | --- | --- |
 | M1-T01 | done | storage | — | Spec SSTable binary layout (header, blocks, footer CRC) as a short RFC in `docs/` | `docs/sstable-format.md` (new) | Format doc reviewed; block order + CRC rules unambiguous |
-| M1-T02 | open | storage | M1-T01 | Implement SSTable writer (encode one segment to disk) | `aster/storage/sstable*` | Round-trip unit test: write N rows → file exists → byte layout matches RFC |
-| M1-T03 | open | storage | M1-T02 | Implement SSTable reader (mmap or pread) with ID binary search | `aster/storage/sstable*` | `Get(id)` from disk matches in-memory segment for fixture data |
-| M1-T04 | open | storage | M1-T02 | Bloom filter + sparse index in SSTable | `aster/storage/`, `aster/index/bloom*` | Negative lookups skip disk I/O in test; false-positive rate documented |
-| M1-T05 | open | storage | M1-T03 | Segment manifest with atomic swap (temp + rename) | `aster/storage/manifest*` | Crash between write and rename leaves previous generation intact |
+| M1-T02 | done | storage | M1-T01 | Implement SSTable writer (encode one segment to disk) | `aster/storage/sstable*` | Round-trip unit test: write N rows → file exists → byte layout matches RFC |
+| M1-T03 | done | storage | M1-T02 | Implement SSTable reader (mmap or pread) with ID binary search | `aster/storage/sstable*` | `Get(id)` from disk matches in-memory segment for fixture data |
+| M1-T04 | done | storage | M1-T02 | Bloom filter + sparse index in SSTable | `aster/storage/`, `aster/index/bloom*` | Negative lookups skip disk I/O in test; false-positive rate documented |
+| M1-T05 | done | storage | M1-T03 | Segment manifest with atomic swap (temp + rename) | `aster/storage/manifest*` | Crash between write and rename leaves previous generation intact |
 | M1-T06 | open | storage | M1-T05, M0-T03 | Crash recovery: load manifest + replay WAL into memtable | `aster/db/`, `aster/storage/` | Property test: random write/flush/kill sequence → acked state restored (`WalTruncationSafe`) |
-| M1-T07 | open | storage | M0-T03 | WAL group-commit (`EVERY_MS`) + truncate after successful flush | `aster/storage/wal*` | Group-commit latency measured; truncate leaves only post-flush records |
+| M1-T07 | done | storage | M0-T03 | WAL group-commit (`EVERY_MS`) + truncate after successful flush | `aster/storage/wal*` | Group-commit latency measured; truncate leaves only post-flush records |
 | M1-T08 | open | storage | M1-T02 | Binary RowId (16-byte UUID) with string conversion helpers | `aster/core/types*`, callers | Wire + disk use binary; API still accepts string; migration note in RFC |
 
 ### Background engine
@@ -110,7 +110,7 @@ Status updates happen in this file (see start-the-tasks.md § Claiming).
 | --- | --- | --- | --- | --- | --- | --- |
 | M3-T01 | open | db | M1-T06 | Stabilize embedded `aster::Db` public API + versioning | `aster/db/db.h`, docs | Header is the contract; no breaking changes without note |
 | M3-T02 | open | release | M3-T01 | Amalgamated / installable embedded library target | `aster/`, BUILD files | Downstream can depend on one `cc_library` or release tarball |
-| M3-T03 | open | platform | M0 | PosixStorage backend (files + mmap) | `aster/platform/posix*` | Implements `StorageBackend`; Db can persist via it |
+| M3-T03 | done | platform | M0 | PosixStorage backend (files + mmap) | `aster/platform/posix*` | Implements `StorageBackend`; Db can persist via it |
 | M3-T04 | open | platform | M3-T03 | S3 storage backend skeleton (Put/Get/List/Remove) | `aster/platform/s3*` | Integration test against LocalStack or mock; not production-complete |
 | M3-T05 | done | platform | — | Compile-time profiles: Tiny / Edge / Server | `aster/`, `.bazelrc` | Feature flags compile; Tiny excludes HNSW |
 | M3-T06 | open | platform | M2-T09, M3-T05 | ARM (NEON) CI build for Edge profile | CI | Green arm64 job |

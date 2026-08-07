@@ -6,10 +6,12 @@ package(default_visibility = ["//visibility:public"])
 cc_library(
     name = "index",
     srcs = [
+        "bloom.cc",
         "distance.cc",
         "exact_index.cc",
     ],
     hdrs = [
+        "bloom.h",
         "distance.h",
         "vector_index.h",
     ],

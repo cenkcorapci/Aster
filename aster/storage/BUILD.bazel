@@ -6,13 +6,17 @@ package(default_visibility = ["//visibility:public"])
 cc_library(
     name = "storage",
     srcs = [
+        "manifest.cc",
         "memtable.cc",
         "segment.cc",
+        "sstable.cc",
         "wal.cc",
     ],
     hdrs = [
+        "manifest.h",
         "memtable.h",
         "segment.h",
+        "sstable.h",
         "wal.h",
     ],
     deps = [
