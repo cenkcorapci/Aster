@@ -19,7 +19,6 @@ namespace {
 
 constexpr size_t kMaxHeaderBytes = 64 * 1024;
 constexpr size_t kMaxBodyBytes = 16 * 1024 * 1024;  // 16 MiB JSON body cap
-constexpr uint32_t kMaxDimension = 8192;
 constexpr uint32_t kMaxTopK = 1000;
 constexpr size_t kMaxDocIdLen = 512;
 
@@ -37,11 +36,10 @@ bool ConstantTimeEqual(const std::string& a, const std::string& b) {
 
 bool ValidDocId(const std::string& id) {
   if (id.empty() || id.size() > kMaxDocIdLen) return false;
-  if (id.find('/') != std::string::npos || id.find('\\') != std::string::npos ||
-      id.find('\0') != std::string::npos) {
-    return false;
+  if (id == "." || id == "..") return false;
+  for (char c : id) {
+    if (c == '/' || c == '\\' || c == '\0') return false;
   }
-  if (id == "." || id == ".." || id.find("..") != std::string::npos) return false;
   return true;
 }
 
@@ -77,26 +75,19 @@ HttpResponse FromStatus(const Status& st) {
   return JsonStatus(code, st.message().empty() ? "error" : st.message());
 }
 
-std::string MetricName(Metric m) {
-  switch (m) {
-    case Metric::kL2:
-      return "l2";
-    case Metric::kDot:
-      return "dot";
-    case Metric::kCosine:
-      return "cosine";
+std::string QueryParam(const std::string& query, const char* key) {
+  const std::string prefix = std::string(key) + "=";
+  size_t i = 0;
+  while (i < query.size()) {
+    size_t amp = query.find('&', i);
+    if (amp == std::string::npos) amp = query.size();
+    const std::string part = query.substr(i, amp - i);
+    if (part.rfind(prefix, 0) == 0) return part.substr(prefix.size());
+    i = amp + 1;
   }
-  return "cosine";
+  return {};
 }
 
-Result<Metric> ParseMetric(const std::string& s) {
-  if (s == "l2" || s == "L2") return Metric::kL2;
-  if (s == "dot" || s == "DOT") return Metric::kDot;
-  if (s == "cosine" || s == "COSINE" || s.empty()) return Metric::kCosine;
-  return Status::InvalidArgument("unknown metric");
-}
-
-// Split "/v1/collections/foo/docs/bar" into parts after leading slash.
 std::vector<std::string> SplitPath(const std::string& path) {
   std::vector<std::string> parts;
   size_t i = 0;
@@ -109,19 +100,6 @@ std::vector<std::string> SplitPath(const std::string& path) {
     i = j;
   }
   return parts;
-}
-
-std::string QueryParam(const std::string& query, const char* key) {
-  const std::string prefix = std::string(key) + "=";
-  size_t i = 0;
-  while (i < query.size()) {
-    size_t amp = query.find('&', i);
-    if (amp == std::string::npos) amp = query.size();
-    const std::string part = query.substr(i, amp - i);
-    if (part.rfind(prefix, 0) == 0) return part.substr(prefix.size());
-    i = amp + 1;
-  }
-  return {};
 }
 
 }  // namespace
@@ -168,7 +146,7 @@ HttpResponse ApiHandler::Handle(const HttpRequest& req) const {
         first = false;
         os << "{\"name\":\"" << json::Escape(c.name)
            << "\",\"dimension\":" << c.dimension << ",\"metric\":\""
-           << MetricName(c.metric) << "\"}";
+           << Catalog::MetricToString(c.metric) << "\"}";
       }
       os << "]}";
       return {200, "application/json", os.str()};
@@ -185,7 +163,7 @@ HttpResponse ApiHandler::Handle(const HttpRequest& req) const {
       std::ostringstream os;
       os << "{\"name\":\"" << json::Escape(info->name)
          << "\",\"dimension\":" << info->dimension << ",\"metric\":\""
-         << MetricName(info->metric) << "\"}";
+         << Catalog::MetricToString(info->metric) << "\"}";
       return {200, "application/json", os.str()};
     }
     if (req.method == "PUT") {
@@ -193,12 +171,14 @@ HttpResponse ApiHandler::Handle(const HttpRequest& req) const {
       info.name = name;
       auto dim = json::GetInt(req.body, "dimension");
       if (!dim || *dim <= 0) return JsonStatus(400, "dimension required");
-      if (*dim > static_cast<int64_t>(kMaxDimension)) {
+      if (*dim > static_cast<int64_t>(Catalog::kMaxDimension)) {
         return JsonStatus(400, "dimension too large");
       }
       info.dimension = static_cast<uint32_t>(*dim);
       auto metric_s = json::GetString(req.body, "metric");
-      auto metric = ParseMetric(metric_s.value_or("cosine"));
+      const std::string metric_name =
+          metric_s.has_value() && !metric_s->empty() ? *metric_s : "cosine";
+      auto metric = Catalog::MetricFromString(metric_name);
       if (!metric.ok()) return FromStatus(metric.status());
       info.metric = metric.value();
       auto st = catalog_->CreateCollection(info);
@@ -399,7 +379,7 @@ Status HttpServer::Listen() {
 }
 
 void HttpServer::Stop() {
-  stop_ = true;
+  stop_.store(true);
   if (listen_fd_ >= 0) {
     ::shutdown(listen_fd_, SHUT_RDWR);
     ::close(listen_fd_);
@@ -535,10 +515,10 @@ void HttpServer::HandleClient(int fd) {
 }
 
 void HttpServer::Serve() {
-  while (!stop_ && listen_fd_ >= 0) {
+  while (!stop_.load() && listen_fd_ >= 0) {
     const int fd = ::accept(listen_fd_, nullptr, nullptr);
     if (fd < 0) {
-      if (stop_) break;
+      if (stop_.load()) break;
       continue;
     }
     HandleClient(fd);

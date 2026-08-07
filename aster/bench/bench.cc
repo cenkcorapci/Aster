@@ -27,7 +27,7 @@ using Clock = std::chrono::steady_clock;
 struct Config {
   std::string data_dir;
   std::string node_id = "0";
-  uint32_t dimension = 16;
+  uint32_t dimension = 256;
   uint64_t vectors_per_node = 100000;  // scaled by orchestrator
   uint64_t id_base = 0;               // global id offset for this shard
   int duration_sec = 120;
@@ -61,7 +61,7 @@ void PrintUsage(const char* argv0) {
                "  --node-id ID             Shard label (default 0)\n"
                "  --id-base N              Starting vector id (default 0)\n"
                "  --vectors N              Working-set size for this node\n"
-               "  --dimension D            Vector dimension (default 16)\n"
+               "  --dimension D            Vector dimension (default 256; try 256/2048/4096)\n"
                "  --duration SEC           Run length (default 120)\n"
                "  --report-every SEC       Metrics cadence (default 5)\n"
                "  --top-k K                Search top-k (default 10)\n"
@@ -126,7 +126,11 @@ Config ParseArgs(int argc, char** argv) {
   if (memory) c.data_dir.clear();
   c.durable = !c.data_dir.empty();
   if (c.vectors_per_node == 0) c.vectors_per_node = 1;
-  if (c.dimension == 0) c.dimension = 16;
+  if (c.dimension == 0) c.dimension = 256;
+  if (c.dimension > 8192) {
+    std::fprintf(stderr, "error: --dimension must be <= 8192\n");
+    std::exit(2);
+  }
   if (c.duration_sec <= 0) c.duration_sec = 60;
   return c;
 }

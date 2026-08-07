@@ -26,15 +26,20 @@ struct UsageStats {
   uint64_t searches = 0;
   uint64_t gets = 0;
   size_t collections = 0;
-  size_t vectors_estimate = 0;  // sum of segment rows + memtable (approx)
+  size_t vectors_estimate = 0;
 };
 
 // Multi-collection facade over aster::Db for the single-node SaaS kernel.
 // Layout under data_dir:
 //   CATALOG          — one line per collection: name\tdimension\tmetric
 //   <name>/          — Db durable directory (MANIFEST, WAL, seg_*.ast)
+//
+// Db instances are shared_ptr so search/get can run without holding mu_
+// for the whole call (DropCollection cannot free a Db still in use).
 class Catalog {
  public:
+  static constexpr uint32_t kMaxDimension = 8192;
+
   struct Options {
     std::string data_dir;  // required (durable)
     SyncPolicy wal_sync = SyncPolicy::kEveryMs;
@@ -44,7 +49,12 @@ class Catalog {
 
   static Result<std::unique_ptr<Catalog>> Open(Options options);
 
+  static std::string MetricToString(Metric m);
+  static Result<Metric> MetricFromString(const std::string& s);
+
   Status CreateCollection(const CollectionInfo& info);
+  // Removes the collection from the catalog. On-disk files under
+  // data_dir/<name>/ are left in place (manual cleanup / future GC).
   Status DropCollection(const std::string& name);
   std::vector<CollectionInfo> ListCollections() const;
   std::optional<CollectionInfo> GetCollection(const std::string& name) const;
@@ -66,17 +76,14 @@ class Catalog {
 
   Status Load();
   Status PersistCatalog() const;
-  Result<Db*> MutableDb(const std::string& name);
-  Result<const Db*> ConstDb(const std::string& name) const;
+  Result<std::shared_ptr<Db>> LookupDb(const std::string& name) const;
   static Status ValidateName(const std::string& name);
-  static std::string MetricToString(Metric m);
-  static Result<Metric> MetricFromString(const std::string& s);
   std::string CollectionDir(const std::string& name) const;
 
   Options options_;
   mutable std::mutex mu_;
   std::unordered_map<std::string, CollectionInfo> infos_;
-  std::unordered_map<std::string, std::unique_ptr<Db>> dbs_;
+  std::unordered_map<std::string, std::shared_ptr<Db>> dbs_;
   mutable UsageStats usage_;
 };
 

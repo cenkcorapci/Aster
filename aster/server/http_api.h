@@ -1,7 +1,7 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
-#include <memory>
 #include <string>
 
 #include "aster/core/status.h"
@@ -45,10 +45,7 @@ class HttpServer {
 
   HttpServer(Options options, ApiHandler handler);
 
-  // Binds and listens. Returns error if bind fails.
   Status Listen();
-
-  // Serves until Stop() is called from another thread, or forever.
   void Serve();
   void Stop();
 
@@ -61,7 +58,7 @@ class HttpServer {
   ApiHandler handler_;
   int listen_fd_ = -1;
   uint16_t bound_port_ = 0;
-  bool stop_ = false;
+  std::atomic<bool> stop_{false};
 };
 
 }  // namespace aster

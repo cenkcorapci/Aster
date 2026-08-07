@@ -4,8 +4,6 @@
 #include <fstream>
 #include <sys/stat.h>
 
-#include "aster/metrics/metrics.h"
-
 namespace aster {
 namespace {
 
@@ -93,6 +91,9 @@ Status Catalog::Load() {
     info.metric = metric.value();
 
     if (auto st = ValidateName(info.name); !st.ok()) return st;
+    if (info.dimension == 0 || info.dimension > kMaxDimension) {
+      return Status::Corruption("catalog dimension out of range");
+    }
 
     Db::Options db_opt;
     db_opt.dimension = info.dimension;
@@ -104,7 +105,7 @@ Status Catalog::Load() {
     auto db = Db::Open(db_opt);
     if (!db.ok()) return db.status();
     infos_[info.name] = info;
-    dbs_[info.name] = std::move(db.value());
+    dbs_[info.name] = std::shared_ptr<Db>(std::move(db.value()));
   }
   return Status::Ok();
 }
@@ -131,7 +132,7 @@ Status Catalog::CreateCollection(const CollectionInfo& info) {
   if (info.dimension == 0) {
     return Status::InvalidArgument("dimension must be > 0");
   }
-  if (info.dimension > 8192) {
+  if (info.dimension > kMaxDimension) {
     return Status::InvalidArgument("dimension too large");
   }
 
@@ -154,7 +155,7 @@ Status Catalog::CreateCollection(const CollectionInfo& info) {
   if (!db.ok()) return db.status();
 
   infos_[info.name] = info;
-  dbs_[info.name] = std::move(db.value());
+  dbs_[info.name] = std::shared_ptr<Db>(std::move(db.value()));
   if (auto st = PersistCatalog(); !st.ok()) {
     infos_.erase(info.name);
     dbs_.erase(info.name);
@@ -189,67 +190,91 @@ std::optional<CollectionInfo> Catalog::GetCollection(
   return it->second;
 }
 
-Result<Db*> Catalog::MutableDb(const std::string& name) {
+Result<std::shared_ptr<Db>> Catalog::LookupDb(const std::string& name) const {
   auto it = dbs_.find(name);
   if (it == dbs_.end()) return Status::NotFound("collection not found");
-  return it->second.get();
-}
-
-Result<const Db*> Catalog::ConstDb(const std::string& name) const {
-  auto it = dbs_.find(name);
-  if (it == dbs_.end()) return Status::NotFound("collection not found");
-  return it->second.get();
+  return it->second;
 }
 
 Status Catalog::Upsert(const std::string& collection, Row row) {
-  std::lock_guard lock(mu_);
-  auto db = MutableDb(collection);
-  if (!db.ok()) return db.status();
-  auto st = db.value()->Upsert(std::move(row));
-  if (st.ok()) ++usage_.upserts;
+  std::shared_ptr<Db> db;
+  {
+    std::lock_guard lock(mu_);
+    auto got = LookupDb(collection);
+    if (!got.ok()) return got.status();
+    db = got.value();
+  }
+  auto st = db->Upsert(std::move(row));
+  if (st.ok()) {
+    std::lock_guard lock(mu_);
+    ++usage_.upserts;
+  }
   return st;
 }
 
 Status Catalog::Delete(const std::string& collection, const RowId& id,
                        Timestamp timestamp) {
-  std::lock_guard lock(mu_);
-  auto db = MutableDb(collection);
-  if (!db.ok()) return db.status();
-  auto st = db.value()->Delete(id, timestamp);
-  if (st.ok()) ++usage_.deletes;
+  std::shared_ptr<Db> db;
+  {
+    std::lock_guard lock(mu_);
+    auto got = LookupDb(collection);
+    if (!got.ok()) return got.status();
+    db = got.value();
+  }
+  auto st = db->Delete(id, timestamp);
+  if (st.ok()) {
+    std::lock_guard lock(mu_);
+    ++usage_.deletes;
+  }
   return st;
 }
 
 Result<std::optional<Row>> Catalog::Get(const std::string& collection,
                                         const RowId& id) const {
-  std::lock_guard lock(mu_);
-  auto db = ConstDb(collection);
-  if (!db.ok()) return db.status();
-  ++usage_.gets;
-  return db.value()->Get(id);
+  std::shared_ptr<Db> db;
+  {
+    std::lock_guard lock(mu_);
+    auto got = LookupDb(collection);
+    if (!got.ok()) return got.status();
+    db = got.value();
+    ++usage_.gets;
+  }
+  return db->Get(id);
 }
 
 Result<std::vector<SearchHit>> Catalog::Search(
     const std::string& collection, const SearchRequest& request) const {
-  std::lock_guard lock(mu_);
-  auto db = ConstDb(collection);
-  if (!db.ok()) return db.status();
-  ++usage_.searches;
-  return db.value()->Search(request);
+  std::shared_ptr<Db> db;
+  {
+    std::lock_guard lock(mu_);
+    auto got = LookupDb(collection);
+    if (!got.ok()) return got.status();
+    db = got.value();
+    ++usage_.searches;
+  }
+  return db->Search(request);
 }
 
 Status Catalog::Flush(const std::string& collection) {
-  std::lock_guard lock(mu_);
-  auto db = MutableDb(collection);
-  if (!db.ok()) return db.status();
-  return db.value()->Flush();
+  std::shared_ptr<Db> db;
+  {
+    std::lock_guard lock(mu_);
+    auto got = LookupDb(collection);
+    if (!got.ok()) return got.status();
+    db = got.value();
+  }
+  return db->Flush();
 }
 
 Status Catalog::Compact(const std::string& collection) {
-  std::lock_guard lock(mu_);
-  auto db = MutableDb(collection);
-  if (!db.ok()) return db.status();
-  return db.value()->Compact();
+  std::shared_ptr<Db> db;
+  {
+    std::lock_guard lock(mu_);
+    auto got = LookupDb(collection);
+    if (!got.ok()) return got.status();
+    db = got.value();
+  }
+  return db->Compact();
 }
 
 UsageStats Catalog::Usage() const {
