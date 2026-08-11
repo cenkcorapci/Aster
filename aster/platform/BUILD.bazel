@@ -29,8 +29,8 @@ cc_library(
     ],
 )
 
-# S3-compatible object storage skeleton — HTTP Put/Get/List/Remove.
-# Excluded for baremetal; multipart / Range GET / SigV4 deferred to M8-T01.
+# S3-compatible object storage — Put (multipart), Range GET, block cache.
+# Excluded for baremetal; SigV4 signing still deferred.
 cc_library(
     name = "s3",
     srcs = ["s3_storage.cc"],

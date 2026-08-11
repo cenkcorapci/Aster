@@ -5,6 +5,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cctype>
 #include <cstring>
 #include <sstream>
@@ -20,7 +21,7 @@ Status ParseEndpoint(const std::string& endpoint, std::string* host,
     rest = rest.substr(7);
     *port = 80;
   } else if (rest.rfind("https://", 0) == 0) {
-    // TLS not implemented in this skeleton; still parse for LocalStack HTTPS.
+    // TLS not implemented; still parse for LocalStack HTTPS.
     rest = rest.substr(8);
     *port = 443;
   } else {
@@ -85,9 +86,34 @@ std::vector<std::string> ParseListKeys(const std::string& xml) {
   return keys;
 }
 
+std::string XmlTagValue(const std::string& xml, const std::string& tag) {
+  const std::string open = "<" + tag + ">";
+  const std::string close = "</" + tag + ">";
+  const size_t a = xml.find(open);
+  if (a == std::string::npos) return {};
+  const size_t start = a + open.size();
+  const size_t b = xml.find(close, start);
+  if (b == std::string::npos) return {};
+  return xml.substr(start, b - start);
+}
+
+std::string HeaderValue(
+    const std::unordered_map<std::string, std::string>& headers,
+    const std::string& key) {
+  auto it = headers.find(key);
+  if (it == headers.end()) return {};
+  return it->second;
+}
+
 }  // namespace
 
 S3Storage::S3Storage(S3Config config) : config_(std::move(config)) {
+  if (config_.multipart_part_size == 0) {
+    config_.multipart_part_size = 5 * 1024 * 1024;
+  }
+  if (config_.block_cache_block_size == 0) {
+    config_.block_cache_block_size = 64 * 1024;
+  }
   auto st = ParseEndpoint(config_.endpoint, &host_, &port_);
   if (!st.ok()) {
     // Defer failure to the first Request; keep host empty as a sentinel.
@@ -103,10 +129,11 @@ std::string S3Storage::ObjectPath(const std::string& key) const {
   return "/" + UrlEncode(key, /*encode_slash=*/false);
 }
 
-Result<S3Storage::HttpResult> S3Storage::Request(const std::string& method,
-                                                 const std::string& url_path,
-                                                 const std::string& query,
-                                                 const std::string& body) const {
+Result<S3Storage::HttpResult> S3Storage::Request(
+    const std::string& method, const std::string& url_path,
+    const std::string& query, const std::string& body,
+    const std::vector<std::pair<std::string, std::string>>& extra_headers)
+    const {
   if (host_.empty() || config_.bucket.empty()) {
     return Status::InvalidArgument("S3 endpoint/bucket not configured");
   }
@@ -148,11 +175,16 @@ Result<S3Storage::HttpResult> S3Storage::Request(const std::string& method,
     req << "Authorization: AWS " << config_.access_key << ":skeleton\r\n"
         << "x-amz-content-sha256: UNSIGNED-PAYLOAD\r\n";
   }
+  for (const auto& h : extra_headers) {
+    req << h.first << ": " << h.second << "\r\n";
+  }
   if (!body.empty() || method == "PUT" || method == "POST") {
     req << "Content-Length: " << body.size() << "\r\n";
   }
   if (method == "PUT") {
     req << "Content-Type: application/octet-stream\r\n";
+  } else if (method == "POST" && !body.empty()) {
+    req << "Content-Type: application/xml\r\n";
   }
   req << "\r\n" << body;
   const std::string bytes = req.str();
@@ -215,6 +247,7 @@ Result<S3Storage::HttpResult> S3Storage::Request(const std::string& method,
       std::string val = line.substr(colon + 1);
       while (!val.empty() && val[0] == ' ') val.erase(val.begin());
       for (char& c : key) c = static_cast<char>(std::tolower(c));
+      out.headers[key] = val;
       if (key == "content-length") {
         want = static_cast<size_t>(std::stoul(val));
         saw_length = true;
@@ -225,9 +258,68 @@ Result<S3Storage::HttpResult> S3Storage::Request(const std::string& method,
   return out;
 }
 
-Status S3Storage::Put(const std::string& path, const std::string& data) {
-  if (path.empty()) return Status::InvalidArgument("empty object key");
-  // TODO(M8-T01): multipart upload when data exceeds a size threshold.
+uint64_t S3Storage::cache_hits() const {
+  std::lock_guard<std::mutex> lock(cache_mu_);
+  return cache_hits_;
+}
+
+uint64_t S3Storage::cache_misses() const {
+  std::lock_guard<std::mutex> lock(cache_mu_);
+  return cache_misses_;
+}
+
+void S3Storage::ClearCache() {
+  std::lock_guard<std::mutex> lock(cache_mu_);
+  cache_.clear();
+  lru_.clear();
+  cache_hits_ = 0;
+  cache_misses_ = 0;
+}
+
+void S3Storage::InvalidateCache(const std::string& path) {
+  std::lock_guard<std::mutex> lock(cache_mu_);
+  for (auto it = cache_.begin(); it != cache_.end();) {
+    if (it->first.object_key == path) {
+      lru_.erase(it->second.second);
+      it = cache_.erase(it);
+    } else {
+      ++it;
+    }
+  }
+}
+
+void S3Storage::CachePut(const CacheKey& key, std::string data) {
+  std::lock_guard<std::mutex> lock(cache_mu_);
+  auto it = cache_.find(key);
+  if (it != cache_.end()) {
+    lru_.erase(it->second.second);
+    cache_.erase(it);
+  }
+  lru_.push_front(key);
+  cache_.emplace(key, std::make_pair(std::move(data), lru_.begin()));
+  while (cache_.size() > config_.block_cache_max_blocks && !lru_.empty()) {
+    const CacheKey victim = lru_.back();
+    lru_.pop_back();
+    cache_.erase(victim);
+  }
+}
+
+bool S3Storage::CacheGet(const CacheKey& key, std::string* out) {
+  std::lock_guard<std::mutex> lock(cache_mu_);
+  auto it = cache_.find(key);
+  if (it == cache_.end()) {
+    ++cache_misses_;
+    return false;
+  }
+  ++cache_hits_;
+  lru_.erase(it->second.second);
+  lru_.push_front(key);
+  it->second.second = lru_.begin();
+  *out = it->second.first;
+  return true;
+}
+
+Status S3Storage::PutSingle(const std::string& path, const std::string& data) {
   auto resp = Request("PUT", ObjectPath(path), "", data);
   if (!resp.ok()) return resp.status();
   if (resp.value().status == 200 || resp.value().status == 201) {
@@ -237,17 +329,160 @@ Status S3Storage::Put(const std::string& path, const std::string& data) {
                          std::to_string(resp.value().status));
 }
 
-Result<std::string> S3Storage::Read(const std::string& path) {
+Status S3Storage::PutMultipart(const std::string& path,
+                               const std::string& data) {
+  // 1) Initiate
+  auto init = Request("POST", ObjectPath(path), "uploads", "");
+  if (!init.ok()) return init.status();
+  if (init.value().status != 200) {
+    return Status::IoError("s3 CreateMultipartUpload HTTP " +
+                           std::to_string(init.value().status));
+  }
+  const std::string upload_id = XmlTagValue(init.value().body, "UploadId");
+  if (upload_id.empty()) {
+    return Status::IoError("s3 CreateMultipartUpload missing UploadId");
+  }
+
+  const std::string encoded_id = UrlEncode(upload_id, /*encode_slash=*/true);
+  std::vector<std::pair<int, std::string>> etags;  // partNumber, ETag
+
+  auto abort = [&]() {
+    (void)Request("DELETE", ObjectPath(path), "uploadId=" + encoded_id, "");
+  };
+
+  // 2) Upload parts
+  const size_t part_size = config_.multipart_part_size;
+  int part_number = 1;
+  for (size_t offset = 0; offset < data.size(); offset += part_size) {
+    const size_t n = std::min(part_size, data.size() - offset);
+    const std::string part = data.substr(offset, n);
+    const std::string query = "partNumber=" + std::to_string(part_number) +
+                              "&uploadId=" + encoded_id;
+    auto part_resp = Request("PUT", ObjectPath(path), query, part);
+    if (!part_resp.ok()) {
+      abort();
+      return part_resp.status();
+    }
+    if (part_resp.value().status != 200) {
+      abort();
+      return Status::IoError("s3 UploadPart HTTP " +
+                             std::to_string(part_resp.value().status));
+    }
+    std::string etag = HeaderValue(part_resp.value().headers, "etag");
+    if (etag.empty()) etag = "\"part" + std::to_string(part_number) + "\"";
+    etags.emplace_back(part_number, etag);
+    ++part_number;
+  }
+
+  // 3) Complete
+  std::ostringstream xml;
+  xml << "<CompleteMultipartUpload>";
+  for (const auto& pe : etags) {
+    xml << "<Part><PartNumber>" << pe.first << "</PartNumber><ETag>"
+        << pe.second << "</ETag></Part>";
+  }
+  xml << "</CompleteMultipartUpload>";
+  auto complete =
+      Request("POST", ObjectPath(path), "uploadId=" + encoded_id, xml.str());
+  if (!complete.ok()) {
+    abort();
+    return complete.status();
+  }
+  if (complete.value().status != 200) {
+    abort();
+    return Status::IoError("s3 CompleteMultipartUpload HTTP " +
+                           std::to_string(complete.value().status));
+  }
+  return Status::Ok();
+}
+
+Status S3Storage::Put(const std::string& path, const std::string& data) {
   if (path.empty()) return Status::InvalidArgument("empty object key");
-  // TODO(M8-T01): Range GET for partial reads / block cache.
-  auto resp = Request("GET", ObjectPath(path), "", "");
+  Status st;
+  if (data.size() >= config_.multipart_threshold) {
+    st = PutMultipart(path, data);
+  } else {
+    st = PutSingle(path, data);
+  }
+  if (st.ok()) InvalidateCache(path);
+  return st;
+}
+
+Result<size_t> S3Storage::HeadSize(const std::string& path) {
+  auto resp = Request("HEAD", ObjectPath(path), "", "");
   if (!resp.ok()) return resp.status();
   if (resp.value().status == 404) return Status::NotFound(path);
   if (resp.value().status != 200) {
-    return Status::IoError("s3 GetObject HTTP " +
+    return Status::IoError("s3 HeadObject HTTP " +
+                           std::to_string(resp.value().status));
+  }
+  const std::string cl = HeaderValue(resp.value().headers, "content-length");
+  if (cl.empty()) return Status::IoError("s3 HeadObject missing Content-Length");
+  size_t n = 0;
+  for (char c : cl) {
+    if (c < '0' || c > '9') {
+      return Status::IoError("s3 HeadObject bad Content-Length");
+    }
+    n = n * 10 + static_cast<size_t>(c - '0');
+  }
+  return n;
+}
+
+Result<std::string> S3Storage::RangeGet(const std::string& path, size_t start,
+                                        size_t end_inclusive) {
+  std::ostringstream range;
+  range << "bytes=" << start << "-" << end_inclusive;
+  auto resp = Request("GET", ObjectPath(path), "", "",
+                      {{"Range", range.str()}});
+  if (!resp.ok()) return resp.status();
+  if (resp.value().status == 404) return Status::NotFound(path);
+  if (resp.value().status != 206 && resp.value().status != 200) {
+    return Status::IoError("s3 GetObject Range HTTP " +
                            std::to_string(resp.value().status));
   }
   return resp.value().body;
+}
+
+Result<std::string> S3Storage::ReadBlock(const std::string& path,
+                                         size_t block_index,
+                                         size_t object_size) {
+  CacheKey key{path, block_index};
+  std::string cached;
+  if (CacheGet(key, &cached)) return cached;
+
+  const size_t bs = config_.block_cache_block_size;
+  const size_t start = block_index * bs;
+  if (start >= object_size) {
+    return Status::InvalidArgument("block past end of object");
+  }
+  size_t end_inclusive = start + bs - 1;
+  if (end_inclusive >= object_size) end_inclusive = object_size - 1;
+  auto got = RangeGet(path, start, end_inclusive);
+  if (!got.ok()) return got.status();
+  CachePut(key, got.value());
+  return got.value();
+}
+
+Result<std::string> S3Storage::Read(const std::string& path) {
+  if (path.empty()) return Status::InvalidArgument("empty object key");
+  auto size_r = HeadSize(path);
+  if (!size_r.ok()) return size_r.status();
+  const size_t object_size = size_r.value();
+  if (object_size == 0) return std::string();
+
+  const size_t bs = config_.block_cache_block_size;
+  const size_t n_blocks = (object_size + bs - 1) / bs;
+  std::string out;
+  out.reserve(object_size);
+  for (size_t i = 0; i < n_blocks; ++i) {
+    auto block = ReadBlock(path, i, object_size);
+    if (!block.ok()) return block.status();
+    out += block.value();
+  }
+  if (out.size() != object_size) {
+    return Status::IoError("s3 Read assembled size mismatch");
+  }
+  return out;
 }
 
 Status S3Storage::Remove(const std::string& path) {
@@ -258,6 +493,7 @@ Status S3Storage::Remove(const std::string& path) {
   auto resp = Request("DELETE", ObjectPath(path), "", "");
   if (!resp.ok()) return resp.status();
   if (resp.value().status == 200 || resp.value().status == 204) {
+    InvalidateCache(path);
     return Status::Ok();
   }
   return Status::IoError("s3 DeleteObject HTTP " +

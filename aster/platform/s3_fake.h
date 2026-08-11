@@ -6,14 +6,15 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include "aster/core/status.h"
 
 namespace aster {
 
 // Minimal in-process S3-compatible HTTP server for unit/integration tests.
-// Supports path-style PutObject / GetObject / HeadObject / DeleteObject and
-// ListObjectsV2. No auth, no multipart, no range GET.
+// Supports path-style PutObject / GetObject (incl. Range) / HeadObject /
+// DeleteObject / ListObjectsV2 and a subset of multipart upload.
 class FakeS3Server {
  public:
   struct Options {
@@ -36,7 +37,16 @@ class FakeS3Server {
   const std::string& bucket() const { return options_.bucket; }
   std::string endpoint() const;
 
+  // Test helpers (thread-safe).
+  size_t ObjectCount() const;
+  bool HasObject(const std::string& key) const;
+
  private:
+  struct MultipartUpload {
+    std::string key;
+    std::map<int, std::string> parts;  // partNumber → body
+  };
+
   void ServeLoop();
   void HandleClient(int fd);
 
@@ -45,8 +55,10 @@ class FakeS3Server {
   uint16_t bound_port_ = 0;
   std::atomic<bool> stop_{false};
   std::thread thread_;
-  std::mutex mu_;
+  mutable std::mutex mu_;
   std::map<std::string, std::string> objects_;
+  std::map<std::string, MultipartUpload> uploads_;  // uploadId → state
+  uint64_t next_upload_id_ = 1;
 };
 
 }  // namespace aster

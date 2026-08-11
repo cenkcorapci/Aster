@@ -48,7 +48,8 @@ std::string QueryParam(const std::string& query, const char* key) {
     size_t amp = query.find('&', i);
     if (amp == std::string::npos) amp = query.size();
     const std::string part = query.substr(i, amp - i);
-    if (part.rfind(prefix, 0) == 0) {
+    if (part == key || part.rfind(prefix, 0) == 0) {
+      if (part == key) return "";
       std::string val = part.substr(prefix.size());
       // Minimal percent-decode for tests.
       std::string decoded;
@@ -81,21 +82,83 @@ std::string QueryParam(const std::string& query, const char* key) {
   return {};
 }
 
+bool QueryHasKey(const std::string& query, const char* key) {
+  size_t i = 0;
+  const std::string needle = key;
+  while (i < query.size()) {
+    size_t amp = query.find('&', i);
+    if (amp == std::string::npos) amp = query.size();
+    const std::string part = query.substr(i, amp - i);
+    if (part == needle || part.rfind(needle + "=", 0) == 0) return true;
+    i = amp + 1;
+  }
+  return false;
+}
+
 void SendResponse(int fd, int status, const std::string& content_type,
-                  const std::string& body) {
+                  const std::string& body,
+                  const std::vector<std::pair<std::string, std::string>>&
+                      extra_headers = {}) {
   std::ostringstream out;
   out << "HTTP/1.1 " << status;
   if (status == 200) out << " OK";
   else if (status == 204) out << " No Content";
+  else if (status == 206) out << " Partial Content";
   else if (status == 404) out << " Not Found";
   else out << " Error";
   out << "\r\n"
       << "Content-Type: " << content_type << "\r\n"
-      << "Content-Length: " << body.size() << "\r\n"
-      << "Connection: close\r\n\r\n"
-      << body;
+      << "Content-Length: " << body.size() << "\r\n";
+  for (const auto& h : extra_headers) {
+    out << h.first << ": " << h.second << "\r\n";
+  }
+  out << "Connection: close\r\n\r\n" << body;
   const std::string bytes = out.str();
   ::send(fd, bytes.data(), bytes.size(), 0);
+}
+
+// Parse "bytes=start-end" (end optional). Returns false if absent/invalid.
+bool ParseByteRange(const std::string& range_hdr, size_t object_size,
+                    size_t* start, size_t* end_inclusive) {
+  const std::string prefix = "bytes=";
+  if (range_hdr.rfind(prefix, 0) != 0) return false;
+  const std::string spec = range_hdr.substr(prefix.size());
+  const auto dash = spec.find('-');
+  if (dash == std::string::npos) return false;
+  const std::string a = spec.substr(0, dash);
+  const std::string b = spec.substr(dash + 1);
+  if (a.empty()) return false;  // suffix ranges not needed for tests
+  size_t s = 0;
+  for (char c : a) {
+    if (c < '0' || c > '9') return false;
+    s = s * 10 + static_cast<size_t>(c - '0');
+  }
+  if (s >= object_size) return false;
+  size_t e = object_size - 1;
+  if (!b.empty()) {
+    e = 0;
+    for (char c : b) {
+      if (c < '0' || c > '9') return false;
+      e = e * 10 + static_cast<size_t>(c - '0');
+    }
+    if (e >= object_size) e = object_size - 1;
+    if (e < s) return false;
+  }
+  *start = s;
+  *end_inclusive = e;
+  return true;
+}
+
+std::string MakeEtag(const std::string& data) {
+  // Deterministic fake ETag (not MD5) — good enough for CompleteMultipart.
+  uint64_t h = 14695981039346656037ull;
+  for (unsigned char c : data) {
+    h ^= c;
+    h *= 1099511628211ull;
+  }
+  std::ostringstream os;
+  os << '"' << std::hex << h << '"';
+  return os.str();
 }
 
 }  // namespace
@@ -106,6 +169,16 @@ FakeS3Server::~FakeS3Server() { Stop(); }
 
 std::string FakeS3Server::endpoint() const {
   return "http://" + options_.host + ":" + std::to_string(bound_port_);
+}
+
+size_t FakeS3Server::ObjectCount() const {
+  std::lock_guard<std::mutex> lock(mu_);
+  return objects_.size();
+}
+
+bool FakeS3Server::HasObject(const std::string& key) const {
+  std::lock_guard<std::mutex> lock(mu_);
+  return objects_.count(key) > 0;
 }
 
 Status FakeS3Server::Start() {
@@ -190,6 +263,7 @@ void FakeS3Server::HandleClient(int fd) {
   std::string method;
   std::string path;
   std::string query;
+  std::string range_hdr;
   {
     std::istringstream hs(headers);
     std::string line;
@@ -226,6 +300,8 @@ void FakeS3Server::HandleClient(int fd) {
           return;
         }
         saw_length = true;
+      } else if (key == "range") {
+        range_hdr = val;
       }
     }
     if (saw_length) {
@@ -291,6 +367,111 @@ void FakeS3Server::HandleClient(int fd) {
     return;
   }
 
+  // InitiateMultipartUpload: POST /{bucket}/{key}?uploads
+  if (method == "POST" && QueryHasKey(query, "uploads")) {
+    std::string upload_id;
+    {
+      std::lock_guard<std::mutex> lock(mu_);
+      upload_id = "upload-" + std::to_string(next_upload_id_++);
+      MultipartUpload up;
+      up.key = key;
+      uploads_[upload_id] = std::move(up);
+    }
+    std::ostringstream xml;
+    xml << "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+        << "<InitiateMultipartUploadResult>"
+        << "<Bucket>" << XmlEscape(options_.bucket) << "</Bucket>"
+        << "<Key>" << XmlEscape(key) << "</Key>"
+        << "<UploadId>" << XmlEscape(upload_id) << "</UploadId>"
+        << "</InitiateMultipartUploadResult>";
+    SendResponse(fd, 200, "application/xml", xml.str());
+    ::close(fd);
+    return;
+  }
+
+  // UploadPart: PUT /{bucket}/{key}?partNumber=N&uploadId=ID
+  if (method == "PUT" && QueryHasKey(query, "uploadId") &&
+      QueryHasKey(query, "partNumber")) {
+    const std::string upload_id = QueryParam(query, "uploadId");
+    const std::string pn_s = QueryParam(query, "partNumber");
+    int part_number = 0;
+    for (char c : pn_s) {
+      if (c < '0' || c > '9') {
+        part_number = 0;
+        break;
+      }
+      part_number = part_number * 10 + (c - '0');
+    }
+    if (part_number < 1) {
+      SendResponse(fd, 400, "application/xml",
+                   "<Error><Code>InvalidPart</Code></Error>");
+      ::close(fd);
+      return;
+    }
+    std::string etag;
+    {
+      std::lock_guard<std::mutex> lock(mu_);
+      auto it = uploads_.find(upload_id);
+      if (it == uploads_.end() || it->second.key != key) {
+        SendResponse(fd, 404, "application/xml",
+                     "<Error><Code>NoSuchUpload</Code></Error>");
+        ::close(fd);
+        return;
+      }
+      etag = MakeEtag(body);
+      it->second.parts[part_number] = body;
+    }
+    SendResponse(fd, 200, "application/xml", "", {{"ETag", etag}});
+    ::close(fd);
+    return;
+  }
+
+  // CompleteMultipartUpload: POST /{bucket}/{key}?uploadId=ID
+  if (method == "POST" && QueryHasKey(query, "uploadId") &&
+      !QueryHasKey(query, "uploads")) {
+    const std::string upload_id = QueryParam(query, "uploadId");
+    {
+      std::lock_guard<std::mutex> lock(mu_);
+      auto it = uploads_.find(upload_id);
+      if (it == uploads_.end() || it->second.key != key) {
+        SendResponse(fd, 404, "application/xml",
+                     "<Error><Code>NoSuchUpload</Code></Error>");
+        ::close(fd);
+        return;
+      }
+      // Assemble parts in ascending partNumber order (ignore XML order for
+      // simplicity; client always sends contiguous 1..N).
+      std::string assembled;
+      for (const auto& part : it->second.parts) {
+        assembled += part.second;
+      }
+      objects_[key] = std::move(assembled);
+      uploads_.erase(it);
+    }
+    std::ostringstream xml;
+    xml << "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+        << "<CompleteMultipartUploadResult>"
+        << "<Bucket>" << XmlEscape(options_.bucket) << "</Bucket>"
+        << "<Key>" << XmlEscape(key) << "</Key>"
+        << "<ETag>\"multipart\"</ETag>"
+        << "</CompleteMultipartUploadResult>";
+    SendResponse(fd, 200, "application/xml", xml.str());
+    ::close(fd);
+    return;
+  }
+
+  // AbortMultipartUpload: DELETE /{bucket}/{key}?uploadId=ID
+  if (method == "DELETE" && QueryHasKey(query, "uploadId")) {
+    const std::string upload_id = QueryParam(query, "uploadId");
+    {
+      std::lock_guard<std::mutex> lock(mu_);
+      uploads_.erase(upload_id);
+    }
+    SendResponse(fd, 204, "application/xml", "");
+    ::close(fd);
+    return;
+  }
+
   if (method == "PUT") {
     {
       std::lock_guard<std::mutex> lock(mu_);
@@ -315,6 +496,25 @@ void FakeS3Server::HandleClient(int fd) {
     if (!found) {
       SendResponse(fd, 404, "application/xml",
                    "<Error><Code>NoSuchKey</Code></Error>");
+      ::close(fd);
+      return;
+    }
+    if (!range_hdr.empty()) {
+      size_t start = 0;
+      size_t end_inclusive = 0;
+      if (!ParseByteRange(range_hdr, data.size(), &start, &end_inclusive)) {
+        SendResponse(fd, 416, "application/xml",
+                     "<Error><Code>InvalidRange</Code></Error>");
+        ::close(fd);
+        return;
+      }
+      const std::string slice =
+          data.substr(start, end_inclusive - start + 1);
+      std::ostringstream cr;
+      cr << "bytes " << start << "-" << end_inclusive << "/" << data.size();
+      SendResponse(fd, 206, "application/octet-stream", slice,
+                   {{"Content-Range", cr.str()},
+                    {"Accept-Ranges", "bytes"}});
     } else {
       SendResponse(fd, 200, "application/octet-stream", data);
     }
@@ -340,6 +540,7 @@ void FakeS3Server::HandleClient(int fd) {
       out << "HTTP/1.1 200 OK\r\n"
           << "Content-Type: application/octet-stream\r\n"
           << "Content-Length: " << size << "\r\n"
+          << "Accept-Ranges: bytes\r\n"
           << "Connection: close\r\n\r\n";
       const std::string bytes = out.str();
       ::send(fd, bytes.data(), bytes.size(), 0);

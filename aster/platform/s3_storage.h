@@ -1,7 +1,11 @@
 #pragma once
 
 #include <cstdint>
+#include <list>
+#include <mutex>
 #include <string>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "aster/platform/storage_backend.h"
@@ -15,22 +19,27 @@ struct S3Config {
   std::string endpoint;
   std::string bucket;
   std::string region = "us-east-1";
-  // Optional credentials (skeleton sends them as dummy headers; SigV4 is
-  // deferred to M8-T01).
+  // Optional credentials (skeleton Authorization header; not SigV4).
   std::string access_key = "test";
   std::string secret_key = "test";
   // Path-style addressing: PUT {endpoint}/{bucket}/{key}. LocalStack and
   // FakeS3Server expect this; real AWS often prefers virtual-hosted.
   bool path_style = true;
+
+  // Objects at or above this size use multipart upload (tests may lower it).
+  size_t multipart_threshold = 8 * 1024 * 1024;
+  // Part size for multipart Put (except possibly the last part).
+  size_t multipart_part_size = 5 * 1024 * 1024;
+
+  // Range-GET block cache: each miss fetches [block_size] bytes via HTTP Range.
+  size_t block_cache_block_size = 64 * 1024;
+  // Maximum number of cached blocks (LRU eviction).
+  size_t block_cache_max_blocks = 64;
 };
 
-// S3-compatible StorageBackend skeleton (Put / Read / List / Remove / Exists).
-//
-// Speaks the subset of the S3 REST API needed for single-object CRUD and
-// ListObjectsV2. Not production-complete:
-//   TODO(M8-T01): multipart upload for large objects
-//   TODO(M8-T01): HTTP Range GET / block cache
-//   TODO(M8-T01): AWS SigV4 signing
+// S3-compatible StorageBackend with multipart Put, Range GET, and a simple
+// LRU block cache. Speaks the S3 REST subset needed for CRUD, ListObjectsV2,
+// and multipart upload. SigV4 signing remains deferred.
 class S3Storage final : public StorageBackend {
  public:
   explicit S3Storage(S3Config config);
@@ -41,21 +50,64 @@ class S3Storage final : public StorageBackend {
   Result<std::vector<std::string>> List(const std::string& prefix) override;
   bool Exists(const std::string& path) override;
 
+  // Test / observability hooks for the block cache.
+  uint64_t cache_hits() const;
+  uint64_t cache_misses() const;
+  void ClearCache();
+
  private:
   struct HttpResult {
     int status = 0;
     std::string body;
+    std::unordered_map<std::string, std::string> headers;  // lower-case keys
   };
 
-  Result<HttpResult> Request(const std::string& method,
-                             const std::string& url_path,
-                             const std::string& query,
-                             const std::string& body) const;
+  struct CacheKey {
+    std::string object_key;
+    size_t block_index = 0;
+
+    bool operator==(const CacheKey& o) const {
+      return block_index == o.block_index && object_key == o.object_key;
+    }
+  };
+
+  struct CacheKeyHash {
+    size_t operator()(const CacheKey& k) const {
+      return std::hash<std::string>{}(k.object_key) ^
+             (std::hash<size_t>{}(k.block_index) << 1);
+    }
+  };
+
+  Result<HttpResult> Request(
+      const std::string& method, const std::string& url_path,
+      const std::string& query, const std::string& body,
+      const std::vector<std::pair<std::string, std::string>>& extra_headers =
+          {}) const;
   std::string ObjectPath(const std::string& key) const;
+
+  Status PutSingle(const std::string& path, const std::string& data);
+  Status PutMultipart(const std::string& path, const std::string& data);
+  Result<size_t> HeadSize(const std::string& path);
+  Result<std::string> RangeGet(const std::string& path, size_t start,
+                               size_t end_inclusive);
+  Result<std::string> ReadBlock(const std::string& path, size_t block_index,
+                                size_t object_size);
+  void InvalidateCache(const std::string& path);
+  void CachePut(const CacheKey& key, std::string data);
+  bool CacheGet(const CacheKey& key, std::string* out);
 
   S3Config config_;
   std::string host_;
   uint16_t port_ = 80;
+
+  mutable std::mutex cache_mu_;
+  using LruList = std::list<CacheKey>;
+  LruList lru_;
+  std::unordered_map<CacheKey,
+                     std::pair<std::string, LruList::iterator>, CacheKeyHash>
+      cache_;
+  uint64_t cache_hits_ = 0;
+  uint64_t cache_misses_ = 0;
 };
 
 }  // namespace aster

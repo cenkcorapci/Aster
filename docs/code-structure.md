@@ -16,7 +16,7 @@ aster/
 ├── server/         multi-collection catalog + HTTP JSON API
 ├── embedded/       Tiny in-memory Db (Arduino / bare metal)
 ├── rpc/            aster.thrift (server = M4)
-├── platform/       IStorageBackend: memory + POSIX + S3 skeleton
+├── platform/       IStorageBackend: memory + POSIX + S3 (multipart / Range GET)
 ├── metrics/        counters / histograms (Prometheus = M4)
 ├── cli/            local demo binary
 ├── bench/          soak / load binary
@@ -64,7 +64,7 @@ other hosts use `--config=raspberry_pi_cross` or `./scripts/build-matrix.sh --fu
 | --- | --- |
 | `MemoryStorage` | Done |
 | `PosixStorage` | Done (path traversal hardened) |
-| S3 | Skeleton (M3-T04); multipart / Range GET / SigV4 in M8-T01 |
+| S3 | Done (M8-T01): multipart Put, Range GET, LRU block cache; SigV4 deferred |
 
 ## Depending on the embedded library
 
