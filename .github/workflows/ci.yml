@@ -34,19 +34,23 @@ jobs:
           cache-save: ${{ github.event_name != 'pull_request' }}
 
       - name: Run unit and integration tests
-        run: |
-          bazel test //aster/... \
-            --test_output=errors \
-            --test_summary=detailed \
-            --build_tests_only
+        run: bazel test //aster/... --test_output=errors
 
       - name: Collect test results
         if: always()
         run: |
           mkdir -p /tmp/test-results
-          find bazel-testlogs -name "test.xml" -exec sh -c \
-            'target=$(dirname "$1" | sed "s|bazel-testlogs/||;s|/|__|g"); \
-             cp "$1" "/tmp/test-results/${target}.xml"' _ {} \;
+          find "$(bazel info output_path)/k8-fastbuild/testlogs" \
+               bazel-testlogs \
+               -name "test.xml" 2>/dev/null | while IFS= read -r f; do
+            target=$(dirname "$f" | sed 's|.*/testlogs/||;s|/|__|g')
+            cp "$f" "/tmp/test-results/${target}.xml"
+          done || true
+          # Emit a placeholder when Bazel produced no XML so the reporter
+          # step can still run without failing the pipeline.
+          if [ -z "$(ls /tmp/test-results/*.xml 2>/dev/null)" ]; then
+            echo '<testsuites/>' > /tmp/test-results/empty.xml
+          fi
 
       - name: Upload test results
         if: always()
@@ -64,3 +68,4 @@ jobs:
           path: /tmp/test-results/*.xml
           reporter: java-junit
           fail-on-error: false
+          fail-on-empty: false
