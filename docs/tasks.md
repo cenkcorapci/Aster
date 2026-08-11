@@ -186,7 +186,7 @@ Status updates happen in this file (see start-the-tasks.md § Claiming).
 
 | ID | Status | Lane | Depends | Title | Touch | Done when |
 | --- | --- | --- | --- | --- | --- | --- |
-| M7-T00 | open | spec | M2-T04 | Extend/confirm TLA+ before coding new protocol bits | `tla/` | Spec still TLC-green; new actions documented if needed |
+| M7-T00 | done | spec | M2-T04 | Extend/confirm TLA+ before coding new protocol bits | `tla/` | Spec still TLC-green; new actions documented if needed |
 | M7-T01 | open | dist | M7-T00, M0-T04 | Gossip membership + phi-accrual failure detector | `aster/distributed/gossip*` | Nodes join/leave; dead marked within detector window |
 | M7-T02 | open | dist | M7-T01 | Publish vnode ownership via gossip | `aster/distributed/` | Ring view converges; RingCoverage tests |
 | M7-T03 | open | dist | M7-T02, M4-T02 | Coordinator write path (ONE/QUORUM/ALL) | `aster/distributed/`, `aster/db/` | Matches AsterReplication Write semantics |

@@ -10,6 +10,18 @@ still pass TLC.
 The prose companion is [`docs/indexing.md`](../docs/indexing.md); its
 section 9 maps properties P1–P6 to the definitions here.
 
+## Status (M7-T00)
+
+**Done.** After M2-T04 wired `PENDING → BUILDING → READY` (plus
+`AbortIndexBuild`), both specs still cover those semantics; TLC is green
+with the bundled bounds. No new *replication* actions were required —
+SegState stays inside `AsterLsmIndex`. The only model extension was
+`AbortBuild` (bounded by `MaxAborts`) so mid-build abandon is an explicit
+action, not only implied by crash recovery.
+
+M7 protocol work (gossip, coordinator CL paths, repair) must extend
+`AsterReplication` (and re-run TLC) *before* coding those bits.
+
 ## The two specs and how they compose
 
 ```mermaid
@@ -43,10 +55,25 @@ end-to-end claims about distributed search in `docs/indexing.md` §8.4.
 | Real system | Model | Why sound |
 | --- | --- | --- |
 | Vector payloads | Row version = unique write timestamp | Lifecycle correctness is independent of vector contents; recall is a statistical property checked by CI, not TLC (P7) |
-| HNSW graph per segment | Build state machine `PENDING → BUILDING → READY` | Rows are searchable by exact scan before `READY`; invariants quantify over *all* states, so "graph not built yet" can never hide a row |
+| HNSW graph per segment | Build state machine `PENDING → BUILDING → READY` (+ `AbortBuild`) | Rows are searchable by exact scan before `READY`; invariants quantify over *all* states, so "graph not built yet" can never hide a row |
 | Crash + WAL replay + restart | One atomic `CrashRecover` step | A recovering node serves no reads, so intermediate recovery states are externally unobservable |
 | Merkle-tree repair | Per-key `Repair` action adopting the LWW max | Any correct anti-entropy converges replica pairs to LWW max per key; the mechanism is irrelevant to the protocol guarantees |
 | Ring / vnodes | Single replica set (RF = N) | Placement and coverage are deterministic functions tested in `aster/distributed/ring_test.cc`; the replication protocol is identical inside every range |
+
+### M2-T04 ↔ AsterLsmIndex action map
+
+| Code (`SegState` / Db) | TLA+ action | Notes |
+| --- | --- | --- |
+| Flush / compaction result starts `PENDING` | `Flush`, `CompactPartial`, `CompactFull` | Exact search from birth |
+| `TryBeginIndexBuild` | `StartBuild` | `PENDING → BUILDING` |
+| `CompleteIndexBuild` | `FinishBuild` | `BUILDING → READY` (graph optional on Tiny) |
+| `AbortIndexBuild` | `AbortBuild` | `BUILDING → PENDING`; bounded by `MaxAborts` |
+| Open: missing `.hnsw` / crash mid-build | `CrashRecover` | In-flight `BUILDING` resets to `PENDING` |
+| `Search` exact until READY, then HNSW | `CandidateRows` / `SearchCompleteness` | Observation ignores SegState |
+
+`AsterReplication` needs no SegState actions: graphs are not replicated;
+quorum search merges LWW row stores that AsterLsmIndex already equates to
+search under every SegState.
 
 ## Checked properties
 
@@ -91,18 +118,18 @@ java -XX:+UseParallelGC -jar tla2tools.jar -workers auto AsterReplication.tla
 
 Both models check safety **and** liveness and finish in well under a
 minute with the bundled `.cfg` bounds (2 keys / 4 writes / 3 segments /
-2 crashes, and 3 nodes / 3 writes respectively). The bounds are small but
-sufficient: every interesting interleaving class (write vs. flush vs.
-build vs. compaction vs. crash; stale delivery vs. loss vs. repair vs.
-quorum choice) occurs within them. Increase constants in the `.cfg` files
-for more confidence; state count grows roughly exponentially in
-`MaxWrites`.
+2 crashes / 2 aborts, and 3 nodes / 3 writes respectively). The bounds are
+small but sufficient: every interesting interleaving class (write vs. flush
+vs. build vs. abort vs. compaction vs. crash; stale delivery vs. loss vs.
+repair vs. quorum choice) occurs within them. Increase constants in the
+`.cfg` files for more confidence; state count grows roughly exponentially
+in `MaxWrites`.
 
 ## Keeping specs and code in sync
 
 - `aster/storage/storage_test.cc` and `aster/db/db_test.cc` pin the same
   scenarios the specs check (LWW merge, tombstone purge rules, delete
-  visibility through segment indexes).
+  visibility through segment indexes, SegState PENDING→READY).
 - Milestone M7 adds a Jepsen-style fault-injection suite; any anomaly it
   finds must be reproduced (or refuted) in these models before the fix
   ships (see `docs/development-plan.md`).

@@ -13,6 +13,16 @@
 (*     state (rows are searchable by exact scan until the graph is READY), *)
 (*     so the invariants quantify over all segment states.                 *)
 (*                                                                         *)
+(* M2-T04 wiring (aster/storage/segment.{h,cc}, aster/db/db.cc) maps 1:1:  *)
+(*   Flush / Compact*     -> segment born PENDING (exact index only)       *)
+(*   StartBuild           -> TryBeginIndexBuild  (PENDING -> BUILDING)     *)
+(*   FinishBuild          -> CompleteIndexBuild  (BUILDING -> READY)       *)
+(*   AbortBuild           -> AbortIndexBuild     (BUILDING -> PENDING)     *)
+(*   CrashRecover         -> open: missing/partial .hnsw stays PENDING;    *)
+(*                           in-flight BUILDING restarts as PENDING        *)
+(* SearchCompleteness already covers exact-until-READY: CandidateRows      *)
+(* ignores SegState, matching Search() falling back to exact until READY.  *)
+(*                                                                         *)
 (* Checked properties (see AsterLsmIndex.cfg):                             *)
 (*   SearchCompleteness : what search observes == exactly the acked state, *)
 (*                        at all times: through flush, build, partial and  *)
@@ -33,7 +43,8 @@ CONSTANTS
   Keys,         \* e.g. {"k1", "k2"}
   MaxWrites,    \* bound on the number of client writes (state space bound)
   MaxSegments,  \* bound on live segments (backpressure on Flush)
-  MaxCrashes    \* bound on crashes (liveness assumes finitely many faults)
+  MaxCrashes,   \* bound on crashes (liveness assumes finitely many faults)
+  MaxAborts     \* bound on BUILDING->PENDING aborts (same liveness reason)
 
 NoRow == [ts |-> 0, tomb |-> FALSE]
 
@@ -43,9 +54,10 @@ VARIABLES
   mem,     \* memtable: [Keys -> row], row = [ts, tomb]
   segs,    \* sequence of [rows: [Keys -> row], state: PENDING|BUILDING|READY]
   acked,   \* per key, the newest acknowledged write: [Keys -> row]
-  crashes  \* number of crashes so far
+  crashes, \* number of crashes so far
+  aborts   \* number of index-build aborts so far
 
-vars == <<clock, wal, mem, segs, acked, crashes>>
+vars == <<clock, wal, mem, segs, acked, crashes, aborts>>
 
 SegStates == {"PENDING", "BUILDING", "READY"}
 
@@ -58,6 +70,7 @@ TypeOK ==
   /\ segs \in Seq([rows : [Keys -> Rows], state : SegStates])
   /\ acked \in [Keys -> Rows]
   /\ crashes \in 0..MaxCrashes
+  /\ aborts \in 0..MaxAborts
 
 EmptyMem == [k \in Keys |-> NoRow]
 
@@ -88,7 +101,7 @@ WriteOp(k, tomb) ==
        /\ wal' = Append(wal, [key |-> k, ts |-> r.ts, tomb |-> tomb])
        /\ mem' = [mem EXCEPT ![k] = r]        \* fresh ts is always newest
        /\ acked' = [acked EXCEPT ![k] = r]
-  /\ UNCHANGED <<segs, crashes>>
+  /\ UNCHANGED <<segs, crashes, aborts>>
 
 Upsert(k) == WriteOp(k, FALSE)
 Delete(k) == WriteOp(k, TRUE)
@@ -101,20 +114,31 @@ Flush ==
   /\ segs' = Append(segs, [rows |-> mem, state |-> "PENDING"])
   /\ mem' = EmptyMem
   /\ wal' = <<>>
-  /\ UNCHANGED <<clock, acked, crashes>>
+  /\ UNCHANGED <<clock, acked, crashes, aborts>>
 
 \* Asynchronous HNSW build (the index-build thread pool).
 StartBuild ==
   \E i \in DOMAIN segs :
     /\ segs[i].state = "PENDING"
     /\ segs' = [segs EXCEPT ![i].state = "BUILDING"]
-    /\ UNCHANGED <<clock, wal, mem, acked, crashes>>
+    /\ UNCHANGED <<clock, wal, mem, acked, crashes, aborts>>
 
 FinishBuild ==
   \E i \in DOMAIN segs :
     /\ segs[i].state = "BUILDING"
     /\ segs' = [segs EXCEPT ![i].state = "READY"]
-    /\ UNCHANGED <<clock, wal, mem, acked, crashes>>
+    /\ UNCHANGED <<clock, wal, mem, acked, crashes, aborts>>
+
+\* M2-T04 AbortIndexBuild: persist failure / abandon mid-build returns the
+\* segment to PENDING (exact search uninterrupted). Bounded like crashes so
+\* EventuallyAllIndexed remains checkable.
+AbortBuild ==
+  /\ aborts < MaxAborts
+  /\ \E i \in DOMAIN segs :
+       /\ segs[i].state = "BUILDING"
+       /\ segs' = [segs EXCEPT ![i].state = "PENDING"]
+       /\ aborts' = aborts + 1
+       /\ UNCHANGED <<clock, wal, mem, acked, crashes>>
 
 \* LWW merge of two segments' rows.
 MergeRows(r1, r2) ==
@@ -129,7 +153,7 @@ CompactPartial ==
                  \o << [rows |-> MergeRows(segs[i].rows, segs[i + 1].rows),
                         state |-> "PENDING"] >>
                  \o SubSeq(segs, i + 2, Len(segs))
-    /\ UNCHANGED <<clock, wal, mem, acked, crashes>>
+    /\ UNCHANGED <<clock, wal, mem, acked, crashes, aborts>>
 
 \* Full compaction: every segment participates, so tombstones can be
 \* purged safely (memtable rows are strictly newer than segment rows,
@@ -145,7 +169,7 @@ FullMerge ==
 CompactFull ==
   /\ Len(segs) >= 2
   /\ segs' = << [rows |-> FullMerge, state |-> "PENDING"] >>
-  /\ UNCHANGED <<clock, wal, mem, acked, crashes>>
+  /\ UNCHANGED <<clock, wal, mem, acked, crashes, aborts>>
 
 \* BUGGY VARIANT (not in Next): partial compaction that also purges
 \* tombstones. Add it to Next and TLC violates NoResurrection: a tombstone
@@ -158,7 +182,7 @@ CompactPartialDropTombstones ==
        IN segs' = SubSeq(segs, 1, i - 1)
                     \o << [rows |-> purged, state |-> "PENDING"] >>
                     \o SubSeq(segs, i + 2, Len(segs))
-    /\ UNCHANGED <<clock, wal, mem, acked, crashes>>
+    /\ UNCHANGED <<clock, wal, mem, acked, crashes, aborts>>
 
 \* Crash + recovery in one atomic step: the memtable is lost and rebuilt
 \* by WAL replay; segments are durable; in-flight graph builds restart.
@@ -179,7 +203,7 @@ CrashRecover ==
                 IF segs[i].state = "BUILDING"
                 THEN [segs[i] EXCEPT !.state = "PENDING"]
                 ELSE segs[i]]
-  /\ UNCHANGED <<clock, wal, acked>>
+  /\ UNCHANGED <<clock, wal, acked, aborts>>
 
 Init ==
   /\ clock = 0
@@ -188,6 +212,7 @@ Init ==
   /\ segs = <<>>
   /\ acked = EmptyMem
   /\ crashes = 0
+  /\ aborts = 0
 
 Next ==
   \/ \E k \in Keys : Upsert(k)
@@ -195,12 +220,13 @@ Next ==
   \/ Flush
   \/ StartBuild
   \/ FinishBuild
+  \/ AbortBuild
   \/ CompactPartial
   \/ CompactFull
   \/ CrashRecover
 
-\* Fairness: flushes and builds eventually happen; writes, compactions and
-\* crashes are never forced.
+\* Fairness: flushes and builds eventually happen; writes, compactions,
+\* crashes, and aborts are never forced.
 Fairness ==
   /\ WF_vars(Flush)
   /\ WF_vars(StartBuild)
@@ -234,7 +260,7 @@ WalTruncationSafe ==
 
 (***************************************************************************)
 (* Liveness: every segment eventually gets its graph built (assuming       *)
-(* finitely many crashes, bounded by MaxCrashes).                          *)
+(* finitely many crashes and aborts: MaxCrashes / MaxAborts).              *)
 (***************************************************************************)
 EventuallyAllIndexed ==
   <>[](\A i \in DOMAIN segs : segs[i].state = "READY")
