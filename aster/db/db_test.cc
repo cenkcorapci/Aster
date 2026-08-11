@@ -279,7 +279,16 @@ TEST(Db, CorruptWalRowIsBoundsChecked) {
   // dropped, matching the same behaviour as ReplayWal's CRC stop).
   auto reopened = Db::Open(options);
   EXPECT_TRUE(reopened.ok());
-}
+
+  // Also verify a checksum-valid but malformed payload is rejected by DecodeRow.
+  ::remove(wal_path.c_str());
+  auto wal = WalWriter::Open(wal_path, SyncPolicy::kNever);
+  ASSERT_TRUE(wal.ok());
+  std::string corrupt(4, static_cast<char>(0xff));  // id_len=0xffffffff
+  ASSERT_TRUE(wal.value().Append(corrupt).ok());
+  auto bad = Db::Open(options);
+  EXPECT_FALSE(bad.ok());
+  EXPECT_EQ(bad.status().code(), StatusCode::kCorruption);
 
 TEST(Db, CompactRemovesOrphanedSSTables) {
   const std::string dir = ::testing::TempDir() + "/aster_db_compact_cleanup";
