@@ -5,8 +5,12 @@ package(default_visibility = ["//visibility:public"])
 
 cc_library(
     name = "core",
-    srcs = ["hash.cc"],
+    srcs = [
+        "cbor.cc",
+        "hash.cc",
+    ],
     hdrs = [
+        "cbor.h",
         "features.h",
         "hash.h",
         "status.h",
@@ -18,6 +22,16 @@ cc_test(
     name = "core_test",
     size = "small",
     srcs = ["core_test.cc"],
+    deps = [
+        ":core",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cc_test(
+    name = "cbor_test",
+    size = "small",
+    srcs = ["cbor_test.cc"],
     deps = [
         ":core",
         "@googletest//:gtest_main",

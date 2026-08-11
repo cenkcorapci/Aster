@@ -324,8 +324,10 @@ When `compression == None`, writers MUST also choose directory `offset` so
 If `live_row_count == 0`, the vector block MUST be empty (`on_disk_len = 0`).
 ### 7.5 Metadata block (CBOR)
 
-Opaque per-row blobs. Logical encoding is **CBOR** (M1-T12); until then
-writers MAY store the same opaque bytes held in `Row.metadata`.
+Opaque per-row blobs. `Row.metadata` remains an opaque byte string at the
+storage layer; **CBOR** is the recommended logical encoding
+(`aster/core/cbor.h`: JSON fixture ↔ CBOR helpers). Writers MAY store any
+bytes; readers that expect structured metadata SHOULD decode CBOR.
 
 Uncompressed payload:
 

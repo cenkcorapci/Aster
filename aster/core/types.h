@@ -32,7 +32,9 @@ enum class Metric {
 struct Row {
   RowId id;
   std::vector<float> vector;
-  std::string metadata;         // CBOR+zstd planned; opaque bytes for now.
+  // Opaque per-row blob. Storage does not interpret contents; CBOR is the
+  // recommended encoding (see aster/core/cbor.h and docs/sstable-format.md).
+  std::string metadata;
   std::set<std::string> tags;
   Timestamp timestamp = 0;      // write time, LWW tiebreaker
   Version version = 0;
