@@ -120,3 +120,68 @@ cc_test(
         "@googletest//:gtest_main",
     ],
 )
+
+# ---------------------------------------------------------------------------
+# M2-T11: Latency bench gate (1M×384d search p50 < 5ms).
+# Local smoke: bazel test //aster/qa:latency_bench_smoke_test
+# Manual gate:
+#   bazel test //aster/qa:latency_bench_gate_test --test_output=all
+# Optional threshold override:
+#   ASTER_LATENCY_P50_THRESHOLD_MS=6.0 bazel test //aster/qa:latency_bench_gate_test
+# ---------------------------------------------------------------------------
+
+cc_library(
+    name = "latency_bench_lib",
+    srcs = ["latency_bench_lib.cc"],
+    hdrs = ["latency_bench_lib.h"],
+    target_compatible_with = select({
+        "//platforms:is_baremetal": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    }),
+    deps = [
+        "//aster/db",
+    ],
+)
+
+cc_binary(
+    name = "latency_bench",
+    srcs = ["latency_bench.cc"],
+    target_compatible_with = select({
+        "//platforms:is_baremetal": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    }),
+    deps = [
+        ":latency_bench_lib",
+    ],
+)
+
+cc_test(
+    name = "latency_bench_smoke_test",
+    size = "small",
+    srcs = ["latency_bench_smoke_test.cc"],
+    target_compatible_with = select({
+        "//platforms:is_baremetal": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    }),
+    deps = [
+        ":latency_bench_lib",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cc_test(
+    name = "latency_bench_gate_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["latency_bench_gate_test.cc"],
+    env = {},
+    tags = ["manual"],
+    target_compatible_with = select({
+        "//platforms:is_baremetal": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    }),
+    deps = [
+        ":latency_bench_lib",
+        "@googletest//:gtest_main",
+    ],
+)

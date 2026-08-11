@@ -1,0 +1,42 @@
+name: Latency gate (M2-T11): 1M×384d p50 < 5ms
+
+on:
+  schedule:
+    # Weekly to reduce shared-runner load.
+    - cron: "0 5 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: latency-gate-${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  latency-gate-ci:
+    name: Search p50 < 5ms (ef_search=128)
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Bazel
+        uses: bazel-contrib/setup-bazel@0.19.0
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}
+          repository-cache: true
+
+      - name: Run latency bench (1M×384d)
+        run: bazel run -c opt //aster/qa:latency_bench -- --scale=ci --out-json /tmp/aster-latency-ci.json
+
+      - name: Upload latency artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: latency-bench-1m-384d
+          path: /tmp/aster-latency-ci.json
+          if-no-files-found: ignore
+
