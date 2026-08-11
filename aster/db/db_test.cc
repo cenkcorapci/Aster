@@ -202,6 +202,30 @@ TEST(Db, AutoFlushOnMemtableAge) {
   EXPECT_TRUE(db.Get("aged").has_value());
 }
 
+TEST(Db, DurableAutoFlushUnderWriteLoad) {
+  const std::string dir = ::testing::TempDir() + "/aster_db_autoflush";
+  Db::Options options = SmallDb();
+  options.data_dir = dir;
+  options.wal_sync = SyncPolicy::kNever;
+  options.memtable_flush_bytes = 64;
+  options.max_segments_before_compact = 0;  // keep segments visible
+  auto db = Db::Open(options);
+  ASSERT_TRUE(db.ok());
+  for (int i = 0; i < 8; ++i) {
+    ASSERT_TRUE(
+        db.value()
+            ->Upsert(MakeRow("r" + std::to_string(i), {1.0f, 0.0f}, i + 1))
+            .ok());
+  }
+  for (int i = 0; i < 200 && db.value()->memtable_rows() != 0; ++i) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  EXPECT_EQ(db.value()->memtable_rows(), 0u);
+  EXPECT_GE(db.value()->segment_count(), 1u);
+  EXPECT_TRUE(db.value()->Get("r0").has_value());
+  EXPECT_TRUE(db.value()->Get("r7").has_value());
+}
+
 TEST(Db, MissingGetAndEmptySearch) {
   Db db(SmallDb());
   EXPECT_FALSE(db.Get("missing").has_value());

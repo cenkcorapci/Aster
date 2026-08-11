@@ -357,6 +357,7 @@ Result<std::unique_ptr<Db>> Db::Open(Options options) {
   db->wal_ = std::move(wal.value());
 
   db->GarbageCollectOrphans();
+  if (db->ShouldFlushLocked()) db->flush_requested_ = true;
   db->StartFlushThread();
   return db;
 }
@@ -462,6 +463,7 @@ std::vector<SearchHit> Db::Search(const SearchRequest& request) const {
 
 Status Db::Flush() {
   std::lock_guard lock(mu_);
+  flush_requested_ = false;
   return FlushLocked();
 }
 
@@ -476,6 +478,7 @@ Status Db::FlushLocked() {
         !st.ok()) {
       for (Row& row : *rows) memtable_.Apply(std::move(row));
       --next_segment_id_;
+      memtable_live_since_ = std::chrono::steady_clock::now();
       return st;
     }
   }
