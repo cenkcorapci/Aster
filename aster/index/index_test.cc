@@ -1,12 +1,18 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "aster/index/bloom.h"
 #include "aster/index/distance.h"
 #include "aster/index/vector_index.h"
+
+#if ASTER_ENABLE_HNSW
+#include "aster/index/hnsw_build.h"
+#endif
 
 namespace aster {
 namespace {
@@ -213,6 +219,99 @@ TEST(HnswGraph, TruncatedRejected) {
   bytes.resize(bytes.size() / 2);
   auto loaded = HnswGraph::Load(bytes);
   EXPECT_FALSE(loaded.ok());
+}
+
+TEST(HnswBuild, BuildsFixtureWithinDegreeBounds) {
+  HnswParams params;
+  params.m = 4;
+  params.ef_construction = 16;
+  params.ef_search_default = 8;
+  params.max_layers = 6;
+
+  // Small 2-d grid; enough points that degrees can approach M / M0.
+  std::vector<std::vector<float>> vectors;
+  for (int y = 0; y < 4; ++y) {
+    for (int x = 0; x < 4; ++x) {
+      vectors.push_back({static_cast<float>(x), static_cast<float>(y)});
+    }
+  }
+
+  HnswBuilder builder(Metric::kL2, params, /*rng_seed=*/42);
+  auto built = builder.Build(vectors);
+  ASSERT_TRUE(built.ok()) << built.status().message();
+  const HnswGraph& g = built.value();
+
+  EXPECT_EQ(g.node_count(), 16u);
+  EXPECT_NE(g.entry_point(), HnswGraph::kNoEntry);
+  EXPECT_LT(g.max_level(), params.max_layers);
+
+  for (uint32_t n = 0; n < g.node_count(); ++n) {
+    EXPECT_EQ(g.RowOrdinal(n), n);
+    EXPECT_LT(g.NodeLevel(n), params.max_layers);
+    for (uint16_t layer = 0; layer <= g.NodeLevel(n); ++layer) {
+      const auto& nbrs = g.Neighbors(n, layer);
+      const uint32_t limit =
+          layer == 0 ? HnswLayer0MaxDegree(params) : params.m;
+      EXPECT_LE(nbrs.size(), limit) << "node=" << n << " layer=" << layer;
+      for (uint32_t nb : nbrs) {
+        EXPECT_NE(nb, n);
+        EXPECT_LE(layer, g.NodeLevel(nb));
+      }
+    }
+  }
+}
+
+TEST(HnswBuild, EmptyAndSingleNode) {
+  HnswParams params;
+  params.m = 8;
+  params.ef_construction = 16;
+  params.max_layers = 4;
+
+  HnswBuilder builder(Metric::kL2, params, /*rng_seed=*/1);
+  auto empty = builder.Build({});
+  ASSERT_TRUE(empty.ok());
+  EXPECT_EQ(empty.value().node_count(), 0u);
+
+  auto one = builder.Build({{1.0f, 0.0f}});
+  ASSERT_TRUE(one.ok()) << one.status().message();
+  EXPECT_EQ(one.value().node_count(), 1u);
+  EXPECT_EQ(one.value().entry_point(), 0u);
+  EXPECT_TRUE(one.value().Neighbors(0, 0).empty());
+}
+
+TEST(HnswBuild, SelectNeighborsHeuristicPrefersDiversity) {
+  // base (0,0); A and B clustered on +x; C on +y.
+  // Top-2 by distance alone would keep A,B; heuristic keeps A,C.
+  const std::vector<float> base = {0.0f, 0.0f};
+  const std::vector<float> a = {1.0f, 0.0f};
+  const std::vector<float> b = {1.1f, 0.0f};
+  const std::vector<float> c = {0.0f, 1.0f};
+
+  std::vector<std::pair<uint32_t, VectorView>> cands = {
+      {10, a}, {11, b}, {12, c}};
+
+  auto picked = HnswBuilder::SelectNeighborsHeuristic(Metric::kL2, base, cands,
+                                                      /*max_keep=*/2);
+  ASSERT_EQ(picked.size(), 2u);
+  EXPECT_EQ(picked[0], 10u);  // nearest overall
+  EXPECT_EQ(picked[1], 12u);  // diverse axis, not clustered B
+
+  // Plain closest-2 would be A then B — confirm B loses to the heuristic.
+  EXPECT_TRUE(std::find(picked.begin(), picked.end(), 11u) == picked.end());
+}
+
+TEST(HnswBuild, HeuristicRespectsMaxKeep) {
+  const std::vector<float> base = {0.0f, 0.0f};
+  std::vector<std::pair<uint32_t, VectorView>> cands;
+  const std::vector<std::vector<float>> pts = {
+      {1.0f, 0.0f}, {0.0f, 1.0f}, {-1.0f, 0.0f}, {0.0f, -1.0f}};
+  for (uint32_t i = 0; i < pts.size(); ++i) {
+    cands.emplace_back(i, VectorView{pts[i]});
+  }
+  auto picked =
+      HnswBuilder::SelectNeighborsHeuristic(Metric::kDot, base, cands, 3);
+  EXPECT_LE(picked.size(), 3u);
+  EXPECT_FALSE(picked.empty());
 }
 #else
 TEST(HnswParams, TypeOmittedUnderTiny) {
