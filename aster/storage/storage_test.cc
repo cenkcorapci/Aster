@@ -239,16 +239,49 @@ TEST(Compaction, LwwMergeAndTombstonePurge) {
       2, Metric::kL2,
       {MakeRow("a", {9.0f}, 20), MakeRow("b", {}, 20, /*tombstone=*/true)});
 
+  // Full-overlap Compact (tla CompactFull): safe to drop tombstones.
   auto full = CompactSegments(3, Metric::kL2, {old_seg, new_seg},
                               /*drop_tombstones=*/true);
   EXPECT_EQ(full->row_count(), 1u);
   ASSERT_TRUE(full->Get("a").has_value());
   EXPECT_FLOAT_EQ(full->Get("a")->vector[0], 9.0f);
 
+  // Partial Compact (tla CompactPartial): must keep tombstones.
   auto partial = CompactSegments(4, Metric::kL2, {old_seg, new_seg},
                                  /*drop_tombstones=*/false);
   EXPECT_EQ(partial->row_count(), 2u);
   EXPECT_TRUE(partial->Get("b")->tombstone);
+}
+
+// Pins tla/AsterLsmIndex.tla NoResurrection: the CompactPartialDropTombstones
+// counterexample. Purging a tombstone when an older live version lives
+// outside the input set resurrects the delete.
+TEST(Compaction, PartialCompactKeepsTombstoneToPreventResurrection) {
+  auto older_live = Segment::Build(
+      1, Metric::kL2, {MakeRow("k", {1.0f}, 10)});
+  auto tomb = Segment::Build(
+      2, Metric::kL2, {MakeRow("k", {}, 20, /*tombstone=*/true)});
+  auto unrelated = Segment::Build(
+      3, Metric::kL2, {MakeRow("other", {3.0f}, 15)});
+
+  // Size-tiered / partial merge of {tomb, unrelated} must retain k's tombstone.
+  auto partial = CompactSegments(4, Metric::kL2, {tomb, unrelated},
+                                 /*drop_tombstones=*/false);
+  ASSERT_TRUE(partial->Get("k").has_value());
+  EXPECT_TRUE(partial->Get("k")->tombstone);
+  EXPECT_TRUE(partial->Get("other").has_value());
+
+  // Reconcile across older_live + partial: tombstone still wins (no resurrection).
+  auto visible = CompactSegments(5, Metric::kL2, {older_live, partial},
+                                 /*drop_tombstones=*/false);
+  ASSERT_TRUE(visible->Get("k").has_value());
+  EXPECT_TRUE(visible->Get("k")->tombstone);
+
+  // Full-overlap over every segment that could hold k: tombstone may be dropped.
+  auto full = CompactSegments(6, Metric::kL2, {older_live, partial},
+                              /*drop_tombstones=*/true);
+  EXPECT_FALSE(full->Get("k").has_value());
+  EXPECT_TRUE(full->Get("other").has_value());
 }
 
 TEST(Compaction, SingleInputIsIdentityMerge) {

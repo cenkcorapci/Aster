@@ -519,5 +519,52 @@ TEST(Db, SizeTieredPartialMergeLeavesOlderTierIntact) {
   EXPECT_TRUE(db.Get("s3").has_value());
 }
 
+// M1-T11 / tla NoResurrection: size-tiered partial merge must keep
+// tombstones so an older live row in a non-participating segment cannot
+// resurface; full Compact() may purge them.
+TEST(Db, SizeTieredPartialMergeKeepsTombstonesFullCompactPurges) {
+  Db::Options options = SmallDb();
+  options.compaction_tier_threshold = 4;
+  options.max_segments_before_compact = 0;
+  Db db(options);
+
+  // Older tier: live "victim" plus fillers (size 4).
+  ASSERT_TRUE(db.Upsert(MakeRow("victim", {1.0f, 0.0f}, 1)).ok());
+  for (int i = 0; i < 3; ++i) {
+    ASSERT_TRUE(
+        db.Upsert(MakeRow("big" + std::to_string(i), {1.0f, 0.0f}, 2 + i))
+            .ok());
+  }
+  ASSERT_TRUE(db.Flush().ok());
+  EXPECT_EQ(db.segment_count(), 1u);
+  EXPECT_TRUE(db.Get("victim").has_value());
+
+  // Newer tier: tombstone for victim, then three size-1 flushes to trip merge.
+  ASSERT_TRUE(db.Delete("victim", 100).ok());
+  ASSERT_TRUE(db.Flush().ok());
+  EXPECT_FALSE(db.Get("victim").has_value());
+
+  for (int i = 0; i < 3; ++i) {
+    ASSERT_TRUE(
+        db.Upsert(MakeRow("s" + std::to_string(i), {0.0f, 1.0f}, 110 + i))
+            .ok());
+    ASSERT_TRUE(db.Flush().ok());
+  }
+  // Partial merge of the four size-1 segments; older size-4 segment remains.
+  EXPECT_EQ(db.segment_count(), 2u);
+  // Tombstone must still win — dropping it would resurrect victim@1.
+  EXPECT_FALSE(db.Get("victim").has_value());
+  EXPECT_TRUE(db.Get("s2").has_value());
+  // Row count still accounts for the retained tombstone (+ older live copy).
+  EXPECT_GE(db.approximate_row_count(), 8u);
+
+  ASSERT_TRUE(db.Compact().ok());
+  EXPECT_EQ(db.segment_count(), 1u);
+  EXPECT_FALSE(db.Get("victim").has_value());
+  EXPECT_TRUE(db.Get("s2").has_value());
+  // Full-overlap purge dropped victim's tombstone (and shadowed big rows).
+  EXPECT_EQ(db.approximate_row_count(), 6u);
+}
+
 }  // namespace
 }  // namespace aster
