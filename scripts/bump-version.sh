@@ -7,6 +7,7 @@
 #
 # Updates (in order):
 #   VERSION
+#   aster/core/version.h         ASTER_VERSION_* macros
 #   MODULE.bazel                 module(version = "…")
 #   clients/python/pyproject.toml
 #   clients/rust/Cargo.toml      [package] version only
@@ -112,22 +113,56 @@ echo "Bumping Aster version -> $NEW_VERSION"
 write_file VERSION "${NEW_VERSION}"$'\n'
 echo "  VERSION"
 
-# 2. MODULE.bazel — only the aster module() version=, not bazel_dep versions.
+# 2. aster/core/version.h — MAJOR/MINOR/PATCH macros + STRING
+#    Numeric parts are the leading X.Y.Z; pre-release suffix stays in STRING only.
+if [[ "$NEW_VERSION" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+) ]]; then
+  VER_MAJOR="${BASH_REMATCH[1]}"
+  VER_MINOR="${BASH_REMATCH[2]}"
+  VER_PATCH="${BASH_REMATCH[3]}"
+else
+  echo "error: could not parse major.minor.patch from '$NEW_VERSION'" >&2
+  exit 1
+fi
+VERSION_H_CONTENT=$(cat <<EOF
+#pragma once
+
+// Aster product / embedded API version.
+// Canonical source: VERSION at the repo root. Keep these macros in sync via
+// scripts/bump-version.sh (see docs/versioning.md).
+
+#define ASTER_VERSION_MAJOR ${VER_MAJOR}
+#define ASTER_VERSION_MINOR ${VER_MINOR}
+#define ASTER_VERSION_PATCH ${VER_PATCH}
+
+#define ASTER_VERSION_STRING "${NEW_VERSION}"
+
+// True when (major, minor, patch) is at least (maj, min, pat).
+#define ASTER_VERSION_AT_LEAST(maj, min, pat)                     \\
+  ((ASTER_VERSION_MAJOR > (maj)) ||                               \\
+   (ASTER_VERSION_MAJOR == (maj) && ASTER_VERSION_MINOR > (min)) || \\
+   (ASTER_VERSION_MAJOR == (maj) && ASTER_VERSION_MINOR == (min) && \\
+    ASTER_VERSION_PATCH >= (pat)))
+EOF
+)
+write_file aster/core/version.h "${VERSION_H_CONTENT}"$'\n'
+echo "  aster/core/version.h"
+
+# 3. MODULE.bazel — only the aster module() version=, not bazel_dep versions.
 replace_in_file MODULE.bazel \
   's/(module\(\s*\n\s*name\s*=\s*"aster",\s*\n\s*version\s*=\s*")[^"]*(")/${1}'"$NEW_VERSION"'${2}/'
 echo "  MODULE.bazel"
 
-# 3. Python pyproject.toml — [project] version =
+# 4. Python pyproject.toml — [project] version =
 replace_in_file clients/python/pyproject.toml \
   's/(?m)^version\s*=\s*"[^"]*"/version = "'"$NEW_VERSION"'"/'
 echo "  clients/python/pyproject.toml"
 
-# 4. Rust Cargo.toml — first version = under [package] (file is small / single package)
+# 5. Rust Cargo.toml — first version = under [package] (file is small / single package)
 replace_in_file clients/rust/Cargo.toml \
   's/(?m)^version\s*=\s*"[^"]*"/version = "'"$NEW_VERSION"'"/'
 echo "  clients/rust/Cargo.toml"
 
-# 5. JavaScript package.json — top-level "version"
+# 6. JavaScript package.json — top-level "version"
 replace_in_file clients/javascript/package.json \
   's/("version"\s*:\s*")[^"]*(")/${1}'"$NEW_VERSION"'${2}/'
 echo "  clients/javascript/package.json"

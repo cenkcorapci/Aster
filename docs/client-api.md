@@ -5,8 +5,10 @@ surface that clients implement is [`aster/rpc/aster.thrift`](../aster/rpc/aster.
 This document describes the longer-term collection configuration model
 (accuracy, storage tiers, consistency, quotas).
 
-**Status:** design target. Today you embed [`aster::Db`](tutorials/database-management.md)
-or call the language facades (stubs until M5) — see
+**Status:** design target for the **server / SaaS** wire API. Today you embed
+[`aster::Db`](tutorials/database-management.md) (stable in-process contract in
+`aster/db/db.h`; see [versioning.md](versioning.md) § Embedded C++ API) or call
+the language facades (stubs until M5) — see
 [client libraries tutorial](tutorials/client-libraries.md).
 
 ## Hierarchy

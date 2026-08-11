@@ -9,6 +9,7 @@ semver: a release is one `vX.Y.Z` that moves all artifacts together.
 | Artifact | Location |
 | --- | --- |
 | Canonical version | [`VERSION`](../VERSION) at the repo root (`X.Y.Z`, no `v` prefix) |
+| C++ macros | `ASTER_VERSION_MAJOR` / `MINOR` / `PATCH` / `STRING` in [`aster/core/version.h`](../aster/core/version.h) |
 | Bazel module | `module(version = …)` in [`MODULE.bazel`](../MODULE.bazel) |
 | Python | `version` in [`clients/python/pyproject.toml`](../clients/python/pyproject.toml) |
 | Rust | `version` in [`clients/rust/Cargo.toml`](../clients/rust/Cargo.toml) |
@@ -16,8 +17,9 @@ semver: a release is one `vX.Y.Z` that moves all artifacts together.
 | Go | module version is the git tag (`vX.Y.Z`); no separate file bump |
 | Java / Scala / C++ client | follow the same release tag; packaging metadata lands with M6 publish jobs |
 
-`scripts/bump-version.sh` keeps `VERSION` and the known package fields above in
-sync. Do not edit those fields by hand unless you also update `VERSION`.
+`scripts/bump-version.sh` keeps `VERSION`, `aster/core/version.h`, and the known
+package fields above in sync. Do not edit those fields by hand unless you also
+update `VERSION`.
 
 ## Tag format
 
@@ -29,12 +31,31 @@ sync. Do not edit those fields by hand unless you also update `VERSION`.
 
 ## Semver (product-level)
 
-- **MAJOR** — breaking wire protocol, on-disk format, or client API.
+- **MAJOR** — breaking wire protocol, on-disk format, client API, or
+  embedded `aster::Db` public surface (see below).
 - **MINOR** — backward-compatible features.
 - **PATCH** — bug fixes and non-breaking docs/tooling.
 
 Clients and server share the major: a `1.x` client talks to a `1.x` server.
 Cross-major compatibility is not promised.
+
+## Embedded C++ API (`aster::Db`)
+
+[`aster/db/db.h`](../aster/db/db.h) is the **public contract** for in-process /
+embedded use (options, `Open`, `Upsert` / `Delete` / `Get` / `Search`,
+`Flush` / `Compact`, and the documented inspectors). Private members and
+`.cc` internals are not part of the contract.
+
+| Concern | Rule |
+| --- | --- |
+| Where the version lives | `VERSION` + `ASTER_VERSION_*` macros in `aster/core/version.h` (included by `db.h`) |
+| Additive API | Prefer new overloads / optional fields / defaulted options; ship as **MINOR** |
+| Breaking API | Rename/remove symbols, change defaults that alter semantics, or tighten preconditions → **MAJOR** + note |
+| How breaks are announced | Entry under the next version in [`CHANGELOG.md`](../CHANGELOG.md), and a short callout in this file when the major bumps |
+
+MCU / Tiny embeds use `aster::embedded::Db` (`aster/embedded/db.h`); that
+surface follows the same semver product version but is a separate, smaller
+API (no WAL / SSTable).
 
 ## Release steps
 
@@ -72,7 +93,7 @@ Cross-major compatibility is not promised.
 
 | Script | Purpose |
 | --- | --- |
-| [`scripts/bump-version.sh`](../scripts/bump-version.sh) | Write `VERSION` and sync known package version fields |
+| [`scripts/bump-version.sh`](../scripts/bump-version.sh) | Write `VERSION`, `aster/core/version.h`, and sync known package version fields |
 | [`scripts/generate-changelog.sh`](../scripts/generate-changelog.sh) | Append or refresh a `CHANGELOG.md` section from `git log` |
 
 Both scripts are idempotent: re-running with the same version refreshes the

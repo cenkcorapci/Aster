@@ -11,7 +11,7 @@
 | [HNSW format](hnsw-format.md) | On-disk `.hnsw` graph layout (M2) |
 | [SSTable format](sstable-format.md) | On-disk `.ast` segment layout |
 | [Client API](client-api.md) | Collection-centric product API (target) |
-| [Versioning](versioning.md) | Single-version release policy |
+| [Versioning](versioning.md) | Single-version policy; embedded `aster::Db` contract |
 | [Tasks](tasks.md) / [Start the tasks](start-the-tasks.md) | Parallel work board |
 
 Related:

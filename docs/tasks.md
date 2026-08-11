@@ -111,7 +111,7 @@ Status updates happen in this file (see start-the-tasks.md § Claiming).
 
 | ID | Status | Lane | Depends | Title | Touch | Done when |
 | --- | --- | --- | --- | --- | --- | --- |
-| M3-T01 | open | db | M1-T06 | Stabilize embedded `aster::Db` public API + versioning | `aster/db/db.h`, docs | Header is the contract; no breaking changes without note |
+| M3-T01 | done | db | M1-T06 | Stabilize embedded `aster::Db` public API + versioning | `aster/db/db.h`, `aster/core/version.h`, docs | Header is the contract; no breaking changes without note |
 | M3-T02 | open | release | M3-T01 | Amalgamated / installable embedded library target | `aster/`, BUILD files | Downstream can depend on one `cc_library` or release tarball |
 | M3-T03 | done | platform | M0 | PosixStorage backend (files + mmap) | `aster/platform/posix*` | Implements `StorageBackend`; Db can persist via it |
 | M3-T04 | done | platform | M3-T03 | S3 storage backend skeleton (Put/Get/List/Remove) | `aster/platform/s3*` | Integration test against LocalStack or mock; not production-complete |

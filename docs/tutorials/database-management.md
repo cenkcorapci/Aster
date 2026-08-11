@@ -1,9 +1,14 @@
 # Tutorial: database management
 
 Manage a single-node Aster database with the C++ `aster::Db` API (and the
-demo CLI / BusyBox image). This is the supported path today: one collection
-per `Db`, exact (brute-force) search, durable SSTables + WAL when
-`data_dir` is set.
+demo CLI / BusyBox image). This is the **supported in-process path** today:
+one collection per `Db`, exact (brute-force) search, durable SSTables + WAL
+when `data_dir` is set.
+
+The public contract is [`aster/db/db.h`](../../aster/db/db.h). Breaking
+changes are announced in [`CHANGELOG.md`](../../CHANGELOG.md) and follow
+[versioning.md](../versioning.md) (version macros: `ASTER_VERSION_*` in
+`aster/core/version.h`).
 
 Remote multi-collection RPC is milestone M4/M5 — see
 [client libraries](client-libraries.md).
@@ -32,6 +37,9 @@ bazel run //aster/cli:aster -- --data-dir /tmp/aster-demo
 Deletes are tombstones. They disappear only after a full compaction that
 covers every segment that might still hold an older version.
 
+`Db` is safe for concurrent calls from multiple threads on one instance
+(see the thread-safety note in `db.h`).
+
 ## Open a database
 
 **In-memory** (no durability — fine for tests):
@@ -54,7 +62,9 @@ opt.metric = aster::Metric::kCosine;
 opt.data_dir = "/var/lib/aster/demo";
 opt.wal_sync = aster::SyncPolicy::kAlways;           // or kEveryMs / kNever
 opt.memtable_flush_bytes = 64 << 20;                 // ~64 MiB
-opt.max_segments_before_compact = 8;                 // auto-compact threshold
+opt.memtable_flush_ms = 0;                           // >0 enables timed flush
+opt.compaction_tier_threshold = 4;                   // 0 disables size-tiered
+opt.max_segments_before_compact = 8;                 // hard cap; 0 disables
 
 auto opened = aster::Db::Open(opt);
 if (!opened.ok()) { /* handle opened.status() */ }
@@ -106,9 +116,11 @@ db->Compact();   // merge all segments; drop tombstones
 
 Notes:
 
-- Upserts also auto-flush when `memtable_flush_bytes` is exceeded.
-- After flush, if `segment_count() >= max_segments_before_compact`, Aster
-  auto-compacts (set `0` to disable).
+- A background thread auto-flushes when `memtable_flush_bytes` is exceeded
+  and/or when `memtable_flush_ms` elapses with a non-empty memtable.
+- After flush, size-tiered compaction may run (`compaction_tier_threshold`);
+  `max_segments_before_compact` is an additional full-compact safety cap
+  (set either to `0` to disable that policy).
 - Prefer periodic flush under write load so crash recovery stays short.
 
 Inspect:
@@ -116,6 +128,7 @@ Inspect:
 ```cpp
 db->segment_count();
 db->memtable_rows();
+db->approximate_row_count();
 db->data_dir();
 ```
 
@@ -140,7 +153,9 @@ bazel build --config=arduino //aster/embedded
 ```
 
 API: `aster::embedded::Db` — same upsert/search/flush/compact ideas, flush
-triggered by row count (`memtable_flush_rows`), in-memory only.
+triggered by row count (`memtable_flush_rows`), in-memory only. Shares the
+product version (`ASTER_VERSION_*`) but is a separate header/API from
+`aster::Db`.
 
 Firmware-in-emulator (ESP32 Arduino + Espressif QEMU):
 
@@ -155,7 +170,7 @@ Details: [deploy/sim-arduino/README.md](../../deploy/sim-arduino/README.md).
 
 1. Pick `dimension` and `metric` once; they are fixed for that DB directory.
 2. Use durable mode + `kAlways` (or group-commit later) for production data.
-3. Flush regularly; keep `max_segments_before_compact` modest (default 8).
+3. Flush regularly; keep compaction thresholds modest (defaults are fine).
 4. Compact after heavy delete/update churn to reclaim space.
 5. Back up `data_dir` (manifest + `seg_*.ast` + `WAL`) as a consistent set
    after a flush (or while the process is stopped).
@@ -163,8 +178,8 @@ Details: [deploy/sim-arduino/README.md](../../deploy/sim-arduino/README.md).
 ## What’s not here yet
 
 - Multi-collection server / Thrift RPC (M4)
-- HNSW ANN (M2) — search is exact today
-- Background flush/compaction threads (planned in M1)
+- Filtered ANN with roaring post-filter (M2 remaining tasks) — search is
+  exact today unless HNSW is enabled in the build profile
 - S3 primary storage (M8)
 
 Next: [client libraries](client-libraries.md).
