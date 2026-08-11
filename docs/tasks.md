@@ -79,8 +79,7 @@ Status updates happen in this file (see start-the-tasks.md § Claiming).
 | M1-T09 | done | db | M1-T05 | Background flush thread (size/time triggers) | `aster/db/` | Memtable flushes without explicit `Flush()` under write load |
 | M1-T10 | open | db | M1-T03, M1-T09 | Size-tiered compaction scheduler | `aster/db/`, `aster/storage/` | Tier threshold triggers merge; segment count bounded under write soak |
 | M1-T11 | open | db | M1-T10 | Tombstone GC only on full-overlap compaction | `aster/storage/segment*`, tests | Unit + TLA mapping: partial compact keeps tombstones; full purges (`NoResurrection`) |
-| M1-T12 | in_progress | storage | M1-T02 | CBOR metadata encode/decode | `aster/storage/` or `aster/core/` | Fixture JSON ↔ CBOR bytes round-trip |
-<!-- claim: M1-T12 | agent: composer | branch: task/M1-T12-cbor-metadata | since: 2026-08-11 -->
+| M1-T12 | done | storage | M1-T02 | CBOR metadata encode/decode | `aster/storage/` or `aster/core/` | Fixture JSON ↔ CBOR bytes round-trip |
 | M1-T13 | open | storage | M1-T02 | LZ4/Zstd block compression behind feature flag | `aster/storage/`, `MODULE.bazel` | Compressed SSTable smaller than raw; uncompressed mode still default for Tiny |
 | M1-T14 | open | qa | M1-T06, M1-T09, M1-T10 | kill -9 fuzz harness + laptop write benchmark | `aster/tests/` or `aster/qa/` | Fuzz green for 1h; ≥100k upserts/sec documented |
 
