@@ -5,6 +5,20 @@
  * //clients/... — C++ stubs live in gen-cpp/ (see scripts/regen-thrift-cpp.sh;
  * M4-T01). Per-language client codegen is milestone M5. Transport is framed
  * TCP with optional TLS.
+ *
+ * M5-T01: Thrift IDL freeze (wire compatibility contract).
+ * 1) Field IDs are part of the wire protocol. Never reuse an existing field
+ *    ID for a different meaning.
+ * 2) Wire-compatible (non-breaking) changes:
+ *      - Add new OPTIONAL fields with new field IDs.
+ *      - Add new enum values.
+ *      - Add new RPC methods (clients that don't call them remain compatible).
+ * 3) Wire-breaking changes (require MAJOR / new release tag for clients):
+ *      - Change the type of an existing field.
+ *      - Change requiredness/semantics of an existing field (including defaults).
+ *      - Remove an existing field (after a deprecation window) or change its meaning.
+ * 4) Versioning: the Thrift IDL MAJOR must match the product MAJOR shipped in
+ *    VERSION (`X` in `vX.Y.Z`). This repo's current product MAJOR is `1`.
  */
 
 namespace cpp aster.rpc
@@ -13,6 +27,10 @@ namespace go aster.rpc
 namespace rs aster_rpc
 namespace java io.aster.rpc
 namespace js aster_rpc
+
+// IDL major version for wire-compat enforcement. There is no runtime negotiation
+// in the RPC surface; clients must compile against a matching MAJOR.
+const i32 ASTER_IDL_MAJOR = 1;
 
 enum DistanceMetric {
   L2 = 0,

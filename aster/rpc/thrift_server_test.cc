@@ -194,9 +194,9 @@ TEST(ThriftServer, UpsertGetSearchPlaintextWhenTLSEnabled) {
   vc.__set_dimension(4);
   vc.__set_metric(DistanceMetric::COSINE);
   cfg.__set_vector(vc);
-  client->createCollection(cfg.name);
-  client->configureCollection(cfg);
-  client->createCollection("pending");
+    plain_client->createCollection(cfg.name);
+    plain_client->configureCollection(cfg);
+    plain_client->createCollection("pending");
 
   const auto vec = MakeUnitVector(4, 7);
   Document doc;
@@ -209,22 +209,22 @@ TEST(ThriftServer, UpsertGetSearchPlaintextWhenTLSEnabled) {
   Document pending_doc = doc;
   pending_doc.__set_id("p1");
   try {
-    client->upsert("pending", pending_doc, ConsistencyLevel::ONE);
+    plain_client->upsert("pending", pending_doc, ConsistencyLevel::ONE);
     FAIL() << "expected upsert to throw for unconfigured collection";
   } catch (const AsterError&) {
   }
 
-  client->upsert("demo", doc, ConsistencyLevel::ONE);
+  plain_client->upsert("demo", doc, ConsistencyLevel::ONE);
 
     Document got;
-    plain_client->get(got, "demo_plain", "d1", ConsistencyLevel::ONE);
+    plain_client->get(got, "demo", "d1", ConsistencyLevel::ONE);
     EXPECT_EQ(got.id, "d1");
     ASSERT_EQ(got.vector.size(), vec.size() * sizeof(float));
     EXPECT_TRUE(got.__isset.tags);
     EXPECT_EQ(got.tags.count("even"), 1u);
 
     SearchRequest req;
-    req.__set_collection("demo_plain");
+    req.__set_collection("demo");
     req.__set_vector(EncodeVector(vec));
     req.__set_topK(3);
     SearchResponse resp;
@@ -278,7 +278,8 @@ TEST(ThriftServer, UpsertGetSearchTLSClient) {
       vc2.__set_dimension(4);
       vc2.__set_metric(DistanceMetric::COSINE);
       cfg2.__set_vector(vc2);
-      tls_client->createCollection(cfg2);
+      tls_client->createCollection(cfg2.name);
+      tls_client->configureCollection(cfg2);
 
       const auto vec = MakeUnitVector(4, 7);
       Document doc2;

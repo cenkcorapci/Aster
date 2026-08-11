@@ -80,3 +80,45 @@ Errors carry `AsterError.code`.
 
 Versioning: one `vX.Y.Z` across server and all clients —
 [versioning.md](versioning.md).
+
+## Wire compatibility (Thrift IDL freeze, M5-T01)
+
+`aster/rpc/aster.thrift` defines the binary wire protocol. After M5-T01, we
+consider the IDL *frozen* under the following rules:
+
+### Change classes
+
+Wire-compatible (non-breaking) changes (clients built against an older
+version remain compatible):
+
+1. Add new `optional` fields with new field IDs.
+2. Add new enum values.
+3. Add new RPC methods (older clients simply never call them).
+
+Wire-breaking changes (require a new product `MAJOR` and client refresh):
+
+1. Change the type of an existing field.
+2. Change requiredness/semantics of an existing field (including defaults).
+3. Remove an existing field or change its meaning.
+4. Reuse an existing field ID for a different meaning.
+
+### Deprecation window
+
+Fields are deprecated in-place (documented in IDL comments) and are kept
+until the next `MAJOR` bump. If a field must be retired sooner for
+operational reasons, treat it as breaking and bump `MAJOR` immediately.
+
+Field IDs are never reused.
+
+### IDL major version
+
+There is no runtime negotiation in the RPC surface yet. Clients must compile
+against a matching IDL MAJOR:
+
+- `aster/rpc/aster.thrift` exports `ASTER_IDL_MAJOR`.
+- `ASTER_IDL_MAJOR` must match the product `MAJOR` from the repo root
+  `VERSION` (`X` in `vX.Y.Z`).
+
+During rolling upgrades within the same `MAJOR`, older clients remain
+compatible with newer servers because unknown/new OPTIONAL fields are
+ignored by Thrift decoders.

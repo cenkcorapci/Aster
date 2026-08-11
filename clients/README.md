@@ -38,3 +38,17 @@ Until M6, each directory has a native package file and a Bazel
 `filegroup` placeholder. A single `vX.Y.Z` tag publishes all clients —
 see [docs/versioning.md](../docs/versioning.md) and
 [docs/development-plan.md](../docs/development-plan.md) (M5–M6).
+
+## Wire compatibility contract (M5-T01)
+
+All client languages in this repo are generated from the same Thrift IDL:
+`aster/rpc/aster.thrift`.
+
+Per `docs/client-api.md`, the wire protocol is frozen by the following policy:
+
+- Keep existing field IDs stable forever; never reuse them.
+- Prefer additive changes: add new OPTIONAL fields and enum values.
+- If a change alters semantics/types of an existing field, treat it as
+  breaking and bump product `MAJOR` (clients must refresh).
+- There is no runtime IDL negotiation yet; compile-time compatibility is
+  enforced by `ASTER_IDL_MAJOR` in the IDL (must match product MAJOR).
