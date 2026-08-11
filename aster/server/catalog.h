@@ -21,6 +21,7 @@ struct CollectionInfo {
   uint32_t dimension = 0;
   Metric metric = Metric::kCosine;
   StorageMode storage_mode = StorageMode::kHot;
+  ResourceLimits resource_limits{};
 };
 
 struct UsageStats {
@@ -37,7 +38,9 @@ struct UsageStats {
 // Multi-collection facade over aster::Db for the single-node SaaS kernel.
 // Layout under data_dir:
 //   CATALOG          — one line per collection:
-//                      name\tdimension\tmetric[\tstorage_mode]
+//                      name\tdimension\tmetric[\tstorage_mode
+//                      [\tmax_vectors\tmemory_budget\tmax_qps
+//                       \tstorage_quota\tisolation]]
 //   <name>/          — Db durable directory (MANIFEST, WAL, seg_*.ast)
 //
 // Db instances are shared_ptr so search/get can run without holding mu_

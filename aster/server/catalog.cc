@@ -119,11 +119,51 @@ Status Catalog::Load() {
     if (!metric.ok()) return metric.status();
     info.metric = metric.value();
     if (t3 != std::string::npos) {
-      auto mode = StorageModeFromString(line.substr(t3 + 1));
+      // Optional: storage_mode [\t max_vectors \t memory \t max_qps
+      //                        \t storage_quota \t isolation]
+      std::string rest = line.substr(t3 + 1);
+      const size_t lim0 = rest.find('\t');
+      const std::string mode_s =
+          lim0 == std::string::npos ? rest : rest.substr(0, lim0);
+      auto mode = StorageModeFromString(mode_s);
       if (!mode.has_value()) {
         return Status::Corruption("bad CATALOG storage mode");
       }
       info.storage_mode = *mode;
+      if (lim0 != std::string::npos) {
+        // Parse five resource-limit fields.
+        std::string lim = rest.substr(lim0 + 1);
+        std::string fields[5];
+        size_t start = 0;
+        for (int i = 0; i < 5; ++i) {
+          const size_t tab =
+              (i == 4) ? std::string::npos : lim.find('\t', start);
+          fields[i] = (tab == std::string::npos)
+                          ? lim.substr(start)
+                          : lim.substr(start, tab - start);
+          if (tab == std::string::npos && i < 4) {
+            return Status::Corruption("bad CATALOG resource limits");
+          }
+          start = tab + 1;
+        }
+        try {
+          info.resource_limits.max_vectors =
+              static_cast<uint64_t>(std::stoull(fields[0]));
+          info.resource_limits.memory_budget_bytes =
+              static_cast<size_t>(std::stoull(fields[1]));
+          info.resource_limits.max_qps =
+              static_cast<uint32_t>(std::stoul(fields[2]));
+          info.resource_limits.storage_quota_bytes =
+              static_cast<uint64_t>(std::stoull(fields[3]));
+        } catch (...) {
+          return Status::Corruption("bad CATALOG resource limits");
+        }
+        auto iso = IsolationLevelFromString(fields[4]);
+        if (!iso.has_value()) {
+          return Status::Corruption("bad CATALOG isolation level");
+        }
+        info.resource_limits.isolation = *iso;
+      }
     }
 
     if (auto st = ValidateName(info.name); !st.ok()) return st;
@@ -148,6 +188,8 @@ Status Catalog::Load() {
     db_opt.max_segments_before_compact = options_.max_segments_before_compact;
     db_opt.storage_mode = info.storage_mode;
     db_opt.object_store = options_.object_store;
+    db_opt.resource_limits = info.resource_limits;
+    db_opt.memory_budget_bytes = info.resource_limits.memory_budget_bytes;
     auto db = Db::Open(db_opt);
     if (!db.ok()) return db.status();
     infos_[info.name] = info;
@@ -165,7 +207,11 @@ Status Catalog::PersistCatalog() const {
     for (const auto& [_, info] : infos_) {
       out << info.name << '\t' << info.dimension << '\t'
           << MetricToString(info.metric) << '\t' << ToString(info.storage_mode)
-          << '\n';
+          << '\t' << info.resource_limits.max_vectors << '\t'
+          << info.resource_limits.memory_budget_bytes << '\t'
+          << info.resource_limits.max_qps << '\t'
+          << info.resource_limits.storage_quota_bytes << '\t'
+          << ToString(info.resource_limits.isolation) << '\n';
     }
   }
   if (std::rename(tmp.c_str(), path.c_str()) != 0) {
@@ -242,6 +288,8 @@ Status Catalog::ConfigureCollection(const CollectionInfo& info) {
   db_opt.max_segments_before_compact = options_.max_segments_before_compact;
   db_opt.storage_mode = info.storage_mode;
   db_opt.object_store = options_.object_store;
+  db_opt.resource_limits = info.resource_limits;
+  db_opt.memory_budget_bytes = info.resource_limits.memory_budget_bytes;
   auto db = Db::Open(db_opt);
   if (!db.ok()) {
     // Best-effort rollback to the previous lifecycle phase.
@@ -370,7 +418,7 @@ Result<std::vector<SearchHit>> Catalog::Search(
     db = got.value();
     ++usage_.searches;
   }
-  return db->Search(request);
+  return db->TrySearch(request);
 }
 
 Status Catalog::Flush(const std::string& collection) {

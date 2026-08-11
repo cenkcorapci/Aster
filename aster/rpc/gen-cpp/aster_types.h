@@ -64,9 +64,24 @@ std::ostream& operator<<(std::ostream& out, const StorageMode::type& val);
 
 std::string to_string(const StorageMode::type& val);
 
+struct IsolationLevel {
+  enum type {
+    SHARED = 0,
+    DEDICATED = 1
+  };
+};
+
+extern const std::map<int, const char*> _IsolationLevel_VALUES_TO_NAMES;
+
+std::ostream& operator<<(std::ostream& out, const IsolationLevel::type& val);
+
+std::string to_string(const IsolationLevel::type& val);
+
 class VectorConfig;
 
 class HnswConfig;
+
+class ResourceLimits;
 
 class CollectionConfig;
 
@@ -161,11 +176,68 @@ void swap(HnswConfig &a, HnswConfig &b) noexcept;
 
 std::ostream& operator<<(std::ostream& out, const HnswConfig& obj);
 
+typedef struct _ResourceLimits__isset {
+  _ResourceLimits__isset() : maxVectors(true), memoryBudgetBytes(true), maxQps(true), storageQuotaBytes(true), isolation(true) {}
+  bool maxVectors :1;
+  bool memoryBudgetBytes :1;
+  bool maxQps :1;
+  bool storageQuotaBytes :1;
+  bool isolation :1;
+} _ResourceLimits__isset;
+
+class ResourceLimits : public virtual ::apache::thrift::TBase {
+ public:
+
+  ResourceLimits(const ResourceLimits&) noexcept;
+  ResourceLimits& operator=(const ResourceLimits&) noexcept;
+  ResourceLimits() noexcept;
+
+  virtual ~ResourceLimits() noexcept;
+  int64_t maxVectors;
+  int64_t memoryBudgetBytes;
+  int32_t maxQps;
+  int64_t storageQuotaBytes;
+  /**
+   * 
+   * @see IsolationLevel
+   */
+  IsolationLevel::type isolation;
+
+  _ResourceLimits__isset __isset;
+
+  void __set_maxVectors(const int64_t val);
+
+  void __set_memoryBudgetBytes(const int64_t val);
+
+  void __set_maxQps(const int32_t val);
+
+  void __set_storageQuotaBytes(const int64_t val);
+
+  void __set_isolation(const IsolationLevel::type val);
+
+  bool operator == (const ResourceLimits & rhs) const;
+  bool operator != (const ResourceLimits &rhs) const {
+    return !(*this == rhs);
+  }
+
+  bool operator < (const ResourceLimits & ) const;
+
+  uint32_t read(::apache::thrift::protocol::TProtocol* iprot) override;
+  uint32_t write(::apache::thrift::protocol::TProtocol* oprot) const override;
+
+  virtual void printTo(std::ostream& out) const;
+};
+
+void swap(ResourceLimits &a, ResourceLimits &b) noexcept;
+
+std::ostream& operator<<(std::ostream& out, const ResourceLimits& obj);
+
 typedef struct _CollectionConfig__isset {
-  _CollectionConfig__isset() : hnsw(false), replicationFactor(true), storageMode(true) {}
+  _CollectionConfig__isset() : hnsw(false), replicationFactor(true), storageMode(true), resourceLimits(false) {}
   bool hnsw :1;
   bool replicationFactor :1;
   bool storageMode :1;
+  bool resourceLimits :1;
 } _CollectionConfig__isset;
 
 class CollectionConfig : public virtual ::apache::thrift::TBase {
@@ -185,6 +257,7 @@ class CollectionConfig : public virtual ::apache::thrift::TBase {
    * @see StorageMode
    */
   StorageMode::type storageMode;
+  ResourceLimits resourceLimits;
 
   _CollectionConfig__isset __isset;
 
@@ -197,6 +270,8 @@ class CollectionConfig : public virtual ::apache::thrift::TBase {
   void __set_replicationFactor(const int32_t val);
 
   void __set_storageMode(const StorageMode::type val);
+
+  void __set_resourceLimits(const ResourceLimits& val);
 
   bool operator == (const CollectionConfig & rhs) const;
   bool operator != (const CollectionConfig &rhs) const {

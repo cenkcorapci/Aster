@@ -91,6 +91,47 @@ void AsterHandler::configureCollection(const CollectionConfig& config) {
         ThrowStatus(Status::InvalidArgument("unknown storage mode"));
     }
   }
+  if (config.__isset.resourceLimits) {
+    const auto& lim = config.resourceLimits;
+    if (lim.__isset.maxVectors) {
+      if (lim.maxVectors < 0) {
+        ThrowStatus(Status::InvalidArgument("maxVectors must be >= 0"));
+      }
+      info.resource_limits.max_vectors = static_cast<uint64_t>(lim.maxVectors);
+    }
+    if (lim.__isset.memoryBudgetBytes) {
+      if (lim.memoryBudgetBytes < 0) {
+        ThrowStatus(Status::InvalidArgument("memoryBudgetBytes must be >= 0"));
+      }
+      info.resource_limits.memory_budget_bytes =
+          static_cast<size_t>(lim.memoryBudgetBytes);
+    }
+    if (lim.__isset.maxQps) {
+      if (lim.maxQps < 0) {
+        ThrowStatus(Status::InvalidArgument("maxQps must be >= 0"));
+      }
+      info.resource_limits.max_qps = static_cast<uint32_t>(lim.maxQps);
+    }
+    if (lim.__isset.storageQuotaBytes) {
+      if (lim.storageQuotaBytes < 0) {
+        ThrowStatus(Status::InvalidArgument("storageQuotaBytes must be >= 0"));
+      }
+      info.resource_limits.storage_quota_bytes =
+          static_cast<uint64_t>(lim.storageQuotaBytes);
+    }
+    if (lim.__isset.isolation) {
+      switch (lim.isolation) {
+        case IsolationLevel::SHARED:
+          info.resource_limits.isolation = aster::IsolationLevel::kShared;
+          break;
+        case IsolationLevel::DEDICATED:
+          info.resource_limits.isolation = aster::IsolationLevel::kDedicated;
+          break;
+        default:
+          ThrowStatus(Status::InvalidArgument("unknown isolation level"));
+      }
+    }
+  }
   ThrowIfNotOk(catalog_->ConfigureCollection(info));
 }
 

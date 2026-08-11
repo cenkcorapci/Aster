@@ -44,7 +44,23 @@ Logical groups (not all on the wire yet):
 | Index | HNSW `m`, `ef_construction`, `ef_search_default`; accuracy presets |
 | Storage | backend (local / S3), compression, HOT / WARM / COLD cache mode |
 | Consistency | `replication_factor`, write/read `ONE` \| `QUORUM` \| `ALL` |
-| Resources | memory budget, max QPS, storage quota, isolation |
+| Resources | memory budget, max vectors, max QPS, storage quota, isolation |
+
+### Resource limits + isolation (M8-T05)
+
+Configured via Thrift `CollectionConfig.resourceLimits` / `Db::Options`
+(`aster/db/resource_limits.h`). Numeric `0` means unlimited. Exceeding a
+cap returns `StatusCode::kResourceExhausted` (RPC: `AsterError`).
+
+| Field | Enforced on | Semantics |
+| --- | --- | --- |
+| `maxVectors` | Upsert (new live id) | Live row count hard cap |
+| `memoryBudgetBytes` | Upsert / Delete | Write-path memtable + arena (existing budget) |
+| `maxQps` | Search | Rolling 1-second admission window |
+| `storageQuotaBytes` | Upsert (new live id) | Estimated vector bytes (`live × dim × 4`) |
+| `isolation` | configure (persisted) | `SHARED` (default) or `DEDICATED` scheduling hint |
+
+Safe online: `Db::SetResourceLimits` / reconfigure via collection config.
 
 ### Accuracy presets (planned)
 

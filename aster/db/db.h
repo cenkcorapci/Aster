@@ -43,6 +43,7 @@
 #include "aster/core/status.h"
 #include "aster/core/types.h"
 #include "aster/core/version.h"
+#include "aster/db/resource_limits.h"
 #include "aster/db/storage_mode.h"
 #include "aster/storage/memtable.h"
 #include "aster/storage/segment.h"
@@ -93,7 +94,12 @@ class Db {
     // Hard cap on write-path memory (memtable + write arena). 0 = unlimited.
     // Upsert/Delete that would exceed the budget return ResourceExhausted
     // after attempting a flush to reclaim the memtable.
+    // Also mirrored in resource_limits.memory_budget_bytes when set via
+    // SetResourceLimits / CollectionConfig.
     size_t memory_budget_bytes = 0;
+    // Per-collection quotas + isolation (docs/client-api.md § Resources).
+    // Safe online via SetResourceLimits(). 0 numeric fields = unlimited.
+    ResourceLimits resource_limits{};
     // HOT / WARM / COLD cache layout (docs/client-api.md). Safe to change
     // online via SetStorageMode(). Default HOT keeps the historical local path.
     StorageMode storage_mode = StorageMode::kHot;
@@ -146,6 +152,12 @@ class Db {
 
   // Exact (brute-force) top-k over memtable + segments; higher score is
   // always better. request.tags is an AND post-filter when non-empty.
+  // Enforces max_qps when configured; returns ResourceExhausted on exceed.
+  // Prefer this overload when callers need Status (Catalog / RPC).
+  Result<std::vector<SearchHit>> TrySearch(const SearchRequest& request) const;
+
+  // Same search as TrySearch, but drops the Status (returns {} on QPS exceed).
+  // Prefer TrySearch when quota errors must be surfaced.
   std::vector<SearchHit> Search(const SearchRequest& request) const;
 
   // Seals the memtable into a new immutable segment. When durable, also
@@ -186,6 +198,12 @@ class Db {
   // live segment/index objects and (re)pins HNSW upper layers.
   Status SetStorageMode(StorageMode mode);
 
+  // Current per-collection resource limits + isolation.
+  ResourceLimits resource_limits() const;
+  // Online quota / isolation update (docs/client-api.md: limits are safe
+  // online). Also syncs Options::memory_budget_bytes from the limits struct.
+  Status SetResourceLimits(ResourceLimits limits);
+
   // Immutable after construction; safe to read without calling other methods.
   const std::string& data_dir() const { return options_.data_dir; }
 
@@ -209,6 +227,14 @@ class Db {
   size_t ProjectedMemtableBytesLocked(const Row& row) const;
   // Enforces Options::memory_budget_bytes; may FlushLocked to reclaim.
   Status EnsureWriteMemoryLocked(const Row& row);
+  // Enforces max_vectors / storage_quota_bytes for new live ids.
+  Status EnsureResourceLimitsLocked(const Row& row);
+  // Rolling 1s QPS admission (max_qps).
+  Status AdmitSearchLocked() const;
+  size_t LiveRowCountLocked() const;
+  uint64_t EstimatedStorageBytesLocked() const;
+  // Core search body (caller holds mu_ and has already admitted QPS).
+  std::vector<SearchHit> SearchLocked(const SearchRequest& request) const;
   // Merges the segments at `indices` (into segments_). Full-overlap merges
   // (all live segments) purge tombstones; partial merges keep them.
   Status CompactSelectedLocked(const std::vector<size_t>& indices);
@@ -255,6 +281,9 @@ class Db {
   bool stop_index_thread_ = false;
   bool index_build_requested_ = false;
   std::chrono::steady_clock::time_point memtable_live_since_{};
+  // Rolling 1-second QPS window (Search admission). Mutable: Search is const.
+  mutable std::chrono::steady_clock::time_point qps_window_start_{};
+  mutable uint32_t qps_window_count_ = 0;
 };
 
 }  // namespace aster

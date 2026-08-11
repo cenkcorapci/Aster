@@ -52,6 +52,12 @@ enum StorageMode {
   COLD = 2,  // Object-store primary + local HNSW upper-layer pins
 }
 
+// Per-collection isolation (docs/client-api.md § Resources). Safe online.
+enum IsolationLevel {
+  SHARED = 0,     // Multi-tenant default; share node capacity
+  DEDICATED = 1,  // Reserved-capacity hint for scheduling / SLA
+}
+
 struct VectorConfig {
   1: required i32 dimension,
   2: required DistanceMetric metric,
@@ -63,6 +69,15 @@ struct HnswConfig {
   3: optional i32 efSearchDefault = 64,
 }
 
+// Per-collection quotas. 0 / absent numeric fields mean unlimited.
+struct ResourceLimits {
+  1: optional i64 maxVectors = 0,
+  2: optional i64 memoryBudgetBytes = 0,
+  3: optional i32 maxQps = 0,
+  4: optional i64 storageQuotaBytes = 0,
+  5: optional IsolationLevel isolation = IsolationLevel.SHARED,
+}
+
 struct CollectionConfig {
   1: required string name,
   2: required VectorConfig vector,
@@ -70,6 +85,8 @@ struct CollectionConfig {
   4: optional i32 replicationFactor = 1,
   // M8-T03: optional storage cache mode (default HOT when absent).
   5: optional StorageMode storageMode = StorageMode.HOT,
+  // M8-T05: optional per-collection resource limits + isolation.
+  6: optional ResourceLimits resourceLimits,
 }
 
 struct Document {

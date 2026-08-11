@@ -8,6 +8,7 @@ cc_library(
     srcs = ["db.cc"],
     hdrs = [
         "db.h",
+        "resource_limits.h",
         "storage_mode.h",
     ],
     target_compatible_with = select({
@@ -63,6 +64,21 @@ cc_test(
         ":db",
         "//aster/platform:s3",
         "//aster/platform:s3_fake",
+        "//aster/server",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cc_test(
+    name = "resource_limits_test",
+    size = "small",
+    srcs = ["resource_limits_test.cc"],
+    target_compatible_with = select({
+        "//platforms:is_baremetal": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    }),
+    deps = [
+        ":db",
         "//aster/server",
         "@googletest//:gtest_main",
     ],

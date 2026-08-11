@@ -13,6 +13,10 @@ TEST(RpcCodegen, TypesAndServiceInterface) {
   cfg.name = "demo";
   cfg.vector.dimension = 4;
   cfg.vector.metric = aster::rpc::DistanceMetric::L2;
+  aster::rpc::ResourceLimits lim;
+  lim.__set_maxVectors(100);
+  lim.__set_isolation(aster::rpc::IsolationLevel::SHARED);
+  cfg.__set_resourceLimits(lim);
 
   aster::rpc::Document doc;
   doc.id = "a";

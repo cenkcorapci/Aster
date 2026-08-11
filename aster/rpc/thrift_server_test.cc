@@ -394,6 +394,81 @@ TEST(ThriftServer, CreateConfigurePersistsAfterRestart) {
   }
 }
 
+TEST(ThriftServer, ResourceLimitsExceededReturnsAsterError) {
+  const std::string dir = TempDir("aster_thrift_limits");
+  Catalog::Options opt;
+  opt.data_dir = dir;
+  opt.wal_sync = SyncPolicy::kNever;
+  auto cat = Catalog::Open(opt);
+  ASSERT_TRUE(cat.ok()) << cat.status().message();
+
+  auto handler = std::make_shared<AsterHandler>(cat.value().get());
+  ThriftServer::Options sop;
+  sop.host = "127.0.0.1";
+  sop.port = 0;
+  ThriftServer server(sop, handler);
+  ASSERT_TRUE(server.Listen().ok());
+  ASSERT_GT(server.port(), 0);
+
+  std::thread th([&] { server.Serve(); });
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+  {
+    ThriftClient client(server.port());
+    CollectionConfig cfg;
+    cfg.__set_name("limited");
+    VectorConfig vc;
+    vc.__set_dimension(4);
+    vc.__set_metric(DistanceMetric::L2);
+    cfg.__set_vector(vc);
+    ResourceLimits lim;
+    lim.__set_maxVectors(1);
+    lim.__set_maxQps(1);
+    lim.__set_isolation(IsolationLevel::DEDICATED);
+    cfg.__set_resourceLimits(lim);
+
+    client->createCollection(cfg.name);
+    client->configureCollection(cfg);
+
+    const auto vec = MakeUnitVector(4, 3);
+    Document doc;
+    doc.__set_id("d1");
+    doc.__set_vector(EncodeVector(vec));
+    doc.__set_timestampMicros(1);
+    client->upsert("limited", doc, ConsistencyLevel::ONE);
+
+    Document doc2 = doc;
+    doc2.__set_id("d2");
+    doc2.__set_timestampMicros(2);
+    try {
+      client->upsert("limited", doc2, ConsistencyLevel::ONE);
+      FAIL() << "expected max vectors AsterError";
+    } catch (const AsterError& e) {
+      EXPECT_EQ(e.code, static_cast<int32_t>(StatusCode::kResourceExhausted));
+      EXPECT_NE(e.message.find("max vectors"), std::string::npos);
+    }
+
+    SearchRequest req;
+    req.__set_collection("limited");
+    req.__set_vector(EncodeVector(vec));
+    req.__set_topK(1);
+    SearchResponse resp;
+    client->search(resp, req);
+    ASSERT_FALSE(resp.hits.empty());
+
+    try {
+      client->search(resp, req);
+      FAIL() << "expected max QPS AsterError";
+    } catch (const AsterError& e) {
+      EXPECT_EQ(e.code, static_cast<int32_t>(StatusCode::kResourceExhausted));
+      EXPECT_NE(e.message.find("QPS"), std::string::npos);
+    }
+  }
+
+  server.Stop();
+  th.join();
+}
+
 }  // namespace
 }  // namespace rpc
 }  // namespace aster

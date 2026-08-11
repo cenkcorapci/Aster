@@ -348,6 +348,16 @@ Db::Db(Options options, DeferFlushThread) : options_(std::move(options)) {
         HnswParamsFromAccuracyProfile(*options_.accuracy_profile);
   }
 #endif
+  // Keep memory_budget_bytes and resource_limits.memory_budget_bytes aligned.
+  // Prefer an explicit Options::memory_budget_bytes when limits left it at 0
+  // (existing callers / tests); otherwise the nested limits win.
+  if (options_.resource_limits.memory_budget_bytes == 0 &&
+      options_.memory_budget_bytes > 0) {
+    options_.resource_limits.memory_budget_bytes = options_.memory_budget_bytes;
+  } else if (options_.resource_limits.memory_budget_bytes > 0) {
+    options_.memory_budget_bytes = options_.resource_limits.memory_budget_bytes;
+  }
+  qps_window_start_ = std::chrono::steady_clock::now();
 }
 
 Db::~Db() {
@@ -684,6 +694,75 @@ Status Db::EnsureWriteMemoryLocked(const Row& row) {
   return Status::ResourceExhausted("memory budget exceeded");
 }
 
+size_t Db::LiveRowCountLocked() const {
+  // Segment / memtable rows may be superseded; reconcile unique ids.
+  std::set<RowId> seen;
+  memtable_.ForEach([&](const Row& row) { seen.insert(row.id); });
+  for (const auto& segment : segments_) {
+    for (const Row& row : segment->rows()) seen.insert(row.id);
+  }
+  size_t n = 0;
+  for (const RowId& id : seen) {
+    const Row row = Reconcile(id);
+    if (!row.tombstone) ++n;
+  }
+  return n;
+}
+
+uint64_t Db::EstimatedStorageBytesLocked() const {
+  const uint32_t dim = options_.dimension;
+  if (dim == 0) return 0;
+  return static_cast<uint64_t>(LiveRowCountLocked()) *
+         static_cast<uint64_t>(dim) * sizeof(float);
+}
+
+Status Db::EnsureResourceLimitsLocked(const Row& row) {
+  if (row.tombstone) return Status::Ok();
+  const ResourceLimits& lim = options_.resource_limits;
+  if (lim.max_vectors == 0 && lim.storage_quota_bytes == 0) {
+    return Status::Ok();
+  }
+
+  // Updates to an existing live id do not consume an additional vector slot
+  // or extra storage quota beyond the (already counted) live row.
+  const Row existing = Reconcile(row.id);
+  const bool is_new_live = existing.tombstone;
+
+  if (lim.max_vectors > 0 && is_new_live) {
+    if (LiveRowCountLocked() >= lim.max_vectors) {
+      return Status::ResourceExhausted("max vectors exceeded");
+    }
+  }
+
+  if (lim.storage_quota_bytes > 0 && is_new_live) {
+    const uint32_t dim =
+        options_.dimension != 0 ? options_.dimension
+                                : static_cast<uint32_t>(row.vector.size());
+    const uint64_t add =
+        static_cast<uint64_t>(dim) * static_cast<uint64_t>(sizeof(float));
+    if (EstimatedStorageBytesLocked() + add > lim.storage_quota_bytes) {
+      return Status::ResourceExhausted("storage quota exceeded");
+    }
+  }
+  return Status::Ok();
+}
+
+Status Db::AdmitSearchLocked() const {
+  const uint32_t max_qps = options_.resource_limits.max_qps;
+  if (max_qps == 0) return Status::Ok();
+
+  const auto now = std::chrono::steady_clock::now();
+  if (now - qps_window_start_ >= std::chrono::seconds(1)) {
+    qps_window_start_ = now;
+    qps_window_count_ = 0;
+  }
+  if (qps_window_count_ >= max_qps) {
+    return Status::ResourceExhausted("max QPS exceeded");
+  }
+  ++qps_window_count_;
+  return Status::Ok();
+}
+
 Status Db::PublishManifest() {
   Manifest m;
   m.generation = ++manifest_generation_;
@@ -708,6 +787,7 @@ Status Db::Upsert(Row row) {
       row.vector.size() != options_.dimension) {
     return Status::InvalidArgument("vector dimension mismatch");
   }
+  if (auto st = EnsureResourceLimitsLocked(row); !st.ok()) return st;
   if (auto st = EnsureWriteMemoryLocked(row); !st.ok()) return st;
   if (auto st = AppendWal(row); !st.ok()) return st;
   const bool was_empty = memtable_.empty();
@@ -755,8 +835,7 @@ std::optional<Row> Db::Get(const RowId& id) const {
   return row;
 }
 
-std::vector<SearchHit> Db::Search(const SearchRequest& request) const {
-  std::lock_guard lock(mu_);
+std::vector<SearchHit> Db::SearchLocked(const SearchRequest& request) const {
   // COLD workers drop the LRU block cache before each search; non-evictable
   // upper-layer pins remain (docs/indexing.md §10.3.1 / client-api.md).
   if (ClearsBlockCacheOnSearch(options_.storage_mode) && options_.object_store) {
@@ -806,6 +885,19 @@ std::vector<SearchHit> Db::Search(const SearchRequest& request) const {
               return a.score > b.score;
             });
   return results;
+}
+
+Result<std::vector<SearchHit>> Db::TrySearch(
+    const SearchRequest& request) const {
+  std::lock_guard lock(mu_);
+  if (auto st = AdmitSearchLocked(); !st.ok()) return st;
+  return SearchLocked(request);
+}
+
+std::vector<SearchHit> Db::Search(const SearchRequest& request) const {
+  auto got = TrySearch(request);
+  if (!got.ok()) return {};
+  return std::move(got.value());
 }
 
 Status Db::Flush() {
@@ -1173,6 +1265,21 @@ Status Db::SetStorageMode(StorageMode mode) {
   }
   options_.storage_mode = mode;
   return ApplyObjectStorePolicyLocked();
+}
+
+ResourceLimits Db::resource_limits() const {
+  std::lock_guard lock(mu_);
+  return options_.resource_limits;
+}
+
+Status Db::SetResourceLimits(ResourceLimits limits) {
+  std::lock_guard lock(mu_);
+  options_.resource_limits = limits;
+  options_.memory_budget_bytes = limits.memory_budget_bytes;
+  // Reset the QPS window so a newly raised/lowered cap takes effect cleanly.
+  qps_window_start_ = std::chrono::steady_clock::now();
+  qps_window_count_ = 0;
+  return Status::Ok();
 }
 
 Status Db::MirrorObjectLocked(const std::string& relative_key,
