@@ -20,6 +20,7 @@
 #include "aster/rpc/server.h"
 #include "aster/server/catalog.h"
 #include "aster/server/http_api.h"
+#include "aster/cli/toml_config_loader.h"
 
 namespace {
 constexpr const char* kVersion = "0.1.0-dev";
@@ -31,15 +32,22 @@ void PrintUsage(const char* argv0) {
                "Usage:\n"
                "  %s demo [--data-dir PATH]\n"
                "  %s serve --data-dir PATH [--host 127.0.0.1] [--port 8080] "
-               "[--api-key KEY]\n"
+               "[--api-key KEY] [--config PATH]\n"
                "  %s serve-rpc --data-dir PATH [--host 127.0.0.1] "
+<<<<<<< HEAD
                "[--port 9090] [--tls] [--tls-insecure] "
                "[--tls-cert PATH] [--tls-key PATH] [--tls-ca PATH]\n"
+=======
+               "[--port 9090] [--config PATH]\n"
+>>>>>>> bc12d78 (M4-T05: add TOML config loader for server/CLI)
                "  %s [--data-dir PATH]          # same as demo\n"
                "\n"
                "Environment:\n"
                "  ASTER_DATA_DIR   Default data directory\n"
                "  ASTER_API_KEY    Optional API key for serve\n"
+               "\n"
+               "TOML config:\n"
+               "  --config PATH    Loads server + catalog knobs\n"
                "\n"
                "Aster %s\n",
                argv0, argv0, argv0, argv0, kVersion);
@@ -125,6 +133,13 @@ int RunServe(int argc, char** argv) {
   std::string host = "127.0.0.1";
   uint16_t port = 8080;
   std::string api_key = env_key ? env_key : "";
+  const char* config_path = nullptr;
+
+  bool host_set = false;
+  bool port_set = false;
+  bool data_dir_set = false;
+  aster::cli::TomlConfig toml_cfg;
+  bool have_toml = false;
 
   for (int i = 2; i < argc; ++i) {
     if (std::strcmp(argv[i], "--help") == 0 ||
@@ -139,12 +154,17 @@ int RunServe(int argc, char** argv) {
       }
       return argv[++i];
     };
-    if (std::strcmp(argv[i], "--data-dir") == 0) {
+    if (std::strcmp(argv[i], "--config") == 0) {
+      config_path = need("--config");
+    } else if (std::strcmp(argv[i], "--data-dir") == 0) {
       data_dir = need("--data-dir");
+      data_dir_set = true;
     } else if (std::strcmp(argv[i], "--host") == 0) {
       host = need("--host");
+      host_set = true;
     } else if (std::strcmp(argv[i], "--port") == 0) {
       port = static_cast<uint16_t>(std::atoi(need("--port")));
+      port_set = true;
     } else if (std::strcmp(argv[i], "--api-key") == 0) {
       api_key = need("--api-key");
     } else {
@@ -154,14 +174,52 @@ int RunServe(int argc, char** argv) {
     }
   }
 
+  if (config_path != nullptr) {
+    auto cfg_res = aster::cli::LoadTomlConfigFile(config_path);
+    if (!cfg_res.ok()) {
+      std::fprintf(stderr, "error: config load failed: %s\n",
+                   cfg_res.status().message().c_str());
+      return 2;
+    }
+    have_toml = true;
+    toml_cfg = cfg_res.value();
+    // CLI overrides TOML for host/port/data_dir.
+    if (!host_set && toml_cfg.server.host.has_value()) {
+      host = *toml_cfg.server.host;
+    }
+    if (!port_set && toml_cfg.server.port.has_value()) {
+      port = *toml_cfg.server.port;
+    }
+    if (!data_dir_set && toml_cfg.catalog.data_dir.has_value()) {
+      data_dir = *toml_cfg.catalog.data_dir;
+    }
+  }
+
   if (data_dir.empty()) {
-    std::fprintf(stderr, "error: serve requires --data-dir or ASTER_DATA_DIR\n");
+    std::fprintf(
+        stderr,
+        "error: serve requires --data-dir or ASTER_DATA_DIR (or catalog.data_dir in --config)\n");
     return 2;
   }
 
   aster::Catalog::Options opt;
   opt.data_dir = data_dir;
-  opt.wal_sync = aster::SyncPolicy::kEveryMs;
+  if (have_toml) {
+    if (toml_cfg.catalog.wal_sync.has_value()) {
+      opt.wal_sync = *toml_cfg.catalog.wal_sync;
+    }
+    if (toml_cfg.catalog.memtable_flush_bytes.has_value()) {
+      opt.memtable_flush_bytes = *toml_cfg.catalog.memtable_flush_bytes;
+    }
+    if (toml_cfg.catalog.compaction_tier_threshold.has_value()) {
+      opt.compaction_tier_threshold =
+          *toml_cfg.catalog.compaction_tier_threshold;
+    }
+    if (toml_cfg.catalog.max_segments_before_compact.has_value()) {
+      opt.max_segments_before_compact =
+          *toml_cfg.catalog.max_segments_before_compact;
+    }
+  }
   auto catalog = aster::Catalog::Open(opt);
   if (!catalog.ok()) {
     std::fprintf(stderr, "error: catalog open failed: %s\n",
@@ -193,6 +251,11 @@ int RunServeRpc(int argc, char** argv) {
   std::string data_dir = env_dir ? env_dir : "";
   std::string host = "127.0.0.1";
   uint16_t port = 9090;
+  const char* config_path = nullptr;
+
+  bool host_set = false;
+  bool port_set = false;
+  bool data_dir_set = false;
   bool tls = false;
   bool tls_insecure = true;
   std::string tls_cert_file;
@@ -212,10 +275,14 @@ int RunServeRpc(int argc, char** argv) {
       }
       return argv[++i];
     };
-    if (std::strcmp(argv[i], "--data-dir") == 0) {
+    if (std::strcmp(argv[i], "--config") == 0) {
+      config_path = need("--config");
+    } else if (std::strcmp(argv[i], "--data-dir") == 0) {
       data_dir = need("--data-dir");
+      data_dir_set = true;
     } else if (std::strcmp(argv[i], "--host") == 0) {
       host = need("--host");
+      host_set = true;
     } else if (std::strcmp(argv[i], "--port") == 0) {
       port = static_cast<uint16_t>(std::atoi(need("--port")));
     } else if (std::strcmp(argv[i], "--tls") == 0) {
@@ -228,6 +295,7 @@ int RunServeRpc(int argc, char** argv) {
       tls_key_file = need("--tls-key");
     } else if (std::strcmp(argv[i], "--tls-ca") == 0) {
       tls_ca_file = need("--tls-ca");
+      port_set = true;
     } else {
       std::fprintf(stderr, "error: unknown argument: %s\n", argv[i]);
       PrintUsage(argv[0]);
@@ -235,15 +303,53 @@ int RunServeRpc(int argc, char** argv) {
     }
   }
 
+  aster::cli::TomlConfig toml_cfg;
+  bool have_toml = false;
+  if (config_path != nullptr) {
+    auto cfg = aster::cli::LoadTomlConfigFile(config_path);
+    if (!cfg.ok()) {
+      std::fprintf(stderr, "error: config load failed: %s\n",
+                   cfg.status().message().c_str());
+      return 2;
+    }
+    have_toml = true;
+    toml_cfg = cfg.value();
+    // CLI overrides TOML for host/port/data_dir.
+    if (!host_set && toml_cfg.server.host.has_value()) {
+      host = *toml_cfg.server.host;
+    }
+    if (!port_set && toml_cfg.server.port.has_value()) {
+      port = *toml_cfg.server.port;
+    }
+    if (!data_dir_set && toml_cfg.catalog.data_dir.has_value()) {
+      data_dir = *toml_cfg.catalog.data_dir;
+    }
+  }
+
   if (data_dir.empty()) {
     std::fprintf(stderr,
-                 "error: serve-rpc requires --data-dir or ASTER_DATA_DIR\n");
+                 "error: serve-rpc requires --data-dir or ASTER_DATA_DIR (or catalog.data_dir in --config)\n");
     return 2;
   }
 
   aster::Catalog::Options opt;
   opt.data_dir = data_dir;
-  opt.wal_sync = aster::SyncPolicy::kEveryMs;
+  if (have_toml) {
+    if (toml_cfg.catalog.wal_sync.has_value()) {
+      opt.wal_sync = *toml_cfg.catalog.wal_sync;
+    }
+    if (toml_cfg.catalog.memtable_flush_bytes.has_value()) {
+      opt.memtable_flush_bytes = *toml_cfg.catalog.memtable_flush_bytes;
+    }
+    if (toml_cfg.catalog.compaction_tier_threshold.has_value()) {
+      opt.compaction_tier_threshold =
+          *toml_cfg.catalog.compaction_tier_threshold;
+    }
+    if (toml_cfg.catalog.max_segments_before_compact.has_value()) {
+      opt.max_segments_before_compact =
+          *toml_cfg.catalog.max_segments_before_compact;
+    }
+  }
   auto catalog = aster::Catalog::Open(opt);
   if (!catalog.ok()) {
     std::fprintf(stderr, "error: catalog open failed: %s\n",

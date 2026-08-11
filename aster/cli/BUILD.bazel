@@ -13,6 +13,35 @@ cc_binary(
         "//aster/db",
         "//aster/distributed",
         "//aster/rpc:thrift_server",
+        ":toml_config_loader",
         "//aster/server",
+    ],
+)
+
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_cc//cc:cc_test.bzl", "cc_test")
+
+cc_library(
+    name = "toml_config_loader",
+    srcs = ["toml_config_loader.cc"],
+    hdrs = ["toml_config_loader.h"],
+    deps = [
+        "//aster/core",
+        "//aster/rpc:thrift_server",
+        "//aster/server",
+    ],
+)
+
+cc_test(
+    name = "config_loader_test",
+    size = "small",
+    srcs = ["config_loader_test.cc"],
+    target_compatible_with = select({
+        "//platforms:is_baremetal": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    }),
+    deps = [
+        ":toml_config_loader",
+        "@googletest//:gtest_main",
     ],
 )

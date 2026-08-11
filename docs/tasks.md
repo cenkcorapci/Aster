@@ -133,7 +133,7 @@ Status updates happen in this file (see start-the-tasks.md § Claiming).
 | M4-T02 | done | rpc | M4-T01, M2-T04 | Framed-TCP Thrift server implementing Aster service | `aster/rpc/`, `aster/cli/` | Integration: upsert/get/search over localhost |
 | M4-T03 | done | rpc | M4-T02 | Optional TLS transport | `aster/rpc/` | TLS accept + insecure still works |
 | M4-T04 | done | rpc | M4-T02 | Collection create/drop/configure API | `aster/db/`, `aster/rpc/` | Matches `client-api.md` lifecycle states |
-| M4-T05 | open | rpc | M4-T02 | TOML config loader for server | `aster/cli/`, config schema | Documented knobs load; bad config → clear error |
+| M4-T05 | done | rpc | M4-T02 | TOML config loader for server | `aster/cli/`, `docs/server-config.md` | `--config` loads knobs; `bazel test //aster/cli:config_loader_test` green; bad config → line-numbered error |
 | M4-T06 | done | obs | M0 | Prometheus `/metrics` endpoint (real counters/histograms) | `aster/metrics/` | scrapeable; key latency metrics present |
 | M4-T07 | done | obs | M4-T06 | Grafana dashboard JSON shipped in repo | `deploy/sim-grafana/` | Import works against local Prometheus (`grafana/dashboards/aster-sim.json`) |
 | M4-T08 | done | release | M4-T02 | Static Docker image (<15 MB) | `deploy/docker/`, `scripts/docker-build.sh` | BusyBox musl demo image builds (~3.6 MB); RPC serve still needs M4-T02 |
