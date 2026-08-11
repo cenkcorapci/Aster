@@ -7,6 +7,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <queue>
@@ -200,7 +201,66 @@ bool IsSegmentFileName(const std::string& name) {
 
 }  // namespace
 
-Db::Db(Options options) : options_(std::move(options)) {}
+Db::Db(Options options) : Db(std::move(options), DeferFlushThread{}) {
+  StartFlushThread();
+}
+
+Db::Db(Options options, DeferFlushThread) : options_(std::move(options)) {}
+
+Db::~Db() { StopFlushThread(); }
+
+void Db::StartFlushThread() {
+  stop_flush_thread_ = false;
+  flush_thread_ = std::thread([this] { BackgroundFlushLoop(); });
+}
+
+void Db::StopFlushThread() {
+  {
+    std::lock_guard lock(mu_);
+    stop_flush_thread_ = true;
+  }
+  flush_cv_.notify_all();
+  if (flush_thread_.joinable()) flush_thread_.join();
+}
+
+bool Db::ShouldFlushLocked() const {
+  if (memtable_.empty()) return false;
+  if (memtable_.approximate_bytes() >= options_.memtable_flush_bytes) {
+    return true;
+  }
+  if (options_.memtable_flush_ms == 0) return false;
+  const auto age = std::chrono::steady_clock::now() - memtable_live_since_;
+  return age >= std::chrono::milliseconds(options_.memtable_flush_ms);
+}
+
+void Db::RequestFlushLocked() {
+  flush_requested_ = true;
+  flush_cv_.notify_one();
+}
+
+void Db::BackgroundFlushLoop() {
+  std::unique_lock lock(mu_);
+  while (!stop_flush_thread_) {
+    if (options_.memtable_flush_ms > 0) {
+      flush_cv_.wait_for(lock,
+                         std::chrono::milliseconds(options_.memtable_flush_ms),
+                         [this] {
+                           return stop_flush_thread_ || flush_requested_ ||
+                                  ShouldFlushLocked();
+                         });
+    } else {
+      flush_cv_.wait(lock, [this] {
+        return stop_flush_thread_ || flush_requested_ || ShouldFlushLocked();
+      });
+    }
+    if (stop_flush_thread_) break;
+    flush_requested_ = false;
+    if (!ShouldFlushLocked()) continue;
+    // FlushLocked may compact; keep holding mu_ so readers/writers stay
+    // consistent with the sealed memtable and segment list.
+    (void)FlushLocked();
+  }
+}
 
 std::string Db::SegmentPath(uint64_t id) const {
   char buf[64];
@@ -256,7 +316,8 @@ Result<std::unique_ptr<Db>> Db::Open(Options options) {
   }
   if (auto st = EnsureDir(options.data_dir); !st.ok()) return st;
 
-  auto db = std::make_unique<Db>(options);
+  // Load without the background flusher racing against recovery.
+  auto db = std::unique_ptr<Db>(new Db(std::move(options), DeferFlushThread{}));
 
   const std::string manifest_path = db->ManifestPath();
   if (FileExists(manifest_path)) {
@@ -266,14 +327,12 @@ Result<std::unique_ptr<Db>> Db::Open(Options options) {
     for (const auto& entry : manifest.value().segments) {
       const std::string path =
           entry.path.empty() ? db->SegmentPath(entry.segment_id)
-                             : JoinPath(options.data_dir, entry.path);
+                             : JoinPath(db->options_.data_dir, entry.path);
       auto reader = SstableReader::Open(path);
       if (!reader.ok()) return reader.status();
-      // TakeAll moves vectors out of the reader so Open does not hold two
-      // full copies of every float while building the segment index.
       auto rows = reader.value()->TakeAll();
-      db->segments_.push_back(
-          Segment::Build(entry.segment_id, options.metric, std::move(rows)));
+      db->segments_.push_back(Segment::Build(
+          entry.segment_id, db->options_.metric, std::move(rows)));
       db->next_segment_id_ =
           std::max(db->next_segment_id_, entry.segment_id + 1);
     }
@@ -289,14 +348,16 @@ Result<std::unique_ptr<Db>> Db::Open(Options options) {
       db->memtable_.Apply(std::move(row.value()));
     }
   }
+  if (!db->memtable_.empty()) {
+    db->memtable_live_since_ = std::chrono::steady_clock::now();
+  }
 
-  auto wal = WalWriter::Open(db->WalPath(), options.wal_sync);
+  auto wal = WalWriter::Open(db->WalPath(), db->options_.wal_sync);
   if (!wal.ok()) return wal.status();
   db->wal_ = std::move(wal.value());
 
-  // Drop SSTables / tmp files not referenced by the live manifest. Crashed
-  // flushes and compactions otherwise leave unbounded orphan disk usage.
   db->GarbageCollectOrphans();
+  db->StartFlushThread();
   return db;
 }
 
@@ -318,14 +379,19 @@ Status Db::PublishManifest() {
 }
 
 Status Db::Upsert(Row row) {
+  std::lock_guard lock(mu_);
   if (options_.dimension != 0 && !row.tombstone &&
       row.vector.size() != options_.dimension) {
     return Status::InvalidArgument("vector dimension mismatch");
   }
   if (auto st = AppendWal(row); !st.ok()) return st;
+  const bool was_empty = memtable_.empty();
   memtable_.Apply(std::move(row));
-  if (memtable_.approximate_bytes() >= options_.memtable_flush_bytes) {
-    return Flush();
+  if (was_empty) {
+    memtable_live_since_ = std::chrono::steady_clock::now();
+  }
+  if (ShouldFlushLocked()) {
+    RequestFlushLocked();
   }
   return Status::Ok();
 }
@@ -358,12 +424,14 @@ Row Db::Reconcile(const RowId& id) const {
 }
 
 std::optional<Row> Db::Get(const RowId& id) const {
+  std::lock_guard lock(mu_);
   Row row = Reconcile(id);
   if (row.tombstone) return std::nullopt;
   return row;
 }
 
 std::vector<SearchHit> Db::Search(const SearchRequest& request) const {
+  std::lock_guard lock(mu_);
   const uint32_t fetch_k = request.top_k * 2 + 16;
   std::vector<std::vector<SearchHit>> candidates;
   candidates.reserve(1 + segments_.size());
@@ -382,8 +450,6 @@ std::vector<SearchHit> Db::Search(const SearchRequest& request) const {
     const Row row = Reconcile(hit.id);
     if (row.tombstone) continue;
     if (!request.tags.empty() && !HasAllTags(row, request.tags)) continue;
-    // Re-score against the LWW-reconciled vector (memtable may supersede a
-    // segment hit for the same id).
     results.push_back(
         {hit.id, Score(options_.metric, request.vector, row.vector)});
   }
@@ -395,6 +461,11 @@ std::vector<SearchHit> Db::Search(const SearchRequest& request) const {
 }
 
 Status Db::Flush() {
+  std::lock_guard lock(mu_);
+  return FlushLocked();
+}
+
+Status Db::FlushLocked() {
   if (memtable_.empty()) return Status::Ok();
   const uint64_t id = next_segment_id_++;
   auto rows = std::make_shared<std::vector<Row>>(memtable_.Take());
@@ -403,8 +474,6 @@ Status Db::Flush() {
   if (!options_.data_dir.empty()) {
     if (auto st = WriteSstable(SegmentPath(id), id, options_.metric, *rows);
         !st.ok()) {
-      // Memtable was already sealed; restore so in-process reads still work.
-      // WAL is intact, so a reopen would recover the same rows.
       for (Row& row : *rows) memtable_.Apply(std::move(row));
       --next_segment_id_;
       return st;
@@ -427,22 +496,21 @@ Status Db::MaybeCompact() {
   if (segments_.size() < options_.max_segments_before_compact) {
     return Status::Ok();
   }
-  return Compact();
+  return CompactLocked();
 }
 
 Status Db::Compact() {
-  // Full compaction covers every on-disk segment, so tombstones may be
-  // dropped (tla/AsterLsmIndex.tla NoResurrection). A single segment still
-  // needs a rewrite when it contains tombstones — otherwise deleted rows
-  // retain id-index / metadata forever.
+  std::lock_guard lock(mu_);
+  return CompactLocked();
+}
+
+Status Db::CompactLocked() {
   if (segments_.empty()) return Status::Ok();
   if (segments_.size() < 2 && !SegmentHasTombstone(segments_)) {
     return Status::Ok();
   }
   const uint64_t id = next_segment_id_++;
 
-  // Collect old SSTable paths before clearing segments so we can remove them
-  // after the compacted segment is safely committed to the manifest.
   std::vector<std::string> old_paths;
   if (!options_.data_dir.empty()) {
     old_paths.reserve(segments_.size());
@@ -455,8 +523,6 @@ Status Db::Compact() {
                                    /*drop_tombstones=*/true);
 
   if (compacted->row_count() == 0) {
-    // Nothing live left — drop all segment files instead of writing an empty
-    // SSTable that would still cost prelude/footer bytes.
     segments_.clear();
     if (!options_.data_dir.empty()) {
       if (auto st = PublishManifest(); !st.ok()) return st;
@@ -479,9 +545,6 @@ Status Db::Compact() {
   segments_.push_back(std::move(compacted));
   if (!options_.data_dir.empty()) {
     if (auto st = PublishManifest(); !st.ok()) return st;
-    // Remove the now-superseded SSTable files. Deletion is best-effort:
-    // a leftover file on disk is harmless after Open GC, but failing to
-    // remove it would cause unbounded disk growth across many compactions.
     for (const auto& path : old_paths) {
       ::remove(path.c_str());
     }
@@ -490,7 +553,18 @@ Status Db::Compact() {
   return Status::Ok();
 }
 
+size_t Db::segment_count() const {
+  std::lock_guard lock(mu_);
+  return segments_.size();
+}
+
+size_t Db::memtable_rows() const {
+  std::lock_guard lock(mu_);
+  return memtable_.row_count();
+}
+
 size_t Db::approximate_row_count() const {
+  std::lock_guard lock(mu_);
   size_t n = memtable_.row_count();
   for (const auto& segment : segments_) n += segment->row_count();
   return n;

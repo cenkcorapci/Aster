@@ -1,8 +1,10 @@
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <cstdio>
 #include <set>
 #include <string>
+#include <thread>
 #include <unistd.h>
 #include <vector>
 
@@ -176,9 +178,28 @@ TEST(Db, AutoFlushOnMemtableSize) {
   options.memtable_flush_bytes = 64;  // tiny threshold
   Db db(options);
   ASSERT_TRUE(db.Upsert(MakeRow("a", {1.0f, 0.0f}, 1)).ok());
-  // One modest row should exceed 64 bytes accounting and flush.
+  // Background flush thread should seal without an explicit Flush().
+  for (int i = 0; i < 200 && db.segment_count() < 1; ++i) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
   EXPECT_GE(db.segment_count(), 1u);
   EXPECT_EQ(db.memtable_rows(), 0u);
+  EXPECT_TRUE(db.Get("a").has_value());
+}
+
+TEST(Db, AutoFlushOnMemtableAge) {
+  Db::Options options = SmallDb();
+  options.memtable_flush_bytes = 1u << 30;  // size trigger off
+  options.memtable_flush_ms = 50;
+  Db db(options);
+  ASSERT_TRUE(db.Upsert(MakeRow("aged", {0.0f, 1.0f}, 1)).ok());
+  EXPECT_EQ(db.segment_count(), 0u);
+  for (int i = 0; i < 200 && db.segment_count() < 1; ++i) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  EXPECT_GE(db.segment_count(), 1u);
+  EXPECT_EQ(db.memtable_rows(), 0u);
+  EXPECT_TRUE(db.Get("aged").has_value());
 }
 
 TEST(Db, MissingGetAndEmptySearch) {

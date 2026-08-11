@@ -1,9 +1,13 @@
 #pragma once
 
+#include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "aster/core/status.h"
@@ -20,12 +24,17 @@ namespace aster {
 // When Options::data_dir is set, Flush persists SSTables + a manifest and
 // Upsert/Delete append to a WAL so Open() can recover after a crash
 // (tla/AsterLsmIndex.tla WalTruncationSafe / SearchCompleteness).
+//
+// A background thread flushes the memtable when size (memtable_flush_bytes)
+// and/or time (memtable_flush_ms) triggers are hit.
 class Db {
  public:
   struct Options {
     uint32_t dimension = 0;
     Metric metric = Metric::kCosine;
     size_t memtable_flush_bytes = 64 << 20;
+    // Periodic flush while the memtable is non-empty. 0 disables the timer.
+    uint64_t memtable_flush_ms = 0;
     std::string data_dir;  // empty = in-memory only
     SyncPolicy wal_sync = SyncPolicy::kAlways;
     // After Flush, compact when the segment count reaches this (keeps RAM
@@ -34,6 +43,10 @@ class Db {
   };
 
   explicit Db(Options options);
+  ~Db();
+
+  Db(const Db&) = delete;
+  Db& operator=(const Db&) = delete;
 
   // Opens (or creates) a durable database under options.data_dir.
   // Requires non-empty data_dir. Loads manifest segments and replays WAL.
@@ -54,13 +67,24 @@ class Db {
   // removes all SSTables when nothing live remains.
   Status Compact();
 
-  size_t segment_count() const { return segments_.size(); }
-  size_t memtable_rows() const { return memtable_.row_count(); }
+  size_t segment_count() const;
+  size_t memtable_rows() const;
   // Memtable + all segment rows (includes tombstones until compacted).
   size_t approximate_row_count() const;
   const std::string& data_dir() const { return options_.data_dir; }
 
  private:
+  struct DeferFlushThread {};
+  Db(Options options, DeferFlushThread);
+
+  void StartFlushThread();
+  void StopFlushThread();
+  void BackgroundFlushLoop();
+  bool ShouldFlushLocked() const;
+  void RequestFlushLocked();
+  Status FlushLocked();
+  Status CompactLocked();
+
   Row Reconcile(const RowId& id) const;
   Status AppendWal(const Row& row);
   Status PublishManifest();
@@ -77,6 +101,13 @@ class Db {
   uint64_t next_segment_id_ = 1;
   uint64_t manifest_generation_ = 0;
   std::optional<WalWriter> wal_;
+
+  mutable std::mutex mu_;
+  std::condition_variable flush_cv_;
+  std::thread flush_thread_;
+  bool stop_flush_thread_ = false;
+  bool flush_requested_ = false;
+  std::chrono::steady_clock::time_point memtable_live_since_{};
 };
 
 }  // namespace aster
