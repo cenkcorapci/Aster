@@ -631,9 +631,9 @@ uint32_t Aster_upsert_args::read(::apache::thrift::protocol::TProtocol* iprot) {
         break;
       case 3:
         if (ftype == ::apache::thrift::protocol::T_I32) {
-          int32_t ecast38;
-          xfer += iprot->readI32(ecast38);
-          this->consistency = static_cast<ConsistencyLevel::type>(ecast38);
+          int32_t ecast39;
+          xfer += iprot->readI32(ecast39);
+          this->consistency = static_cast<ConsistencyLevel::type>(ecast39);
           this->__isset.consistency = true;
         } else {
           xfer += iprot->skip(ftype);
@@ -859,9 +859,9 @@ uint32_t Aster_get_args::read(::apache::thrift::protocol::TProtocol* iprot) {
         break;
       case 3:
         if (ftype == ::apache::thrift::protocol::T_I32) {
-          int32_t ecast39;
-          xfer += iprot->readI32(ecast39);
-          this->consistency = static_cast<ConsistencyLevel::type>(ecast39);
+          int32_t ecast40;
+          xfer += iprot->readI32(ecast40);
+          this->consistency = static_cast<ConsistencyLevel::type>(ecast40);
           this->__isset.consistency = true;
         } else {
           xfer += iprot->skip(ftype);
@@ -1107,9 +1107,9 @@ uint32_t Aster_remove_args::read(::apache::thrift::protocol::TProtocol* iprot) {
         break;
       case 3:
         if (ftype == ::apache::thrift::protocol::T_I32) {
-          int32_t ecast40;
-          xfer += iprot->readI32(ecast40);
-          this->consistency = static_cast<ConsistencyLevel::type>(ecast40);
+          int32_t ecast41;
+          xfer += iprot->readI32(ecast41);
+          this->consistency = static_cast<ConsistencyLevel::type>(ecast41);
           this->__isset.consistency = true;
         } else {
           xfer += iprot->skip(ftype);

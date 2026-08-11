@@ -43,6 +43,7 @@
 #include "aster/core/status.h"
 #include "aster/core/types.h"
 #include "aster/core/version.h"
+#include "aster/db/storage_mode.h"
 #include "aster/storage/memtable.h"
 #include "aster/storage/segment.h"
 #include "aster/storage/wal.h"
@@ -52,6 +53,8 @@
 #endif
 
 namespace aster {
+
+class S3Storage;
 
 // Single-node, single-collection engine: memtable + immutable indexed
 // segments, searched together and merged (LSM-style, docs/design.md).
@@ -91,6 +94,12 @@ class Db {
     // Upsert/Delete that would exceed the budget return ResourceExhausted
     // after attempting a flush to reclaim the memtable.
     size_t memory_budget_bytes = 0;
+    // HOT / WARM / COLD cache layout (docs/client-api.md). Safe to change
+    // online via SetStorageMode(). Default HOT keeps the historical local path.
+    StorageMode storage_mode = StorageMode::kHot;
+    // Optional S3-compatible object store used by WARM/COLD mirroring and
+    // HNSW upper-layer pins. Required when storage_mode != HOT.
+    std::shared_ptr<S3Storage> object_store;
 #if ASTER_ENABLE_HNSW
     // Background PENDING→BUILDING→READY HNSW builds (docs/indexing.md §4.3).
     // When false, Flush still leaves segments PENDING (exact search) until
@@ -170,6 +179,13 @@ class Db {
   // for callers that want READY before returning from Flush-heavy workloads.
   Status BuildPendingIndexes();
 
+  // Current storage cache mode (HOT / WARM / COLD).
+  StorageMode storage_mode() const;
+  // Online mode switch (docs/client-api.md: cache mode is safe online).
+  // WARM/COLD require Options::object_store. Switching into WARM/COLD mirrors
+  // live segment/index objects and (re)pins HNSW upper layers.
+  Status SetStorageMode(StorageMode mode);
+
   // Immutable after construction; safe to read without calling other methods.
   const std::string& data_dir() const { return options_.data_dir; }
 
@@ -213,6 +229,13 @@ class Db {
   std::string HnswRelativePath(uint64_t id) const;
   std::string ManifestPath() const;
   std::string WalPath() const;
+  // Mirror a local durable object into Options::object_store (WARM/COLD).
+  Status MirrorObjectLocked(const std::string& relative_key,
+                            const std::string& absolute_path);
+  // Pin HNSW upper-layer ranges for a READY segment into the object store.
+  Status PinHnswUpperLayersLocked(uint64_t segment_id);
+  // Apply WARM/COLD side effects for every live durable segment.
+  Status ApplyObjectStorePolicyLocked();
 
   Options options_;
   Memtable memtable_;

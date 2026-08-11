@@ -107,13 +107,24 @@ Status Catalog::Load() {
     if (t1 == std::string::npos || t2 == std::string::npos) {
       return Status::Corruption("bad CATALOG line");
     }
+    const size_t t3 = line.find('\t', t2 + 1);
     CollectionInfo info;
     info.name = line.substr(0, t1);
     info.dimension =
         static_cast<uint32_t>(std::stoul(line.substr(t1 + 1, t2 - t1 - 1)));
-    auto metric = MetricFromString(line.substr(t2 + 1));
+    const std::string metric_s =
+        t3 == std::string::npos ? line.substr(t2 + 1)
+                                : line.substr(t2 + 1, t3 - t2 - 1);
+    auto metric = MetricFromString(metric_s);
     if (!metric.ok()) return metric.status();
     info.metric = metric.value();
+    if (t3 != std::string::npos) {
+      auto mode = StorageModeFromString(line.substr(t3 + 1));
+      if (!mode.has_value()) {
+        return Status::Corruption("bad CATALOG storage mode");
+      }
+      info.storage_mode = *mode;
+    }
 
     if (auto st = ValidateName(info.name); !st.ok()) return st;
     if (info.dimension > kMaxDimension) {
@@ -135,6 +146,8 @@ Status Catalog::Load() {
     db_opt.memtable_flush_bytes = options_.memtable_flush_bytes;
     db_opt.compaction_tier_threshold = options_.compaction_tier_threshold;
     db_opt.max_segments_before_compact = options_.max_segments_before_compact;
+    db_opt.storage_mode = info.storage_mode;
+    db_opt.object_store = options_.object_store;
     auto db = Db::Open(db_opt);
     if (!db.ok()) return db.status();
     infos_[info.name] = info;
@@ -151,7 +164,8 @@ Status Catalog::PersistCatalog() const {
     if (!out) return Status::IoError("cannot write CATALOG.tmp");
     for (const auto& [_, info] : infos_) {
       out << info.name << '\t' << info.dimension << '\t'
-          << MetricToString(info.metric) << '\n';
+          << MetricToString(info.metric) << '\t' << ToString(info.storage_mode)
+          << '\n';
     }
   }
   if (std::rename(tmp.c_str(), path.c_str()) != 0) {
@@ -226,6 +240,8 @@ Status Catalog::ConfigureCollection(const CollectionInfo& info) {
   db_opt.memtable_flush_bytes = options_.memtable_flush_bytes;
   db_opt.compaction_tier_threshold = options_.compaction_tier_threshold;
   db_opt.max_segments_before_compact = options_.max_segments_before_compact;
+  db_opt.storage_mode = info.storage_mode;
+  db_opt.object_store = options_.object_store;
   auto db = Db::Open(db_opt);
   if (!db.ok()) {
     // Best-effort rollback to the previous lifecycle phase.

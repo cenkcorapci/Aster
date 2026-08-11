@@ -14,10 +14,13 @@
 
 namespace aster {
 
+class S3Storage;
+
 struct CollectionInfo {
   std::string name;
   uint32_t dimension = 0;
   Metric metric = Metric::kCosine;
+  StorageMode storage_mode = StorageMode::kHot;
 };
 
 struct UsageStats {
@@ -33,7 +36,8 @@ struct UsageStats {
 
 // Multi-collection facade over aster::Db for the single-node SaaS kernel.
 // Layout under data_dir:
-//   CATALOG          — one line per collection: name\tdimension\tmetric
+//   CATALOG          — one line per collection:
+//                      name\tdimension\tmetric[\tstorage_mode]
 //   <name>/          — Db durable directory (MANIFEST, WAL, seg_*.ast)
 //
 // Db instances are shared_ptr so search/get can run without holding mu_
@@ -48,6 +52,9 @@ class Catalog {
     size_t memtable_flush_bytes = 64 << 20;
     size_t compaction_tier_threshold = 4;
     size_t max_segments_before_compact = 8;
+    // Shared object store for WARM/COLD collections (optional; required when
+    // any collection uses a non-HOT storage mode).
+    std::shared_ptr<S3Storage> object_store;
   };
 
   static Result<std::unique_ptr<Catalog>> Open(Options options);

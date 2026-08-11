@@ -45,6 +45,13 @@ enum ConsistencyLevel {
   ALL = 3,
 }
 
+// Collection storage cache mode (docs/client-api.md). Safe online switch.
+enum StorageMode {
+  HOT = 0,   // RAM + local SSD (default)
+  WARM = 1,  // Local index; mirror objects to object store
+  COLD = 2,  // Object-store primary + local HNSW upper-layer pins
+}
+
 struct VectorConfig {
   1: required i32 dimension,
   2: required DistanceMetric metric,
@@ -61,6 +68,8 @@ struct CollectionConfig {
   2: required VectorConfig vector,
   3: optional HnswConfig hnsw,
   4: optional i32 replicationFactor = 1,
+  // M8-T03: optional storage cache mode (default HOT when absent).
+  5: optional StorageMode storageMode = StorageMode.HOT,
 }
 
 struct Document {

@@ -50,6 +50,20 @@ std::ostream& operator<<(std::ostream& out, const ConsistencyLevel::type& val);
 
 std::string to_string(const ConsistencyLevel::type& val);
 
+struct StorageMode {
+  enum type {
+    HOT = 0,
+    WARM = 1,
+    COLD = 2
+  };
+};
+
+extern const std::map<int, const char*> _StorageMode_VALUES_TO_NAMES;
+
+std::ostream& operator<<(std::ostream& out, const StorageMode::type& val);
+
+std::string to_string(const StorageMode::type& val);
+
 class VectorConfig;
 
 class HnswConfig;
@@ -148,9 +162,10 @@ void swap(HnswConfig &a, HnswConfig &b) noexcept;
 std::ostream& operator<<(std::ostream& out, const HnswConfig& obj);
 
 typedef struct _CollectionConfig__isset {
-  _CollectionConfig__isset() : hnsw(false), replicationFactor(true) {}
+  _CollectionConfig__isset() : hnsw(false), replicationFactor(true), storageMode(true) {}
   bool hnsw :1;
   bool replicationFactor :1;
+  bool storageMode :1;
 } _CollectionConfig__isset;
 
 class CollectionConfig : public virtual ::apache::thrift::TBase {
@@ -165,6 +180,11 @@ class CollectionConfig : public virtual ::apache::thrift::TBase {
   VectorConfig vector;
   HnswConfig hnsw;
   int32_t replicationFactor;
+  /**
+   * 
+   * @see StorageMode
+   */
+  StorageMode::type storageMode;
 
   _CollectionConfig__isset __isset;
 
@@ -175,6 +195,8 @@ class CollectionConfig : public virtual ::apache::thrift::TBase {
   void __set_hnsw(const HnswConfig& val);
 
   void __set_replicationFactor(const int32_t val);
+
+  void __set_storageMode(const StorageMode::type val);
 
   bool operator == (const CollectionConfig & rhs) const;
   bool operator != (const CollectionConfig &rhs) const {

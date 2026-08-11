@@ -23,6 +23,7 @@ cc_library(
         "//aster/core",
         "//aster/db",
         "//aster/metrics",
+        "//aster/platform:s3",
     ],
 )
 

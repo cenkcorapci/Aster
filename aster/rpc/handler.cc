@@ -76,6 +76,21 @@ void AsterHandler::configureCollection(const CollectionConfig& config) {
   }
   info.dimension = static_cast<uint32_t>(config.vector.dimension);
   info.metric = ToMetric(config.vector.metric);
+  if (config.__isset.storageMode) {
+    switch (config.storageMode) {
+      case StorageMode::HOT:
+        info.storage_mode = aster::StorageMode::kHot;
+        break;
+      case StorageMode::WARM:
+        info.storage_mode = aster::StorageMode::kWarm;
+        break;
+      case StorageMode::COLD:
+        info.storage_mode = aster::StorageMode::kCold;
+        break;
+      default:
+        ThrowStatus(Status::InvalidArgument("unknown storage mode"));
+    }
+  }
   ThrowIfNotOk(catalog_->ConfigureCollection(info));
 }
 

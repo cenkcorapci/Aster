@@ -19,6 +19,7 @@
 #include "aster/index/distance.h"
 #include "aster/index/tags.h"
 #include "aster/index/vector_index.h"
+#include "aster/platform/s3_storage.h"
 #include "aster/query/topk.h"
 #include "aster/storage/compaction.h"
 #include "aster/storage/manifest.h"
@@ -27,7 +28,10 @@
 #if ASTER_ENABLE_HNSW
 #include "aster/index/hnsw_build.h"
 #include "aster/index/hnsw_graph.h"
+#include "aster/index/hnsw_pin.h"
 #endif
+
+#include <fstream>
 
 namespace aster {
 namespace {
@@ -263,6 +267,25 @@ bool IsHnswFileName(const std::string& name) {
   // seg_NNNNNN.hnsw or leftover .hnsw.tmp
   if (name.rfind("seg_", 0) != 0) return false;
   return name.find(".hnsw") != std::string::npos;
+}
+
+Result<std::string> ReadFileBytes(const std::string& path) {
+  std::ifstream in(path, std::ios::binary);
+  if (!in) return Status::IoError("open failed: " + path);
+  std::string data((std::istreambuf_iterator<char>(in)),
+                   std::istreambuf_iterator<char>());
+  if (!in.good() && !in.eof()) {
+    return Status::IoError("read failed: " + path);
+  }
+  return data;
+}
+
+Status ValidateStorageOptions(const Db::Options& options) {
+  if (options.storage_mode != StorageMode::kHot && !options.object_store) {
+    return Status::InvalidArgument(
+        "WARM/COLD storage modes require Options::object_store");
+  }
+  return Status::Ok();
 }
 
 #if ASTER_ENABLE_HNSW
@@ -536,6 +559,7 @@ Result<std::unique_ptr<Db>> Db::Open(Options options) {
   if (options.data_dir.empty()) {
     return Status::InvalidArgument("Open requires data_dir");
   }
+  if (auto st = ValidateStorageOptions(options); !st.ok()) return st;
   if (auto st = EnsureDir(options.data_dir); !st.ok()) return st;
 
   // Load without the background flusher racing against recovery.
@@ -597,6 +621,7 @@ Result<std::unique_ptr<Db>> Db::Open(Options options) {
   db->wal_ = std::move(wal.value());
 
   db->GarbageCollectOrphans();
+  if (auto st = db->ApplyObjectStorePolicyLocked(); !st.ok()) return st;
   if (db->ShouldFlushLocked()) db->flush_requested_ = true;
   db->StartFlushThread();
   db->StartIndexThread();
@@ -732,6 +757,11 @@ std::optional<Row> Db::Get(const RowId& id) const {
 
 std::vector<SearchHit> Db::Search(const SearchRequest& request) const {
   std::lock_guard lock(mu_);
+  // COLD workers drop the LRU block cache before each search; non-evictable
+  // upper-layer pins remain (docs/indexing.md §10.3.1 / client-api.md).
+  if (ClearsBlockCacheOnSearch(options_.storage_mode) && options_.object_store) {
+    options_.object_store->ClearCache();
+  }
   const double sigma =
       EstimateFilterSelectivity(memtable_, segments_, request.tags);
   // `SearchRequest::ef_search==0` means "use the index default" (HNSW uses
@@ -794,6 +824,16 @@ Status Db::FlushLocked() {
   if (!options_.data_dir.empty()) {
     if (auto st = WriteSstable(SegmentPath(id), id, options_.metric, *rows);
         !st.ok()) {
+      for (Row& row : *rows) memtable_.Apply(std::move(row));
+      --next_segment_id_;
+      memtable_live_since_ = std::chrono::steady_clock::now();
+      return st;
+    }
+    char name[64];
+    std::snprintf(name, sizeof(name), "seg_%06llu.ast",
+                  static_cast<unsigned long long>(id));
+    if (auto st = MirrorObjectLocked(name, SegmentPath(id)); !st.ok()) {
+      ::remove(SegmentPath(id).c_str());
       for (Row& row : *rows) memtable_.Apply(std::move(row));
       --next_segment_id_;
       memtable_live_since_ = std::chrono::steady_clock::now();
@@ -904,6 +944,13 @@ Status Db::CompactSelectedLocked(const std::vector<size_t>& indices) {
         !st.ok()) {
       return st;
     }
+    char name[64];
+    std::snprintf(name, sizeof(name), "seg_%06llu.ast",
+                  static_cast<unsigned long long>(id));
+    if (auto st = MirrorObjectLocked(name, SegmentPath(id)); !st.ok()) {
+      ::remove(SegmentPath(id).c_str());
+      return st;
+    }
 #if ASTER_ENABLE_HNSW
     // Persist the rebuilt READY graph before publishing the manifest so
     // reopen sees hnsw_path (docs/indexing.md §6.2 atomic swap).
@@ -918,6 +965,18 @@ Status Db::CompactSelectedLocked(const std::vector<size_t>& indices) {
                                     compacted->rows());
           !st.ok()) {
         ::remove(SegmentPath(id).c_str());
+        return st;
+      }
+      if (auto st =
+              MirrorObjectLocked(HnswRelativePath(id), HnswPath(id));
+          !st.ok()) {
+        ::remove(SegmentPath(id).c_str());
+        ::remove(HnswPath(id).c_str());
+        return st;
+      }
+      if (auto st = PinHnswUpperLayersLocked(id); !st.ok()) {
+        ::remove(SegmentPath(id).c_str());
+        ::remove(HnswPath(id).c_str());
         return st;
       }
     }
@@ -976,6 +1035,22 @@ bool Db::BuildOneSegmentIndex(std::shared_ptr<const Segment> segment) {
                                   options_.hnsw_params, options_.hnsw_rng_seed,
                                   segment->id(), segment->rows());
         !st.ok()) {
+      std::lock_guard lock(mu_);
+      if (segment->index_state() == SegState::kBuilding) {
+        segment->AbortIndexBuild();
+      }
+      return false;
+    }
+    if (auto st = MirrorObjectLocked(HnswRelativePath(segment->id()),
+                                     HnswPath(segment->id()));
+        !st.ok()) {
+      std::lock_guard lock(mu_);
+      if (segment->index_state() == SegState::kBuilding) {
+        segment->AbortIndexBuild();
+      }
+      return false;
+    }
+    if (auto st = PinHnswUpperLayersLocked(segment->id()); !st.ok()) {
       std::lock_guard lock(mu_);
       if (segment->index_state() == SegState::kBuilding) {
         segment->AbortIndexBuild();
@@ -1082,6 +1157,93 @@ size_t Db::approximate_row_count() const {
 size_t Db::approximate_write_memory_bytes() const {
   std::lock_guard lock(mu_);
   return ApproximateWriteMemoryLocked();
+}
+
+StorageMode Db::storage_mode() const {
+  std::lock_guard lock(mu_);
+  return options_.storage_mode;
+}
+
+Status Db::SetStorageMode(StorageMode mode) {
+  std::lock_guard lock(mu_);
+  if (mode == options_.storage_mode) return Status::Ok();
+  if (mode != StorageMode::kHot && !options_.object_store) {
+    return Status::InvalidArgument(
+        "WARM/COLD storage modes require Options::object_store");
+  }
+  options_.storage_mode = mode;
+  return ApplyObjectStorePolicyLocked();
+}
+
+Status Db::MirrorObjectLocked(const std::string& relative_key,
+                              const std::string& absolute_path) {
+  if (!MirrorsToObjectStore(options_.storage_mode)) return Status::Ok();
+  if (!options_.object_store) {
+    return Status::InvalidArgument(
+        "WARM/COLD storage modes require Options::object_store");
+  }
+  auto bytes = ReadFileBytes(absolute_path);
+  if (!bytes.ok()) return bytes.status();
+  return options_.object_store->Put(relative_key, bytes.value());
+}
+
+Status Db::PinHnswUpperLayersLocked(uint64_t segment_id) {
+#if ASTER_ENABLE_HNSW
+  if (!PinsHnswUpperLayers(options_.storage_mode)) return Status::Ok();
+  if (!options_.object_store) {
+    return Status::InvalidArgument(
+        "WARM/COLD storage modes require Options::object_store");
+  }
+  const std::string rel = HnswRelativePath(segment_id);
+  const std::string abs = HnswPath(segment_id);
+  if (!FileExists(abs)) return Status::Ok();
+  auto bytes = ReadFileBytes(abs);
+  if (!bytes.ok()) return bytes.status();
+  // Ensure the object exists remotely before pinning ranges against it.
+  if (auto st = options_.object_store->Put(rel, bytes.value()); !st.ok()) {
+    return st;
+  }
+  auto pin = HnswUpperLayerPin::FromSerialized(bytes.value());
+  if (!pin.ok()) return pin.status();
+  for (const HnswPinRange& range : pin.value().PinRanges()) {
+    if (range.end <= range.start) continue;
+    if (auto st = options_.object_store->PinRange(
+            rel, range.start, range.end,
+            bytes.value().substr(range.start, range.end - range.start));
+        !st.ok()) {
+      return st;
+    }
+  }
+  return Status::Ok();
+#else
+  (void)segment_id;
+  return Status::Ok();
+#endif
+}
+
+Status Db::ApplyObjectStorePolicyLocked() {
+  if (options_.storage_mode == StorageMode::kHot) return Status::Ok();
+  if (!options_.object_store) {
+    return Status::InvalidArgument(
+        "WARM/COLD storage modes require Options::object_store");
+  }
+  if (options_.data_dir.empty()) return Status::Ok();
+
+  for (const auto& seg : segments_) {
+    char name[64];
+    std::snprintf(name, sizeof(name), "seg_%06llu.ast",
+                  static_cast<unsigned long long>(seg->id()));
+    const std::string abs = SegmentPath(seg->id());
+    if (FileExists(abs)) {
+      if (auto st = MirrorObjectLocked(name, abs); !st.ok()) return st;
+    }
+#if ASTER_ENABLE_HNSW
+    if (seg->index_state() == SegState::kReady) {
+      if (auto st = PinHnswUpperLayersLocked(seg->id()); !st.ok()) return st;
+    }
+#endif
+  }
+  return Status::Ok();
 }
 
 }  // namespace aster

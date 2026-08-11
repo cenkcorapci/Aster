@@ -54,13 +54,16 @@ Logical groups (not all on the wire yet):
 | `BALANCED` | Default |
 | `HIGH_RECALL` / `MAX_RECALL` | Larger graph / search effort |
 
-### Storage modes (planned)
+### Storage modes
 
 | Mode | Layout |
 | --- | --- |
-| HOT | RAM + SSD (+ object store) |
-| WARM | SSD + object store |
-| COLD | Object store primarily |
+| HOT | RAM + SSD (default local path; no object-store I/O) |
+| WARM | SSD + object store — searchable index stays local; segment/index objects are mirrored to S3 |
+| COLD | Object store primarily — same mirroring as WARM, plus non-evictable HNSW upper-layer pins; each search clears the S3 block cache (cold-worker model) while pins survive |
+
+Mode switch is safe online (`Db::SetStorageMode` / collection config `storageMode`).
+WARM and COLD require a configured object store on the server.
 
 ### Mutability
 

@@ -6,7 +6,10 @@ package(default_visibility = ["//visibility:public"])
 cc_library(
     name = "db",
     srcs = ["db.cc"],
-    hdrs = ["db.h"],
+    hdrs = [
+        "db.h",
+        "storage_mode.h",
+    ],
     target_compatible_with = select({
         "//platforms:is_baremetal": ["@platforms//:incompatible"],
         "//conditions:default": [],
@@ -14,6 +17,7 @@ cc_library(
     deps = [
         "//aster/core",
         "//aster/index",
+        "//aster/platform:s3",
         "//aster/query",
         "//aster/storage",
     ],
@@ -43,6 +47,23 @@ cc_test(
     }),
     deps = [
         ":db",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cc_test(
+    name = "storage_mode_test",
+    size = "small",
+    srcs = ["storage_mode_test.cc"],
+    target_compatible_with = select({
+        "//platforms:is_baremetal": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    }),
+    deps = [
+        ":db",
+        "//aster/platform:s3",
+        "//aster/platform:s3_fake",
+        "//aster/server",
         "@googletest//:gtest_main",
     ],
 )

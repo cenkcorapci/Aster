@@ -77,6 +77,37 @@ std::string to_string(const ConsistencyLevel::type& val) {
   }
 }
 
+int _kStorageModeValues[] = {
+  StorageMode::HOT,
+  StorageMode::WARM,
+  StorageMode::COLD
+};
+const char* _kStorageModeNames[] = {
+  "HOT",
+  "WARM",
+  "COLD"
+};
+const std::map<int, const char*> _StorageMode_VALUES_TO_NAMES(::apache::thrift::TEnumIterator(3, _kStorageModeValues, _kStorageModeNames), ::apache::thrift::TEnumIterator(-1, nullptr, nullptr));
+
+std::ostream& operator<<(std::ostream& out, const StorageMode::type& val) {
+  std::map<int, const char*>::const_iterator it = _StorageMode_VALUES_TO_NAMES.find(val);
+  if (it != _StorageMode_VALUES_TO_NAMES.end()) {
+    out << it->second;
+  } else {
+    out << static_cast<int>(val);
+  }
+  return out;
+}
+
+std::string to_string(const StorageMode::type& val) {
+  std::map<int, const char*>::const_iterator it = _StorageMode_VALUES_TO_NAMES.find(val);
+  if (it != _StorageMode_VALUES_TO_NAMES.end()) {
+    return std::string(it->second);
+  } else {
+    return std::to_string(static_cast<int>(val));
+  }
+}
+
 
 VectorConfig::~VectorConfig() noexcept {
 }
@@ -373,7 +404,8 @@ CollectionConfig::~CollectionConfig() noexcept {
 
 CollectionConfig::CollectionConfig() noexcept
    : name(),
-     replicationFactor(1) {
+     replicationFactor(1),
+     storageMode(static_cast<StorageMode::type>(0)) {
 }
 
 void CollectionConfig::__set_name(const std::string& val) {
@@ -392,6 +424,11 @@ __isset.hnsw = true;
 void CollectionConfig::__set_replicationFactor(const int32_t val) {
   this->replicationFactor = val;
 __isset.replicationFactor = true;
+}
+
+void CollectionConfig::__set_storageMode(const StorageMode::type val) {
+  this->storageMode = val;
+__isset.storageMode = true;
 }
 std::ostream& operator<<(std::ostream& out, const CollectionConfig& obj)
 {
@@ -455,6 +492,16 @@ uint32_t CollectionConfig::read(::apache::thrift::protocol::TProtocol* iprot) {
           xfer += iprot->skip(ftype);
         }
         break;
+      case 5:
+        if (ftype == ::apache::thrift::protocol::T_I32) {
+          int32_t ecast5;
+          xfer += iprot->readI32(ecast5);
+          this->storageMode = static_cast<StorageMode::type>(ecast5);
+          this->__isset.storageMode = true;
+        } else {
+          xfer += iprot->skip(ftype);
+        }
+        break;
       default:
         xfer += iprot->skip(ftype);
         break;
@@ -494,6 +541,11 @@ uint32_t CollectionConfig::write(::apache::thrift::protocol::TProtocol* oprot) c
     xfer += oprot->writeI32(this->replicationFactor);
     xfer += oprot->writeFieldEnd();
   }
+  if (this->__isset.storageMode) {
+    xfer += oprot->writeFieldBegin("storageMode", ::apache::thrift::protocol::T_I32, 5);
+    xfer += oprot->writeI32(static_cast<int32_t>(this->storageMode));
+    xfer += oprot->writeFieldEnd();
+  }
   xfer += oprot->writeFieldStop();
   xfer += oprot->writeStructEnd();
   return xfer;
@@ -505,6 +557,7 @@ void swap(CollectionConfig &a, CollectionConfig &b) noexcept {
   swap(a.vector, b.vector);
   swap(a.hnsw, b.hnsw);
   swap(a.replicationFactor, b.replicationFactor);
+  swap(a.storageMode, b.storageMode);
   swap(a.__isset, b.__isset);
 }
 
@@ -522,22 +575,28 @@ bool CollectionConfig::operator==(const CollectionConfig & rhs) const
     return false;
   else if (__isset.replicationFactor && !(replicationFactor == rhs.replicationFactor))
     return false;
+  if (__isset.storageMode != rhs.__isset.storageMode)
+    return false;
+  else if (__isset.storageMode && !(storageMode == rhs.storageMode))
+    return false;
   return true;
 }
 
-CollectionConfig::CollectionConfig(const CollectionConfig& other5) {
-  name = other5.name;
-  vector = other5.vector;
-  hnsw = other5.hnsw;
-  replicationFactor = other5.replicationFactor;
-  __isset = other5.__isset;
-}
-CollectionConfig& CollectionConfig::operator=(const CollectionConfig& other6) {
+CollectionConfig::CollectionConfig(const CollectionConfig& other6) {
   name = other6.name;
   vector = other6.vector;
   hnsw = other6.hnsw;
   replicationFactor = other6.replicationFactor;
+  storageMode = other6.storageMode;
   __isset = other6.__isset;
+}
+CollectionConfig& CollectionConfig::operator=(const CollectionConfig& other7) {
+  name = other7.name;
+  vector = other7.vector;
+  hnsw = other7.hnsw;
+  replicationFactor = other7.replicationFactor;
+  storageMode = other7.storageMode;
+  __isset = other7.__isset;
   return *this;
 }
 void CollectionConfig::printTo(std::ostream& out) const {
@@ -547,6 +606,7 @@ void CollectionConfig::printTo(std::ostream& out) const {
   out << ", " << "vector=" << to_string(vector);
   out << ", " << "hnsw="; (__isset.hnsw ? (out << to_string(hnsw)) : (out << "<null>"));
   out << ", " << "replicationFactor="; (__isset.replicationFactor ? (out << to_string(replicationFactor)) : (out << "<null>"));
+  out << ", " << "storageMode="; (__isset.storageMode ? (out << to_string(storageMode)) : (out << "<null>"));
   out << ")";
 }
 
@@ -641,15 +701,15 @@ uint32_t Document::read(::apache::thrift::protocol::TProtocol* iprot) {
         if (ftype == ::apache::thrift::protocol::T_SET) {
           {
             this->tags.clear();
-            uint32_t _size7;
-            ::apache::thrift::protocol::TType _etype10;
-            xfer += iprot->readSetBegin(_etype10, _size7);
-            uint32_t _i11;
-            for (_i11 = 0; _i11 < _size7; ++_i11)
+            uint32_t _size8;
+            ::apache::thrift::protocol::TType _etype11;
+            xfer += iprot->readSetBegin(_etype11, _size8);
+            uint32_t _i12;
+            for (_i12 = 0; _i12 < _size8; ++_i12)
             {
-              std::string _elem12;
-              xfer += iprot->readString(_elem12);
-              this->tags.insert(_elem12);
+              std::string _elem13;
+              xfer += iprot->readString(_elem13);
+              this->tags.insert(_elem13);
             }
             xfer += iprot->readSetEnd();
           }
@@ -704,10 +764,10 @@ uint32_t Document::write(::apache::thrift::protocol::TProtocol* oprot) const {
     xfer += oprot->writeFieldBegin("tags", ::apache::thrift::protocol::T_SET, 4);
     {
       xfer += oprot->writeSetBegin(::apache::thrift::protocol::T_STRING, static_cast<uint32_t>(this->tags.size()));
-      std::set<std::string> ::const_iterator _iter13;
-      for (_iter13 = this->tags.begin(); _iter13 != this->tags.end(); ++_iter13)
+      std::set<std::string> ::const_iterator _iter14;
+      for (_iter14 = this->tags.begin(); _iter14 != this->tags.end(); ++_iter14)
       {
-        xfer += oprot->writeString((*_iter13));
+        xfer += oprot->writeString((*_iter14));
       }
       xfer += oprot->writeSetEnd();
     }
@@ -754,21 +814,21 @@ bool Document::operator==(const Document & rhs) const
   return true;
 }
 
-Document::Document(const Document& other14) {
-  id = other14.id;
-  vector = other14.vector;
-  metadata = other14.metadata;
-  tags = other14.tags;
-  timestampMicros = other14.timestampMicros;
-  __isset = other14.__isset;
-}
-Document& Document::operator=(const Document& other15) {
+Document::Document(const Document& other15) {
   id = other15.id;
   vector = other15.vector;
   metadata = other15.metadata;
   tags = other15.tags;
   timestampMicros = other15.timestampMicros;
   __isset = other15.__isset;
+}
+Document& Document::operator=(const Document& other16) {
+  id = other16.id;
+  vector = other16.vector;
+  metadata = other16.metadata;
+  tags = other16.tags;
+  timestampMicros = other16.timestampMicros;
+  __isset = other16.__isset;
   return *this;
 }
 void Document::printTo(std::ostream& out) const {
@@ -887,15 +947,15 @@ uint32_t SearchRequest::read(::apache::thrift::protocol::TProtocol* iprot) {
         if (ftype == ::apache::thrift::protocol::T_SET) {
           {
             this->tags.clear();
-            uint32_t _size16;
-            ::apache::thrift::protocol::TType _etype19;
-            xfer += iprot->readSetBegin(_etype19, _size16);
-            uint32_t _i20;
-            for (_i20 = 0; _i20 < _size16; ++_i20)
+            uint32_t _size17;
+            ::apache::thrift::protocol::TType _etype20;
+            xfer += iprot->readSetBegin(_etype20, _size17);
+            uint32_t _i21;
+            for (_i21 = 0; _i21 < _size17; ++_i21)
             {
-              std::string _elem21;
-              xfer += iprot->readString(_elem21);
-              this->tags.insert(_elem21);
+              std::string _elem22;
+              xfer += iprot->readString(_elem22);
+              this->tags.insert(_elem22);
             }
             xfer += iprot->readSetEnd();
           }
@@ -906,9 +966,9 @@ uint32_t SearchRequest::read(::apache::thrift::protocol::TProtocol* iprot) {
         break;
       case 6:
         if (ftype == ::apache::thrift::protocol::T_I32) {
-          int32_t ecast22;
-          xfer += iprot->readI32(ecast22);
-          this->consistency = static_cast<ConsistencyLevel::type>(ecast22);
+          int32_t ecast23;
+          xfer += iprot->readI32(ecast23);
+          this->consistency = static_cast<ConsistencyLevel::type>(ecast23);
           this->__isset.consistency = true;
         } else {
           xfer += iprot->skip(ftype);
@@ -957,10 +1017,10 @@ uint32_t SearchRequest::write(::apache::thrift::protocol::TProtocol* oprot) cons
     xfer += oprot->writeFieldBegin("tags", ::apache::thrift::protocol::T_SET, 5);
     {
       xfer += oprot->writeSetBegin(::apache::thrift::protocol::T_STRING, static_cast<uint32_t>(this->tags.size()));
-      std::set<std::string> ::const_iterator _iter23;
-      for (_iter23 = this->tags.begin(); _iter23 != this->tags.end(); ++_iter23)
+      std::set<std::string> ::const_iterator _iter24;
+      for (_iter24 = this->tags.begin(); _iter24 != this->tags.end(); ++_iter24)
       {
-        xfer += oprot->writeString((*_iter23));
+        xfer += oprot->writeString((*_iter24));
       }
       xfer += oprot->writeSetEnd();
     }
@@ -1012,16 +1072,7 @@ bool SearchRequest::operator==(const SearchRequest & rhs) const
   return true;
 }
 
-SearchRequest::SearchRequest(const SearchRequest& other24) {
-  collection = other24.collection;
-  vector = other24.vector;
-  topK = other24.topK;
-  efSearch = other24.efSearch;
-  tags = other24.tags;
-  consistency = other24.consistency;
-  __isset = other24.__isset;
-}
-SearchRequest& SearchRequest::operator=(const SearchRequest& other25) {
+SearchRequest::SearchRequest(const SearchRequest& other25) {
   collection = other25.collection;
   vector = other25.vector;
   topK = other25.topK;
@@ -1029,6 +1080,15 @@ SearchRequest& SearchRequest::operator=(const SearchRequest& other25) {
   tags = other25.tags;
   consistency = other25.consistency;
   __isset = other25.__isset;
+}
+SearchRequest& SearchRequest::operator=(const SearchRequest& other26) {
+  collection = other26.collection;
+  vector = other26.vector;
+  topK = other26.topK;
+  efSearch = other26.efSearch;
+  tags = other26.tags;
+  consistency = other26.consistency;
+  __isset = other26.__isset;
   return *this;
 }
 void SearchRequest::printTo(std::ostream& out) const {
@@ -1179,17 +1239,17 @@ bool SearchHit::operator==(const SearchHit & rhs) const
   return true;
 }
 
-SearchHit::SearchHit(const SearchHit& other26) {
-  id = other26.id;
-  score = other26.score;
-  metadata = other26.metadata;
-  __isset = other26.__isset;
-}
-SearchHit& SearchHit::operator=(const SearchHit& other27) {
+SearchHit::SearchHit(const SearchHit& other27) {
   id = other27.id;
   score = other27.score;
   metadata = other27.metadata;
   __isset = other27.__isset;
+}
+SearchHit& SearchHit::operator=(const SearchHit& other28) {
+  id = other28.id;
+  score = other28.score;
+  metadata = other28.metadata;
+  __isset = other28.__isset;
   return *this;
 }
 void SearchHit::printTo(std::ostream& out) const {
@@ -1244,14 +1304,14 @@ uint32_t SearchResponse::read(::apache::thrift::protocol::TProtocol* iprot) {
         if (ftype == ::apache::thrift::protocol::T_LIST) {
           {
             this->hits.clear();
-            uint32_t _size28;
-            ::apache::thrift::protocol::TType _etype31;
-            xfer += iprot->readListBegin(_etype31, _size28);
-            this->hits.resize(_size28);
-            uint32_t _i32;
-            for (_i32 = 0; _i32 < _size28; ++_i32)
+            uint32_t _size29;
+            ::apache::thrift::protocol::TType _etype32;
+            xfer += iprot->readListBegin(_etype32, _size29);
+            this->hits.resize(_size29);
+            uint32_t _i33;
+            for (_i33 = 0; _i33 < _size29; ++_i33)
             {
-              xfer += this->hits[_i32].read(iprot);
+              xfer += this->hits[_i33].read(iprot);
             }
             xfer += iprot->readListEnd();
           }
@@ -1282,10 +1342,10 @@ uint32_t SearchResponse::write(::apache::thrift::protocol::TProtocol* oprot) con
   xfer += oprot->writeFieldBegin("hits", ::apache::thrift::protocol::T_LIST, 1);
   {
     xfer += oprot->writeListBegin(::apache::thrift::protocol::T_STRUCT, static_cast<uint32_t>(this->hits.size()));
-    std::vector<SearchHit> ::const_iterator _iter33;
-    for (_iter33 = this->hits.begin(); _iter33 != this->hits.end(); ++_iter33)
+    std::vector<SearchHit> ::const_iterator _iter34;
+    for (_iter34 = this->hits.begin(); _iter34 != this->hits.end(); ++_iter34)
     {
-      xfer += (*_iter33).write(oprot);
+      xfer += (*_iter34).write(oprot);
     }
     xfer += oprot->writeListEnd();
   }
@@ -1308,11 +1368,11 @@ bool SearchResponse::operator==(const SearchResponse & rhs) const
   return true;
 }
 
-SearchResponse::SearchResponse(const SearchResponse& other34) {
-  hits = other34.hits;
-}
-SearchResponse& SearchResponse::operator=(const SearchResponse& other35) {
+SearchResponse::SearchResponse(const SearchResponse& other35) {
   hits = other35.hits;
+}
+SearchResponse& SearchResponse::operator=(const SearchResponse& other36) {
+  hits = other36.hits;
   return *this;
 }
 void SearchResponse::printTo(std::ostream& out) const {
@@ -1433,13 +1493,13 @@ bool AsterError::operator==(const AsterError & rhs) const
   return true;
 }
 
-AsterError::AsterError(const AsterError& other36) : TException() {
-  code = other36.code;
-  message = other36.message;
-}
-AsterError& AsterError::operator=(const AsterError& other37) {
+AsterError::AsterError(const AsterError& other37) : TException() {
   code = other37.code;
   message = other37.message;
+}
+AsterError& AsterError::operator=(const AsterError& other38) {
+  code = other38.code;
+  message = other38.message;
   return *this;
 }
 void AsterError::printTo(std::ostream& out) const {
