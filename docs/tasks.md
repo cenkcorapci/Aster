@@ -135,7 +135,7 @@ Status updates happen in this file (see start-the-tasks.md § Claiming).
 | M4-T04 | open | rpc | M4-T02 | Collection create/drop/configure API | `aster/db/`, `aster/rpc/` | Matches `client-api.md` lifecycle states |
 | M4-T05 | open | rpc | M4-T02 | TOML config loader for server | `aster/cli/`, config schema | Documented knobs load; bad config → clear error |
 | M4-T06 | done | obs | M0 | Prometheus `/metrics` endpoint (real counters/histograms) | `aster/metrics/` | scrapeable; key latency metrics present |
-| M4-T07 | open | obs | M4-T06 | Grafana dashboard JSON shipped in repo | `deploy/` or `docs/` | Import works against local Prometheus |
+| M4-T07 | done | obs | M4-T06 | Grafana dashboard JSON shipped in repo | `deploy/sim-grafana/` | Import works against local Prometheus (`grafana/dashboards/aster-sim.json`) |
 | M4-T08 | done | release | M4-T02 | Static Docker image (<15 MB) | `deploy/docker/`, `scripts/docker-build.sh` | BusyBox musl demo image builds (~3.6 MB); RPC serve still needs M4-T02 |
 
 
