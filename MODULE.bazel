@@ -19,6 +19,87 @@ bazel_dep(name = "lz4", version = "1.10.0.bcr.1")
 bazel_dep(name = "zstd", version = "1.5.7.bcr.1")
 bazel_dep(name = "googletest", version = "1.17.0.bcr.2", dev_dependency = True)
 
+# Apache Thrift C++ runtime (minimal subset; see third_party/thrift.BUILD).
+# Compiler codegen is not hermetic yet — C++ stubs are checked in under
+# aster/rpc/gen-cpp/ and refreshed via scripts/regen-thrift-cpp.sh.
+http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
+http_archive(
+    name = "apache_thrift",
+    build_file = "//third_party:thrift.BUILD",
+    patch_cmds = [
+        """cat > lib/cpp/src/thrift/config.h << 'EOF'
+/* Minimal config.h for Aster's Bazel thrift runtime (POSIX hosts). */
+#ifndef CONFIG_H
+#define CONFIG_H
+#define PACKAGE "thrift"
+#define PACKAGE_NAME "thrift"
+#define PACKAGE_TARNAME "thrift"
+#define PACKAGE_VERSION "0.24.0"
+#define PACKAGE_STRING "thrift 0.24.0"
+#define PACKAGE_BUGREPORT ""
+#define PACKAGE_URL ""
+#define ARITHMETIC_RIGHT_SHIFT 1
+#define SIGNED_RIGHT_SHIFT_IS 1
+#define HAVE_INTTYPES_H 1
+#define HAVE_NETINET_IN_H 1
+#define HAVE_SYS_SOCKET_H 1
+#define HAVE_NETDB_H 1
+#define HAVE_UNISTD_H 1
+#define HAVE_FCNTL_H 1
+#define HAVE_STRERROR_R 1
+#define HAVE_CLOCK_GETTIME 1
+#define HAVE_CXX11 1
+#endif /* CONFIG_H */
+EOF
+""",
+        # Upstream TUuid.cpp pulls Boost.UUID; Aster IDL does not use UUID.
+        # Provide a boost-free implementation so the C++ runtime stays lean.
+        """cat > lib/cpp/src/thrift/TUuid.cpp << 'EOF'
+#include <thrift/TUuid.h>
+#include <cstdio>
+#include <cstring>
+
+namespace apache {
+namespace thrift {
+
+TUuid::TUuid(const std::string& /*str*/) noexcept {
+  // Leave nil UUID; string parsing requires Boost in upstream.
+}
+
+bool TUuid::is_nil() const noexcept {
+  for (size_t i = 0; i < size(); ++i) {
+    if (data_[i] != 0) {
+      return false;
+    }
+  }
+  return true;
+}
+
+std::string to_string(const TUuid& uuid) noexcept(false) {
+  char buf[37];
+  const uint8_t* d = uuid.data();
+  std::snprintf(
+      buf,
+      sizeof(buf),
+      "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+      d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7],
+      d[8], d[9], d[10], d[11], d[12], d[13], d[14], d[15]);
+  return std::string(buf);
+}
+
+}  // namespace thrift
+}  // namespace apache
+EOF
+""",
+    ],
+    sha256 = "d3a60676b1df3fb9850f6ce1e8a3df9a0efac036ceb4bce8ce46ee3eca735d2d",
+    strip_prefix = "thrift-0.24.0",
+    urls = [
+        "https://github.com/apache/thrift/archive/refs/tags/v0.24.0.tar.gz",
+    ],
+)
+
 # Fully-static musl Linux toolchain for BusyBox / scratch container images.
 # Gated behind //platforms:musl_static so host builds are unaffected.
 bazel_dep(name = "toolchains_musl", version = "0.1.27.bcr.1")

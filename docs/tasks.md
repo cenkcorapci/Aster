@@ -129,7 +129,7 @@ Status updates happen in this file (see start-the-tasks.md § Claiming).
 
 | ID | Status | Lane | Depends | Title | Touch | Done when |
 | --- | --- | --- | --- | --- | --- | --- |
-| M4-T01 | open | rpc | M3-T01, M0-T06 | Thrift codegen in Bazel for C++ server stubs | `aster/rpc/`, `MODULE.bazel` | Generated types build; service interface compiles |
+| M4-T01 | done | rpc | M3-T01, M0-T06 | Thrift codegen in Bazel for C++ server stubs | `aster/rpc/`, `MODULE.bazel` | Generated types build; service interface compiles |
 | M4-T02 | open | rpc | M4-T01, M2-T04 | Framed-TCP Thrift server implementing Aster service | `aster/rpc/`, `aster/cli/` | Integration: upsert/get/search over localhost |
 | M4-T03 | open | rpc | M4-T02 | Optional TLS transport | `aster/rpc/` | TLS accept + insecure still works |
 | M4-T04 | open | rpc | M4-T02 | Collection create/drop/configure API | `aster/db/`, `aster/rpc/` | Matches `client-api.md` lifecycle states |

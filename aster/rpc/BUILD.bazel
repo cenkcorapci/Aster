@@ -1,9 +1,73 @@
-# Thrift code generation is wired in milestone M5 (docs/development-plan.md).
-# Until then the IDL is exported so client packages can reference it.
+# Thrift IDL + checked-in C++ stubs (M4-T01).
+#
+# Stubs under gen-cpp/ are produced by scripts/regen-thrift-cpp.sh from
+# aster.thrift. They are checked in so builds stay hermetic without a Thrift
+# compiler toolchain in Bazel; regenerate when the IDL changes.
+#
+# Runtime: @apache_thrift//:thrift (minimal C++ library via MODULE.bazel).
+
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_cc//cc:cc_test.bzl", "cc_test")
 
 package(default_visibility = ["//visibility:public"])
 
 filegroup(
     name = "thrift_idl",
     srcs = ["aster.thrift"],
+)
+
+# Manual regen helper for local developers with thrift on PATH.
+# Prefer scripts/regen-thrift-cpp.sh; this genrule documents the same command.
+genrule(
+    name = "regen_cpp_stubs",
+    srcs = ["aster.thrift"],
+    outs = [
+        "regen/aster_types.h",
+        "regen/aster_types.cpp",
+        "regen/Aster.h",
+        "regen/Aster.cpp",
+    ],
+    cmd = """
+set -euo pipefail
+if ! command -v thrift >/dev/null 2>&1; then
+  echo "thrift compiler required on PATH to regenerate stubs" >&2
+  exit 1
+fi
+TMP="$$(mktemp -d)"
+thrift --gen cpp:no_skeleton -out "$$TMP" $(location aster.thrift)
+cp "$$TMP/aster_types.h" $(location regen/aster_types.h)
+cp "$$TMP/aster_types.cpp" $(location regen/aster_types.cpp)
+cp "$$TMP/Aster.h" $(location regen/Aster.h)
+cp "$$TMP/Aster.cpp" $(location regen/Aster.cpp)
+""",
+    tags = ["manual"],
+)
+
+cc_library(
+    name = "rpc_types",
+    srcs = ["gen-cpp/aster_types.cpp"],
+    hdrs = ["gen-cpp/aster_types.h"],
+    includes = ["gen-cpp"],
+    deps = ["@apache_thrift//:thrift"],
+)
+
+cc_library(
+    name = "rpc",
+    srcs = ["gen-cpp/Aster.cpp"],
+    hdrs = ["gen-cpp/Aster.h"],
+    includes = ["gen-cpp"],
+    deps = [
+        ":rpc_types",
+        "@apache_thrift//:thrift",
+    ],
+)
+
+cc_test(
+    name = "rpc_compile_test",
+    size = "small",
+    srcs = ["rpc_compile_test.cc"],
+    deps = [
+        ":rpc",
+        "@googletest//:gtest_main",
+    ],
 )

@@ -1,0 +1,5 @@
+# Files referenced from MODULE.bazel (e.g. thrift.BUILD for @apache_thrift).
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["thrift.BUILD"])

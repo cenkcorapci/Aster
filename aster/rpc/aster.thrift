@@ -2,9 +2,9 @@
  * Aster wire protocol (Apache Thrift IDL).
  *
  * This file is the single source of truth for every client library in
- * //clients/... — generated code is produced by Bazel at build time
- * (milestone M5, docs/development-plan.md). Transport is framed TCP with
- * optional TLS.
+ * //clients/... — C++ stubs live in gen-cpp/ (see scripts/regen-thrift-cpp.sh;
+ * M4-T01). Per-language client codegen is milestone M5. Transport is framed
+ * TCP with optional TLS.
  */
 
 namespace cpp aster.rpc
