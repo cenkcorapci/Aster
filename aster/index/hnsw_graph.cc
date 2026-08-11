@@ -211,38 +211,38 @@ std::string HnswGraph::Serialize() const {
     }
   }
 
+  std::string header;
+  header.reserve(kHeaderBytes);
+  AppendU32(header, kMagic);
+  AppendU16(header, kFormatVersion);
+  AppendU16(header, kHeaderBytes);
+  AppendU32(header, 0);  // flags
+  AppendU32(header, params_.m);
+  AppendU32(header, HnswLayer0MaxDegree(params_));
+  AppendU32(header, params_.ef_construction);
+  AppendU32(header, params_.ef_search_default);
+  AppendU32(header, params_.max_layers);
+  AppendU32(header, entry_point_);
+  AppendU32(header, node_count());
+  AppendU16(header, max_level_);
+  AppendU16(header, 0);  // reserved0
+  AppendU64(header, segment_id_);
+  AppendU32(header, static_cast<uint32_t>(body.size()));
+  AppendU32(header, 0);  // reserved1
+  while (header.size() < 60) AppendU8(header, 0);
+  header.resize(60);
+  AppendU32(header, Crc32Local(header.data(), 60));
+
   std::string out;
-  out.reserve(static_cast<size_t>(kHeaderBytes) + body.size() + kFooterBytes);
-
-  // Fixed 64-byte header (CRC covers [0, 60)).
-  AppendU32(out, kMagic);
-  AppendU16(out, kFormatVersion);
-  AppendU16(out, kHeaderBytes);
-  AppendU32(out, 0);  // flags
-  AppendU32(out, params_.m);
-  AppendU32(out, HnswLayer0MaxDegree(params_));
-  AppendU32(out, params_.ef_construction);
-  AppendU32(out, params_.ef_search_default);
-  AppendU32(out, params_.max_layers);
-  AppendU32(out, entry_point_);
-  AppendU32(out, node_count());
-  AppendU16(out, max_level_);
-  AppendU16(out, 0);  // reserved0
-  AppendU64(out, segment_id_);
-  AppendU32(out, static_cast<uint32_t>(body.size()));  // payload_bytes
-  AppendU32(out, 0);                                   // reserved1
-  if (out.size() != 60) {
-    // Defensive: keep on-disk header self-consistent even if fields drift.
-    out.resize(60, '\0');
-  }
-  AppendU32(out, Crc32Local(out.data(), 60));
-
+  out.reserve(header.size() + body.size() + kFooterBytes);
+  out.append(header);
   out.append(body);
-
-  AppendU32(out, Crc32Local(body.data(), body.size()));
+  AppendU32(out, body.empty() ? Crc32Local("", 0)
+                               : Crc32Local(body.data(), body.size()));
   AppendU32(out, kFooterMagic);
   AppendU16(out, kFormatVersion);
-  AppendU16(out, 0);
+  AppendU16(out, 0);  // reserved
+  AppendU32(out, 0);  // pad to kFooterBytes (16)
   return out;
 }
 
@@ -325,6 +325,7 @@ Result<HnswGraph> HnswGraph::Load(std::string_view bytes) {
   const uint32_t footer_magic = ReadU32(bytes, foff);
   const uint16_t footer_ver = ReadU16(bytes, foff);
   ReadU16(bytes, foff);  // reserved
+  ReadU32(bytes, foff);  // pad
   if (footer_magic != kFooterMagic || footer_ver != kFormatVersion) {
     return Status::Corruption("hnsw: bad footer");
   }

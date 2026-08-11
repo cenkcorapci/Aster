@@ -128,6 +128,7 @@ Nodes absent from a layer contribute nothing (no placeholder empty list).
 | 4 | `u32` | `footer_magic` | `0x41535447` (`ASTG`) |
 | 8 | `u16` | `format_version` | MUST match header (`1`) |
 | 10 | `u16` | `reserved` | MUST be `0` |
+| 12 | `u32` | `pad` | MUST be `0` (keeps footer at 16 bytes) |
 
 ---
 

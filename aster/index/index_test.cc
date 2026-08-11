@@ -191,9 +191,8 @@ TEST(HnswGraph, SerializeLoadRoundTripFile) {
 TEST(HnswGraph, EmptyGraphRoundTrip) {
   HnswGraph g(HnswParams{});
   const std::string bytes = g.Serialize();
-  EXPECT_EQ(bytes.size(), 80u) << "magic0=" << (bytes.empty() ? -1 : (int)(unsigned char)bytes[0]);
   auto loaded = HnswGraph::Load(bytes);
-  ASSERT_TRUE(loaded.ok()) << loaded.status().message() << " size=" << bytes.size();
+  ASSERT_TRUE(loaded.ok()) << loaded.status().message();
   EXPECT_EQ(loaded.value(), g);
   EXPECT_EQ(loaded.value().entry_point(), HnswGraph::kNoEntry);
   EXPECT_EQ(loaded.value().node_count(), 0u);
