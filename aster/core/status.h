@@ -39,6 +39,15 @@ class Status {
   static Status Corruption(std::string m = "") {
     return Status(StatusCode::kCorruption, std::move(m));
   }
+  static Status Unavailable(std::string m = "") {
+    return Status(StatusCode::kUnavailable, std::move(m));
+  }
+  static Status ResourceExhausted(std::string m = "") {
+    return Status(StatusCode::kResourceExhausted, std::move(m));
+  }
+  static Status Internal(std::string m = "") {
+    return Status(StatusCode::kInternal, std::move(m));
+  }
 
   bool ok() const { return code_ == StatusCode::kOk; }
   StatusCode code() const { return code_; }

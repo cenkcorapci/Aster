@@ -11,6 +11,8 @@
 
 #include "aster/db/db.h"
 #include "aster/core/features.h"
+#include "aster/core/memory.h"
+#include "aster/core/status.h"
 #include "aster/index/tags.h"
 #include "aster/storage/segment.h"
 
@@ -782,6 +784,89 @@ TEST(Db, CompactRebuildsSingleReadyGraphOverLiveRows) {
   }
 }
 #endif  // ASTER_ENABLE_HNSW
+
+TEST(Db, MemoryBudgetRejectsOversizedWrite) {
+  Db::Options options = SmallDb();
+  options.dimension = 0;  // allow large vectors for this budget check
+  options.memory_budget_bytes = 64;
+  options.memtable_flush_bytes = 1u << 30;
+  Db db(options);
+
+  Row huge = MakeRow("huge", std::vector<float>(64, 1.0f), 1);
+  ASSERT_GT(EstimateRowBytes(huge), options.memory_budget_bytes);
+
+  Status st = db.Upsert(std::move(huge));
+  ASSERT_FALSE(st.ok());
+  EXPECT_EQ(st.code(), StatusCode::kResourceExhausted);
+  EXPECT_EQ(st.message(), "memory budget exceeded");
+  EXPECT_EQ(db.memtable_rows(), 0u);
+  EXPECT_EQ(db.approximate_write_memory_bytes(), 0u);
+}
+
+TEST(Db, MemoryBudgetFlushReclaimsThenAccepts) {
+  Db::Options options = SmallDb();
+  // Budget fits a few small rows but not many without a flush.
+  options.memory_budget_bytes = 512;
+  options.memtable_flush_bytes = 1u << 30;  // size trigger off
+  options.compaction_tier_threshold = 0;
+  options.max_segments_before_compact = 0;
+  Db db(options);
+
+  int accepted = 0;
+  for (int i = 0; i < 40; ++i) {
+    Status st =
+        db.Upsert(MakeRow("r" + std::to_string(i), {1.0f, 0.0f}, i + 1));
+    if (!st.ok()) {
+      EXPECT_EQ(st.code(), StatusCode::kResourceExhausted);
+      break;
+    }
+    ++accepted;
+    EXPECT_LE(db.approximate_write_memory_bytes(),
+              options.memory_budget_bytes);
+  }
+  // Synchronous flush inside EnsureWriteMemory should keep accepting until
+  // a single row cannot fit — with these sizes all rows fit after flush.
+  EXPECT_GE(accepted, 40);
+  EXPECT_LE(db.approximate_write_memory_bytes(), options.memory_budget_bytes);
+}
+
+TEST(Db, MemoryBudgetBoundedUnderWriteSoak) {
+  Db::Options options = SmallDb();
+  options.memory_budget_bytes = 4096;
+  options.memtable_flush_bytes = 512;
+  options.compaction_tier_threshold = 4;
+  options.max_segments_before_compact = 0;
+  Db db(options);
+
+  constexpr int kWrites = 300;
+  size_t peak_write_mem = 0;
+  size_t rejected = 0;
+  for (int i = 0; i < kWrites; ++i) {
+    // Rotate over a small key set so flushes + LWW keep working set bounded.
+    const std::string id = "k" + std::to_string(i % 16);
+    Status st = db.Upsert(MakeRow(id, {1.0f, 0.0f}, static_cast<Timestamp>(i + 1)));
+    if (!st.ok()) {
+      EXPECT_EQ(st.code(), StatusCode::kResourceExhausted);
+      ++rejected;
+      continue;
+    }
+    peak_write_mem =
+        std::max(peak_write_mem, db.approximate_write_memory_bytes());
+    EXPECT_LE(db.approximate_write_memory_bytes(),
+              options.memory_budget_bytes);
+  }
+
+  // Drain any pending background flush.
+  if (db.memtable_rows() != 0) {
+    ASSERT_TRUE(db.Flush().ok());
+  }
+  peak_write_mem =
+      std::max(peak_write_mem, db.approximate_write_memory_bytes());
+
+  EXPECT_LE(peak_write_mem, options.memory_budget_bytes);
+  EXPECT_EQ(rejected, 0u);
+  EXPECT_TRUE(db.Get("k0").has_value());
+}
 
 }  // namespace
 }  // namespace aster

@@ -42,6 +42,10 @@ TEST(Status, FactoriesAndOk) {
   EXPECT_EQ(Status::InvalidArgument("bad").code(), StatusCode::kInvalidArgument);
   EXPECT_EQ(Status::IoError("io").code(), StatusCode::kIoError);
   EXPECT_EQ(Status::Corruption("crc").code(), StatusCode::kCorruption);
+  EXPECT_EQ(Status::Unavailable("down").code(), StatusCode::kUnavailable);
+  EXPECT_EQ(Status::ResourceExhausted("full").code(),
+            StatusCode::kResourceExhausted);
+  EXPECT_EQ(Status::Internal("bug").code(), StatusCode::kInternal);
 
   Status custom(StatusCode::kUnavailable, "down");
   EXPECT_EQ(custom.code(), StatusCode::kUnavailable);

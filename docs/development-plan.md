@@ -73,9 +73,10 @@ Goal: real ANN per [indexing.md](indexing.md).
 Goal: “SQLite for vectors” as a first-class product.
 
 **Done so far:** compile-time profiles, Arduino/Tiny embedded lib, POSIX +
-memory backends, BusyBox Docker (~few MB static), build matrix scripts.
+memory backends, BusyBox Docker (~few MB static), build matrix scripts,
+write-path arena/slab + memory budget (M3-T07).
 
-**Still open:** memory budget enforcement, Pi soak exit criteria.
+**Still open:** Pi soak exit criteria.
 Installable `//aster:embedded_lib` target is done (M3-T02).
 
 ### M4 — Server & observability (~4 weeks)

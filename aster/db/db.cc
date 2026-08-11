@@ -12,8 +12,10 @@
 #include <cstring>
 #include <queue>
 #include <set>
+#include <string_view>
 #include <utility>
 
+#include "aster/core/memory.h"
 #include "aster/index/distance.h"
 #include "aster/index/tags.h"
 #include "aster/index/vector_index.h"
@@ -112,16 +114,64 @@ double EstimateFilterSelectivity(
   return static_cast<double>(match) / static_cast<double>(total);
 }
 
-void PutU32(std::string& b, uint32_t v) {
-  for (int i = 0; i < 4; ++i) {
-    b.push_back(static_cast<char>((v >> (8 * i)) & 0xff));
-  }
+// Bound the WAL payload size before allocating the encode buffer.
+size_t EncodedRowSize(const Row& row) {
+  size_t n = 4 + row.id.size() + 8 + 8 + 1 + 4 + row.vector.size() * 4 + 4 +
+             row.metadata.size() + 4;
+  for (const auto& tag : row.tags) n += 4 + tag.size();
+  return n;
 }
-void PutU64(std::string& b, uint64_t v) {
-  for (int i = 0; i < 8; ++i) {
-    b.push_back(static_cast<char>((v >> (8 * i)) & 0xff));
-  }
+
+void PutU32At(char* p, uint32_t v) {
+  for (int i = 0; i < 4; ++i) p[i] = static_cast<char>((v >> (8 * i)) & 0xff);
 }
+void PutU64At(char* p, uint64_t v) {
+  for (int i = 0; i < 8; ++i) p[i] = static_cast<char>((v >> (8 * i)) & 0xff);
+}
+
+// Encodes `row` into a contiguous buffer allocated from `arena` (write path).
+// Returns a view over arena memory; valid until arena Reset().
+std::string_view EncodeRowToArena(const Row& row, Arena& arena) {
+  const size_t need = EncodedRowSize(row);
+  char* buf = static_cast<char*>(arena.Allocate(need));
+  char* p = buf;
+
+  PutU32At(p, static_cast<uint32_t>(row.id.size()));
+  p += 4;
+  std::memcpy(p, row.id.data(), row.id.size());
+  p += row.id.size();
+
+  PutU64At(p, row.timestamp);
+  p += 8;
+  PutU64At(p, row.version);
+  p += 8;
+  *p++ = row.tombstone ? 1 : 0;
+
+  PutU32At(p, static_cast<uint32_t>(row.vector.size()));
+  p += 4;
+  for (float f : row.vector) {
+    uint32_t u;
+    std::memcpy(&u, &f, 4);
+    PutU32At(p, u);
+    p += 4;
+  }
+
+  PutU32At(p, static_cast<uint32_t>(row.metadata.size()));
+  p += 4;
+  std::memcpy(p, row.metadata.data(), row.metadata.size());
+  p += row.metadata.size();
+
+  PutU32At(p, static_cast<uint32_t>(row.tags.size()));
+  p += 4;
+  for (const auto& tag : row.tags) {
+    PutU32At(p, static_cast<uint32_t>(tag.size()));
+    p += 4;
+    std::memcpy(p, tag.data(), tag.size());
+    p += tag.size();
+  }
+  return std::string_view(buf, static_cast<size_t>(p - buf));
+}
+
 uint32_t GetU32(const std::string& b, size_t& o) {
   uint32_t v = 0;
   for (int i = 0; i < 4; ++i) {
@@ -135,29 +185,6 @@ uint64_t GetU64(const std::string& b, size_t& o) {
     v |= static_cast<uint64_t>(static_cast<uint8_t>(b[o++])) << (8 * i);
   }
   return v;
-}
-
-std::string EncodeRow(const Row& row) {
-  std::string b;
-  PutU32(b, static_cast<uint32_t>(row.id.size()));
-  b.append(row.id);
-  PutU64(b, row.timestamp);
-  PutU64(b, row.version);
-  b.push_back(row.tombstone ? 1 : 0);
-  PutU32(b, static_cast<uint32_t>(row.vector.size()));
-  for (float f : row.vector) {
-    uint32_t u;
-    std::memcpy(&u, &f, 4);
-    PutU32(b, u);
-  }
-  PutU32(b, static_cast<uint32_t>(row.metadata.size()));
-  b.append(row.metadata);
-  PutU32(b, static_cast<uint32_t>(row.tags.size()));
-  for (const auto& tag : row.tags) {
-    PutU32(b, static_cast<uint32_t>(tag.size()));
-    b.append(tag);
-  }
-  return b;
 }
 
 Result<Row> DecodeRow(const std::string& b) {
@@ -375,6 +402,10 @@ bool Db::ShouldFlushLocked() const {
   if (memtable_.approximate_bytes() >= options_.memtable_flush_bytes) {
     return true;
   }
+  if (options_.memory_budget_bytes > 0 &&
+      memtable_.approximate_bytes() >= options_.memory_budget_bytes) {
+    return true;
+  }
   if (options_.memtable_flush_ms == 0) return false;
   const auto age = std::chrono::steady_clock::now() - memtable_live_since_;
   return age >= std::chrono::milliseconds(options_.memtable_flush_ms);
@@ -570,7 +601,54 @@ Result<std::unique_ptr<Db>> Db::Open(Options options) {
 
 Status Db::AppendWal(const Row& row) {
   if (!wal_.has_value()) return Status::Ok();
-  return wal_->Append(EncodeRow(row));
+  // Encode into the write arena, then copy into a std::string for WalWriter.
+  // Arena bytes are reclaimed on Reset after a successful append.
+  const std::string_view encoded = EncodeRowToArena(row, write_arena_);
+  Status st = wal_->Append(std::string(encoded));
+  write_arena_.Reset();
+  return st;
+}
+
+size_t Db::ApproximateWriteMemoryLocked() const {
+  return memtable_.approximate_bytes() + write_arena_.MemoryUsage();
+}
+
+size_t Db::ProjectedMemtableBytesLocked(const Row& row) const {
+  const size_t incoming = EstimateRowBytes(row);
+  if (auto existing = memtable_.Get(row.id)) {
+    if (!NewerThan(row, *existing)) {
+      return memtable_.approximate_bytes();
+    }
+    const size_t old_bytes = EstimateRowBytes(*existing);
+    return memtable_.approximate_bytes() - old_bytes + incoming;
+  }
+  return memtable_.approximate_bytes() + incoming;
+}
+
+Status Db::EnsureWriteMemoryLocked(const Row& row) {
+  if (options_.memory_budget_bytes == 0) return Status::Ok();
+
+  const size_t incoming = EstimateRowBytes(row);
+  if (incoming > options_.memory_budget_bytes) {
+    return Status::ResourceExhausted("memory budget exceeded");
+  }
+
+  auto fits = [&]() {
+    const size_t projected =
+        ProjectedMemtableBytesLocked(row) + write_arena_.MemoryUsage();
+    return projected <= options_.memory_budget_bytes;
+  };
+
+  if (fits()) return Status::Ok();
+
+  // Reclaim memtable via flush before rejecting the write.
+  if (!memtable_.empty()) {
+    if (auto st = FlushLocked(); !st.ok()) return st;
+    write_arena_.Reset();
+  }
+  if (fits()) return Status::Ok();
+
+  return Status::ResourceExhausted("memory budget exceeded");
 }
 
 Status Db::PublishManifest() {
@@ -597,6 +675,7 @@ Status Db::Upsert(Row row) {
       row.vector.size() != options_.dimension) {
     return Status::InvalidArgument("vector dimension mismatch");
   }
+  if (auto st = EnsureWriteMemoryLocked(row); !st.ok()) return st;
   if (auto st = AppendWal(row); !st.ok()) return st;
   const bool was_empty = memtable_.empty();
   memtable_.Apply(std::move(row));
@@ -691,6 +770,7 @@ Status Db::FlushLocked() {
   const uint64_t id = next_segment_id_++;
   auto rows = std::make_shared<std::vector<Row>>(memtable_.Take());
   auto segment = Segment::Build(id, options_.metric, rows);
+  write_arena_.Reset();
 
   if (!options_.data_dir.empty()) {
     if (auto st = WriteSstable(SegmentPath(id), id, options_.metric, *rows);
@@ -966,6 +1046,11 @@ size_t Db::approximate_row_count() const {
   size_t n = memtable_.row_count();
   for (const auto& segment : segments_) n += segment->row_count();
   return n;
+}
+
+size_t Db::approximate_write_memory_bytes() const {
+  std::lock_guard lock(mu_);
+  return ApproximateWriteMemoryLocked();
 }
 
 }  // namespace aster

@@ -8,11 +8,13 @@ cc_library(
     srcs = [
         "cbor.cc",
         "hash.cc",
+        "memory.cc",
     ],
     hdrs = [
         "cbor.h",
         "features.h",
         "hash.h",
+        "memory.h",
         "status.h",
         "types.h",
         "version.h",
@@ -22,7 +24,10 @@ cc_library(
 cc_test(
     name = "core_test",
     size = "small",
-    srcs = ["core_test.cc"],
+    srcs = [
+        "core_test.cc",
+        "memory_test.cc",
+    ],
     deps = [
         ":core",
         "@googletest//:gtest_main",

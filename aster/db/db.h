@@ -39,6 +39,7 @@
 #include <vector>
 
 #include "aster/core/features.h"
+#include "aster/core/memory.h"
 #include "aster/core/status.h"
 #include "aster/core/types.h"
 #include "aster/core/version.h"
@@ -86,6 +87,10 @@ class Db {
     // Optional hard cap: full-compact when total segment count reaches this.
     // 0 disables the cap. Kept as a safety net beside size-tiered policy.
     size_t max_segments_before_compact = 8;
+    // Hard cap on write-path memory (memtable + write arena). 0 = unlimited.
+    // Upsert/Delete that would exceed the budget return ResourceExhausted
+    // after attempting a flush to reclaim the memtable.
+    size_t memory_budget_bytes = 0;
 #if ASTER_ENABLE_HNSW
     // Background PENDING→BUILDING→READY HNSW builds (docs/indexing.md §4.3).
     // When false, Flush still leaves segments PENDING (exact search) until
@@ -138,6 +143,8 @@ class Db {
   size_t memtable_rows() const;
   // Memtable + all segment rows (includes tombstones until compacted).
   size_t approximate_row_count() const;
+  // Memtable approximate_bytes + write-arena usage (write-path footprint).
+  size_t approximate_write_memory_bytes() const;
 
   // Per-segment index build states (oldest first). Empty when no segments.
   std::vector<SegState> segment_index_states() const;
@@ -167,6 +174,11 @@ class Db {
   void RequestFlushLocked();
   Status FlushLocked();
   Status CompactLocked();
+  size_t ApproximateWriteMemoryLocked() const;
+  // Projected memtable bytes if `row` were applied (LWW-aware).
+  size_t ProjectedMemtableBytesLocked(const Row& row) const;
+  // Enforces Options::memory_budget_bytes; may FlushLocked to reclaim.
+  Status EnsureWriteMemoryLocked(const Row& row);
   // Merges the segments at `indices` (into segments_). Full-overlap merges
   // (all live segments) purge tombstones; partial merges keep them.
   Status CompactSelectedLocked(const std::vector<size_t>& indices);
@@ -190,6 +202,7 @@ class Db {
 
   Options options_;
   Memtable memtable_;
+  Arena write_arena_;  // WAL encode scratch; reset after append / flush
   std::vector<std::shared_ptr<const Segment>> segments_;  // oldest first
   uint64_t next_segment_id_ = 1;
   uint64_t manifest_generation_ = 0;
