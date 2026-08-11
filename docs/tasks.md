@@ -76,7 +76,7 @@ Status updates happen in this file (see start-the-tasks.md § Claiming).
 
 | ID | Status | Lane | Depends | Title | Touch | Done when |
 | --- | --- | --- | --- | --- | --- | --- |
-| M1-T09 | open | db | M1-T05 | Background flush thread (size/time triggers) | `aster/db/` | Memtable flushes without explicit `Flush()` under write load |
+| M1-T09 | done | db | M1-T05 | Background flush thread (size/time triggers) | `aster/db/` | Memtable flushes without explicit `Flush()` under write load |
 | M1-T10 | open | db | M1-T03, M1-T09 | Size-tiered compaction scheduler | `aster/db/`, `aster/storage/` | Tier threshold triggers merge; segment count bounded under write soak |
 | M1-T11 | open | db | M1-T10 | Tombstone GC only on full-overlap compaction | `aster/storage/segment*`, tests | Unit + TLA mapping: partial compact keeps tombstones; full purges (`NoResurrection`) |
 | M1-T12 | open | storage | M1-T02 | CBOR metadata encode/decode | `aster/storage/` or `aster/core/` | Fixture JSON ↔ CBOR bytes round-trip |
