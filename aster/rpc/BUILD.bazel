@@ -1,4 +1,4 @@
-# Thrift IDL + checked-in C++ stubs (M4-T01).
+# Thrift IDL + checked-in C++ stubs (M4-T01) + framed TCP server (M4-T02).
 #
 # Stubs under gen-cpp/ are produced by scripts/regen-thrift-cpp.sh from
 # aster.thrift. They are checked in so builds stay hermetic without a Thrift
@@ -62,12 +62,50 @@ cc_library(
     ],
 )
 
+cc_library(
+    name = "thrift_server",
+    srcs = [
+        "handler.cc",
+        "server.cc",
+    ],
+    hdrs = [
+        "handler.h",
+        "server.h",
+    ],
+    target_compatible_with = select({
+        "//platforms:is_baremetal": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    }),
+    deps = [
+        ":rpc",
+        "//aster/core",
+        "//aster/server",
+        "@apache_thrift//:thrift",
+    ],
+)
+
 cc_test(
     name = "rpc_compile_test",
     size = "small",
     srcs = ["rpc_compile_test.cc"],
     deps = [
         ":rpc",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cc_test(
+    name = "thrift_server_test",
+    size = "small",
+    srcs = ["thrift_server_test.cc"],
+    target_compatible_with = select({
+        "//platforms:is_baremetal": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    }),
+    deps = [
+        ":thrift_server",
+        "//aster/server",
+        "@apache_thrift//:thrift",
         "@googletest//:gtest_main",
     ],
 )

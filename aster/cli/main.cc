@@ -1,8 +1,10 @@
 // Aster CLI:
 //   bazel run //aster/cli:aster -- demo [--data-dir PATH]
 //   bazel run //aster/cli:aster -- serve --data-dir PATH [--port 8080] [--api-key KEY]
+//   bazel run //aster/cli:aster -- serve-rpc --data-dir PATH [--port 9090]
 //
 // `serve` is the Firebase-style HTTP API for local / single-node SaaS.
+// `serve-rpc` is the framed-TCP Thrift Aster service (M4-T02).
 // Container: ASTER_DATA_DIR=/data
 
 #include <cstdio>
@@ -14,6 +16,8 @@
 
 #include "aster/db/db.h"
 #include "aster/distributed/ring.h"
+#include "aster/rpc/handler.h"
+#include "aster/rpc/server.h"
 #include "aster/server/catalog.h"
 #include "aster/server/http_api.h"
 
@@ -28,6 +32,8 @@ void PrintUsage(const char* argv0) {
                "  %s demo [--data-dir PATH]\n"
                "  %s serve --data-dir PATH [--host 127.0.0.1] [--port 8080] "
                "[--api-key KEY]\n"
+               "  %s serve-rpc --data-dir PATH [--host 127.0.0.1] "
+               "[--port 9090]\n"
                "  %s [--data-dir PATH]          # same as demo\n"
                "\n"
                "Environment:\n"
@@ -35,7 +41,7 @@ void PrintUsage(const char* argv0) {
                "  ASTER_API_KEY    Optional API key for serve\n"
                "\n"
                "Aster %s\n",
-               argv0, argv0, argv0, kVersion);
+               argv0, argv0, argv0, argv0, kVersion);
 }
 
 int RunDemo(const std::string& data_dir) {
@@ -181,11 +187,82 @@ int RunServe(int argc, char** argv) {
   return 0;
 }
 
+int RunServeRpc(int argc, char** argv) {
+  const char* env_dir = std::getenv("ASTER_DATA_DIR");
+  std::string data_dir = env_dir ? env_dir : "";
+  std::string host = "127.0.0.1";
+  uint16_t port = 9090;
+
+  for (int i = 2; i < argc; ++i) {
+    if (std::strcmp(argv[i], "--help") == 0 ||
+        std::strcmp(argv[i], "-h") == 0) {
+      PrintUsage(argv[0]);
+      return 0;
+    }
+    auto need = [&](const char* flag) -> const char* {
+      if (i + 1 >= argc) {
+        std::fprintf(stderr, "error: %s requires a value\n", flag);
+        std::exit(2);
+      }
+      return argv[++i];
+    };
+    if (std::strcmp(argv[i], "--data-dir") == 0) {
+      data_dir = need("--data-dir");
+    } else if (std::strcmp(argv[i], "--host") == 0) {
+      host = need("--host");
+    } else if (std::strcmp(argv[i], "--port") == 0) {
+      port = static_cast<uint16_t>(std::atoi(need("--port")));
+    } else {
+      std::fprintf(stderr, "error: unknown argument: %s\n", argv[i]);
+      PrintUsage(argv[0]);
+      return 2;
+    }
+  }
+
+  if (data_dir.empty()) {
+    std::fprintf(stderr,
+                 "error: serve-rpc requires --data-dir or ASTER_DATA_DIR\n");
+    return 2;
+  }
+
+  aster::Catalog::Options opt;
+  opt.data_dir = data_dir;
+  opt.wal_sync = aster::SyncPolicy::kEveryMs;
+  auto catalog = aster::Catalog::Open(opt);
+  if (!catalog.ok()) {
+    std::fprintf(stderr, "error: catalog open failed: %s\n",
+                 catalog.status().message().c_str());
+    return 1;
+  }
+
+  auto handler =
+      std::make_shared<aster::rpc::AsterHandler>(catalog.value().get());
+  aster::rpc::ThriftServer::Options sop;
+  sop.host = host;
+  sop.port = port;
+  aster::rpc::ThriftServer server(sop, handler);
+  if (auto st = server.Listen(); !st.ok()) {
+    std::fprintf(stderr, "error: thrift listen failed: %s\n",
+                 st.message().c_str());
+    return 1;
+  }
+
+  std::printf("aster %s serve-rpc  thrift://%s:%u (framed TCP)\n", kVersion,
+              host.c_str(), server.port());
+  std::printf("data_dir=%s\n", data_dir.c_str());
+  std::printf("service: Aster (createCollection/upsert/get/remove/search)\n");
+  server.Serve();
+  return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
   if (argc >= 2 && std::strcmp(argv[1], "serve") == 0) {
     return RunServe(argc, argv);
+  }
+  if (argc >= 2 && std::strcmp(argv[1], "serve-rpc") == 0) {
+    return RunServeRpc(argc, argv);
   }
 
   // demo (explicit or legacy flags)
