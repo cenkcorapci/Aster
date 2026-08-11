@@ -34,12 +34,8 @@ void PrintUsage(const char* argv0) {
                "  %s serve --data-dir PATH [--host 127.0.0.1] [--port 8080] "
                "[--api-key KEY] [--config PATH]\n"
                "  %s serve-rpc --data-dir PATH [--host 127.0.0.1] "
-<<<<<<< HEAD
-               "[--port 9090] [--tls] [--tls-insecure] "
+               "[--port 9090] [--config PATH] [--tls] [--tls-insecure] "
                "[--tls-cert PATH] [--tls-key PATH] [--tls-ca PATH]\n"
-=======
-               "[--port 9090] [--config PATH]\n"
->>>>>>> bc12d78 (M4-T05: add TOML config loader for server/CLI)
                "  %s [--data-dir PATH]          # same as demo\n"
                "\n"
                "Environment:\n"
@@ -285,6 +281,7 @@ int RunServeRpc(int argc, char** argv) {
       host_set = true;
     } else if (std::strcmp(argv[i], "--port") == 0) {
       port = static_cast<uint16_t>(std::atoi(need("--port")));
+      port_set = true;
     } else if (std::strcmp(argv[i], "--tls") == 0) {
       tls = true;
     } else if (std::strcmp(argv[i], "--tls-insecure") == 0) {
@@ -295,7 +292,6 @@ int RunServeRpc(int argc, char** argv) {
       tls_key_file = need("--tls-key");
     } else if (std::strcmp(argv[i], "--tls-ca") == 0) {
       tls_ca_file = need("--tls-ca");
-      port_set = true;
     } else {
       std::fprintf(stderr, "error: unknown argument: %s\n", argv[i]);
       PrintUsage(argv[0]);

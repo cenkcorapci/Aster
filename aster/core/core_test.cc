@@ -91,7 +91,8 @@ TEST(Row, LastWriteWinsOrdering) {
 TEST(SearchRequest, Defaults) {
   SearchRequest req;
   EXPECT_EQ(req.top_k, 10u);
-  EXPECT_EQ(req.ef_search, 64u);
+  // 0 means "use collection/index default" (see SearchRequest in types.h).
+  EXPECT_EQ(req.ef_search, 0u);
   EXPECT_TRUE(req.tags.empty());
 }
 

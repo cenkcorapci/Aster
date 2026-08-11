@@ -164,20 +164,42 @@ class shared_array {
 }  // namespace boost
 EOF
 """,
-        # Apache Thrift's SSL transport includes <openssl/ssl.h>. In this
-        # environment the OpenSSL headers are not on the default compiler
-        # include search path, so copy them into the extracted thrift
-        # repository and add `-Iopenssl/include` in //third_party:thrift.BUILD.
+        # Apache Thrift's SSL transport includes <openssl/ssl.h>. Copy host
+        # OpenSSL headers into the extracted thrift repo and add
+        # `-Iopenssl/include` in //third_party:thrift.BUILD. Search Homebrew
+        # (macOS) and common Linux/pkg-config locations so CI works too.
         """python3 - <<'PY'
 from __future__ import annotations
 
 import glob
 import shutil
+import subprocess
 from pathlib import Path
 
-srcs = glob.glob('/opt/homebrew/Cellar/openssl@3/*/include/openssl')
+candidates: list[str] = []
+candidates.extend(glob.glob('/opt/homebrew/Cellar/openssl@3/*/include/openssl'))
+candidates.extend(glob.glob('/opt/homebrew/opt/openssl*/include/openssl'))
+candidates.extend(glob.glob('/usr/local/opt/openssl*/include/openssl'))
+candidates.extend(glob.glob('/usr/local/Cellar/openssl@3/*/include/openssl'))
+for path in ('/usr/include/openssl', '/usr/local/include/openssl'):
+  if Path(path).is_dir():
+    candidates.append(path)
+try:
+  pc = subprocess.check_output(
+      ['pkg-config', '--variable=includedir', 'openssl'],
+      text=True,
+      stderr=subprocess.DEVNULL,
+  ).strip()
+  if pc:
+    candidates.append(str(Path(pc) / 'openssl'))
+except (subprocess.CalledProcessError, FileNotFoundError):
+  pass
+
+srcs = [p for p in candidates if Path(p).is_dir()]
 if not srcs:
-  raise SystemExit('OpenSSL headers not found under /opt/homebrew/Cellar/openssl@3')
+  raise SystemExit(
+      'OpenSSL headers not found (tried Homebrew, /usr/include, pkg-config). '
+      'Install openssl@3 (macOS) or libssl-dev (Debian/Ubuntu).')
 src = sorted(srcs)[-1]
 
 dst = Path('openssl/include/openssl')
@@ -188,8 +210,8 @@ shutil.copytree(src, dst)
 print('Vendored OpenSSL headers:', src, '->', dst)
 PY
 """,
-        # Vendor OpenSSL libs too so the Bazel link step can find -lssl/-lcrypto
-        # without relying on host linker search paths.
+        # On macOS Homebrew, also vendor static libs for the link step.
+        # On Linux, //third_party:thrift.BUILD links system -lssl/-lcrypto.
         """python3 - <<'PY'
 from __future__ import annotations
 
@@ -198,11 +220,13 @@ import shutil
 from pathlib import Path
 
 lib_candidates = glob.glob('/opt/homebrew/Cellar/openssl@3/*/lib/libssl*')
+lib_candidates += glob.glob('/usr/local/Cellar/openssl@3/*/lib/libssl*')
 if not lib_candidates:
-  raise SystemExit('OpenSSL libs not found under /opt/homebrew/Cellar/openssl@3')
+  print('Skipping OpenSSL lib vendoring; using system -lssl/-lcrypto')
+  raise SystemExit(0)
 
-root = sorted(glob.glob('/opt/homebrew/Cellar/openssl@3/*'))[-1]
-src_lib_dir = Path(root) / 'lib'
+root = Path(sorted(lib_candidates)[-1]).resolve().parent.parent
+src_lib_dir = root / 'lib'
 
 dst = Path('openssl/lib')
 if dst.exists():
@@ -212,7 +236,8 @@ dst.mkdir(parents=True, exist_ok=True)
 for name in ['libssl.a', 'libcrypto.a']:
   src = src_lib_dir / name
   if not src.exists():
-    raise SystemExit(f'OpenSSL static lib not found: {src}')
+    print(f'Skipping OpenSSL lib vendoring; missing {src}')
+    raise SystemExit(0)
   shutil.copy2(src, dst / src.name)
 
 print('Vendored OpenSSL libs into:', dst)
