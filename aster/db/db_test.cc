@@ -1,7 +1,9 @@
 #include <gtest/gtest.h>
 
+#include <cstdio>
 #include <set>
 #include <string>
+#include <unistd.h>
 #include <vector>
 
 #include "aster/db/db.h"
@@ -246,6 +248,78 @@ TEST(Db, TombstoneUpsertAllowedWithoutDimension) {
   // Delete path uses tombstone with empty vector.
   ASSERT_TRUE(db.Delete("a", 2).ok());
   EXPECT_FALSE(db.Get("a").has_value());
+}
+
+TEST(Db, CorruptWalRowIsBoundsChecked) {
+  // Open a durable db, write one row, then corrupt the WAL to verify that
+  // DecodeRow returns Corruption rather than reading out-of-bounds.
+  const std::string dir = ::testing::TempDir() + "/aster_db_corrupt_wal";
+  Db::Options options;
+  options.dimension = 2;
+  options.metric = Metric::kL2;
+  options.data_dir = dir;
+  options.wal_sync = SyncPolicy::kNever;
+  {
+    auto db = Db::Open(options);
+    ASSERT_TRUE(db.ok());
+    ASSERT_TRUE(db.value()->Upsert(MakeRow("a", {1.0f, 0.0f}, 1)).ok());
+  }
+  // Truncate the WAL to create a torn record.
+  const std::string wal_path = dir + "/WAL";
+  {
+    std::FILE* f = std::fopen(wal_path.c_str(), "r+b");
+    ASSERT_TRUE(f != nullptr);
+    std::fseek(f, 0, SEEK_END);
+    const long sz = std::ftell(f);
+    ASSERT_GT(sz, 0);
+    ::ftruncate(::fileno(f), sz / 2);
+    std::fclose(f);
+  }
+  // Open should succeed (partial WAL is tolerated — torn record is silently
+  // dropped, matching the same behaviour as ReplayWal's CRC stop).
+  auto reopened = Db::Open(options);
+  EXPECT_TRUE(reopened.ok());
+
+  // Also verify a checksum-valid but malformed payload is rejected by DecodeRow.
+  ::remove(wal_path.c_str());
+  auto wal = WalWriter::Open(wal_path, SyncPolicy::kNever);
+  ASSERT_TRUE(wal.ok());
+  std::string corrupt(4, static_cast<char>(0xff));  // id_len=0xffffffff
+  ASSERT_TRUE(wal.value().Append(corrupt).ok());
+  auto bad = Db::Open(options);
+  EXPECT_FALSE(bad.ok());
+  EXPECT_EQ(bad.status().code(), StatusCode::kCorruption);
+}
+
+TEST(Db, CompactRemovesOrphanedSSTables) {
+  const std::string dir = ::testing::TempDir() + "/aster_db_compact_cleanup";
+  Db::Options options;
+  options.dimension = 2;
+  options.metric = Metric::kL2;
+  options.data_dir = dir;
+  options.wal_sync = SyncPolicy::kNever;
+  options.max_segments_before_compact = 0;  // disable auto-compact
+
+  auto db = Db::Open(options);
+  ASSERT_TRUE(db.ok());
+  ASSERT_TRUE(db.value()->Upsert(MakeRow("a", {1.0f, 0.0f}, 1)).ok());
+  ASSERT_TRUE(db.value()->Flush().ok());
+  ASSERT_TRUE(db.value()->Upsert(MakeRow("b", {0.0f, 1.0f}, 2)).ok());
+  ASSERT_TRUE(db.value()->Flush().ok());
+  ASSERT_EQ(db.value()->segment_count(), 2u);
+
+  // Both SSTable files must exist before compaction.
+  EXPECT_EQ(access((dir + "/seg_000001.ast").c_str(), F_OK), 0);
+  EXPECT_EQ(access((dir + "/seg_000002.ast").c_str(), F_OK), 0);
+
+  ASSERT_TRUE(db.value()->Compact().ok());
+  ASSERT_EQ(db.value()->segment_count(), 1u);
+
+  // After compaction the old SSTable files must have been deleted.
+  EXPECT_NE(access((dir + "/seg_000001.ast").c_str(), F_OK), 0);
+  EXPECT_NE(access((dir + "/seg_000002.ast").c_str(), F_OK), 0);
+  // The merged SSTable must be present.
+  EXPECT_EQ(access((dir + "/seg_000003.ast").c_str(), F_OK), 0);
 }
 
 }  // namespace

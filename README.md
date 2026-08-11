@@ -1,5 +1,7 @@
 # Aster
 
+[![CI](https://github.com/cenkcorapci/Aster/actions/workflows/ci.yml/badge.svg)](https://github.com/cenkcorapci/Aster/actions/workflows/ci.yml)
+
 Peer-to-peer vector database: LSM storage, per-segment indexes, CPU-only
 search. Runs from MCUs to multi-node clusters. C++20, Bazel, AGPL-3.0.
 

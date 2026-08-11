@@ -114,28 +114,47 @@ std::string EncodeRow(const Row& row) {
 }
 
 Result<Row> DecodeRow(const std::string& b) {
-  if (b.size() < 4) return Status::Corruption("wal row truncated");
+  const size_t total = b.size();
+  if (total < 4) return Status::Corruption("wal row truncated");
   size_t o = 0;
+
+  auto NeedBytes = [&](size_t n) -> bool {
+    return o <= total && n <= total - o;
+  };
+
   Row row;
   const uint32_t id_len = GetU32(b, o);
-  if (o + id_len > b.size()) return Status::Corruption("wal id truncated");
+  if (!NeedBytes(id_len)) return Status::Corruption("wal id truncated");
   row.id = b.substr(o, id_len);
   o += id_len;
+
+  if (!NeedBytes(8 + 8 + 1))
+    return Status::Corruption("wal row header truncated");
   row.timestamp = GetU64(b, o);
   row.version = GetU64(b, o);
   row.tombstone = b[o++] != 0;
+
+  if (!NeedBytes(4)) return Status::Corruption("wal vector dim truncated");
   const uint32_t dim = GetU32(b, o);
+  if (dim > (total - o) / 4) return Status::Corruption("wal vector truncated");
   row.vector.resize(dim);
   for (uint32_t i = 0; i < dim; ++i) {
     const uint32_t u = GetU32(b, o);
     std::memcpy(&row.vector[i], &u, 4);
   }
+
+  if (!NeedBytes(4)) return Status::Corruption("wal metadata len truncated");
   const uint32_t meta_len = GetU32(b, o);
+  if (!NeedBytes(meta_len)) return Status::Corruption("wal metadata truncated");
   row.metadata = b.substr(o, meta_len);
   o += meta_len;
+
+  if (!NeedBytes(4)) return Status::Corruption("wal tags count truncated");
   const uint32_t ntags = GetU32(b, o);
   for (uint32_t i = 0; i < ntags; ++i) {
+    if (!NeedBytes(4)) return Status::Corruption("wal tag len truncated");
     const uint32_t tlen = GetU32(b, o);
+    if (!NeedBytes(tlen)) return Status::Corruption("wal tag truncated");
     row.tags.insert(b.substr(o, tlen));
     o += tlen;
   }
@@ -354,6 +373,17 @@ Status Db::MaybeCompact() {
 Status Db::Compact() {
   if (segments_.size() < 2) return Status::Ok();
   const uint64_t id = next_segment_id_++;
+
+  // Collect old SSTable paths before clearing segments so we can remove them
+  // after the compacted segment is safely committed to the manifest.
+  std::vector<std::string> old_paths;
+  if (!options_.data_dir.empty()) {
+    old_paths.reserve(segments_.size());
+    for (const auto& seg : segments_) {
+      old_paths.push_back(SegmentPath(seg->id()));
+    }
+  }
+
   auto compacted = CompactSegments(id, options_.metric, segments_,
                                    /*drop_tombstones=*/true);
   if (!options_.data_dir.empty()) {
@@ -366,7 +396,13 @@ Status Db::Compact() {
   segments_.clear();
   segments_.push_back(std::move(compacted));
   if (!options_.data_dir.empty()) {
-    return PublishManifest();
+    if (auto st = PublishManifest(); !st.ok()) return st;
+    // Remove the now-superseded SSTable files. Deletion is best-effort:
+    // a leftover file on disk is harmless (Open ignores files not in the
+    // manifest), but failing to remove it would cause unbounded disk growth.
+    for (const auto& path : old_paths) {
+      ::remove(path.c_str());  // best-effort; ignore errors
+    }
   }
   return Status::Ok();
 }
