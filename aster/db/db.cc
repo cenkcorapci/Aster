@@ -118,7 +118,9 @@ Result<Row> DecodeRow(const std::string& b) {
   if (total < 4) return Status::Corruption("wal row truncated");
   size_t o = 0;
 
-  auto NeedBytes = [&](size_t n) -> bool { return o + n <= total; };
+  auto NeedBytes = [&](size_t n) -> bool {
+    return o <= total && n <= total - o;
+  };
 
   Row row;
   const uint32_t id_len = GetU32(b, o);
