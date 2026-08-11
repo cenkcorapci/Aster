@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <cstdio>
+#include <algorithm>
 #include <set>
 #include <string>
 #include <thread>
@@ -149,6 +150,7 @@ TEST(Db, OpenRequiresDataDir) {
 
 TEST(Db, AutoCompactOnMaxSegments) {
   Db::Options options = SmallDb();
+  options.compaction_tier_threshold = 0;  // force the hard-cap path
   options.max_segments_before_compact = 2;
   Db db(options);
   ASSERT_TRUE(db.Upsert(MakeRow("a", {1.0f, 0.0f}, 1)).ok());
@@ -208,6 +210,7 @@ TEST(Db, DurableAutoFlushUnderWriteLoad) {
   options.data_dir = dir;
   options.wal_sync = SyncPolicy::kNever;
   options.memtable_flush_bytes = 64;
+  options.compaction_tier_threshold = 0;
   options.max_segments_before_compact = 0;  // keep segments visible
   auto db = Db::Open(options);
   ASSERT_TRUE(db.ok());
@@ -343,6 +346,7 @@ TEST(Db, CompactRemovesOrphanedSSTables) {
   options.metric = Metric::kL2;
   options.data_dir = dir;
   options.wal_sync = SyncPolicy::kNever;
+  options.compaction_tier_threshold = 0;
   options.max_segments_before_compact = 0;  // disable auto-compact
 
   auto db = Db::Open(options);
@@ -372,6 +376,7 @@ TEST(Db, CompactPurgesTombstonesInSingleSegment) {
   Db::Options options = SmallDb();
   options.data_dir = dir;
   options.wal_sync = SyncPolicy::kNever;
+  options.compaction_tier_threshold = 0;
   options.max_segments_before_compact = 0;
 
   auto db = Db::Open(options);
@@ -429,6 +434,89 @@ TEST(Db, OpenGarbageCollectsOrphanSegmentsAndTmp) {
   EXPECT_NE(access((dir + "/seg_009999.ast").c_str(), F_OK), 0);
   EXPECT_NE(access((dir + "/seg_000001.ast.tmp").c_str(), F_OK), 0);
   EXPECT_NE(access((dir + "/MANIFEST.tmp").c_str(), F_OK), 0);
+}
+
+TEST(Db, SizeTieredMergesWhenTierThresholdHit) {
+  Db::Options options = SmallDb();
+  options.compaction_tier_threshold = 4;
+  options.compaction_bucket_ratio = 4;
+  options.max_segments_before_compact = 0;  // size-tiered only
+  Db db(options);
+
+  for (int i = 0; i < 3; ++i) {
+    ASSERT_TRUE(
+        db.Upsert(MakeRow("r" + std::to_string(i), {1.0f, 0.0f}, i + 1)).ok());
+    ASSERT_TRUE(db.Flush().ok());
+  }
+  EXPECT_EQ(db.segment_count(), 3u);
+
+  ASSERT_TRUE(db.Upsert(MakeRow("r3", {0.0f, 1.0f}, 4)).ok());
+  ASSERT_TRUE(db.Flush().ok());
+  // Fourth same-sized flush trips a tier merge into one larger segment.
+  EXPECT_EQ(db.segment_count(), 1u);
+  EXPECT_TRUE(db.Get("r0").has_value());
+  EXPECT_TRUE(db.Get("r3").has_value());
+}
+
+TEST(Db, SizeTieredBoundsSegmentCountUnderWriteSoak) {
+  Db::Options options = SmallDb();
+  options.memtable_flush_bytes = 32;  // force many small flushes
+  options.compaction_tier_threshold = 4;
+  options.max_segments_before_compact = 0;
+  Db db(options);
+
+  constexpr int kWrites = 200;
+  size_t peak_segments = 0;
+  for (int i = 0; i < kWrites; ++i) {
+    ASSERT_TRUE(
+        db.Upsert(MakeRow("w" + std::to_string(i), {1.0f, 0.0f}, i + 1)).ok());
+    // Drain background flush so each tiny memtable seals promptly.
+    for (int j = 0; j < 50 && db.memtable_rows() != 0; ++j) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    if (db.memtable_rows() != 0) {
+      ASSERT_TRUE(db.Flush().ok());
+    }
+    peak_segments = std::max(peak_segments, db.segment_count());
+  }
+  if (db.memtable_rows() != 0) {
+    ASSERT_TRUE(db.Flush().ok());
+  }
+  peak_segments = std::max(peak_segments, db.segment_count());
+
+  // Without compaction, ~200 flush-sized segments would accumulate.
+  // Size-tiered keeps live fan-out O(threshold × tiers).
+  EXPECT_LT(db.segment_count(), 20u);
+  EXPECT_LT(peak_segments, 20u);
+  EXPECT_TRUE(db.Get("w0").has_value());
+  EXPECT_TRUE(db.Get("w199").has_value());
+}
+
+TEST(Db, SizeTieredPartialMergeLeavesOlderTierIntact) {
+  Db::Options options = SmallDb();
+  options.compaction_tier_threshold = 4;
+  options.max_segments_before_compact = 0;
+  Db db(options);
+
+  // One larger segment (tier ≥1) that must survive a later L0 merge.
+  for (int i = 0; i < 4; ++i) {
+    ASSERT_TRUE(
+        db.Upsert(MakeRow("big" + std::to_string(i), {1.0f, 0.0f}, i + 1))
+            .ok());
+  }
+  ASSERT_TRUE(db.Flush().ok());
+  EXPECT_EQ(db.segment_count(), 1u);
+
+  for (int i = 0; i < 4; ++i) {
+    ASSERT_TRUE(
+        db.Upsert(MakeRow("s" + std::to_string(i), {0.0f, 1.0f}, 10 + i))
+            .ok());
+    ASSERT_TRUE(db.Flush().ok());
+  }
+  // Four size-1 segments merge; the size-4 segment stays.
+  EXPECT_EQ(db.segment_count(), 2u);
+  EXPECT_TRUE(db.Get("big0").has_value());
+  EXPECT_TRUE(db.Get("s3").has_value());
 }
 
 }  // namespace

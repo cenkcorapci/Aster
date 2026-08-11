@@ -70,6 +70,9 @@ TEST(Integration, DurableLifecycleSearchAndRecovery) {
   options.metric = Metric::kCosine;
   options.data_dir = dir;
   options.wal_sync = SyncPolicy::kNever;
+  // Keep each manual flush visible before the explicit Compact below.
+  options.compaction_tier_threshold = 0;
+  options.max_segments_before_compact = 0;
 
   {
     auto db = Db::Open(options);
@@ -248,6 +251,7 @@ TEST(Integration, StorageUsageSimulationUpdateDeleteCompactDrop) {
   Catalog::Options cat_opt;
   cat_opt.data_dir = root;
   cat_opt.wal_sync = SyncPolicy::kNever;
+  cat_opt.compaction_tier_threshold = 0;
   cat_opt.max_segments_before_compact = 0;  // manual compact for measurement
   auto cat = Catalog::Open(cat_opt);
   ASSERT_TRUE(cat.ok()) << cat.status().message();
@@ -333,6 +337,7 @@ TEST(Integration, OpenRemovesOrphansAfterSimulatedCrashFlush) {
   options.metric = Metric::kL2;
   options.data_dir = dir;
   options.wal_sync = SyncPolicy::kNever;
+  options.compaction_tier_threshold = 0;
   options.max_segments_before_compact = 0;
 
   {

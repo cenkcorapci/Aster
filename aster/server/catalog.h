@@ -46,6 +46,7 @@ class Catalog {
     std::string data_dir;  // required (durable)
     SyncPolicy wal_sync = SyncPolicy::kEveryMs;
     size_t memtable_flush_bytes = 64 << 20;
+    size_t compaction_tier_threshold = 4;
     size_t max_segments_before_compact = 8;
   };
 

@@ -26,7 +26,8 @@ namespace aster {
 // (tla/AsterLsmIndex.tla WalTruncationSafe / SearchCompleteness).
 //
 // A background thread flushes the memtable when size (memtable_flush_bytes)
-// and/or time (memtable_flush_ms) triggers are hit.
+// and/or time (memtable_flush_ms) triggers are hit. After flush, size-tiered
+// compaction may merge similar-sized segments (compaction_tier_threshold).
 class Db {
  public:
   struct Options {
@@ -37,8 +38,14 @@ class Db {
     uint64_t memtable_flush_ms = 0;
     std::string data_dir;  // empty = in-memory only
     SyncPolicy wal_sync = SyncPolicy::kAlways;
-    // After Flush, compact when the segment count reaches this (keeps RAM
-    // and search fan-out bounded without under-utilizing memory).
+    // Size-tiered compaction: merge when a size bucket has this many
+    // similar-sized segments (Cassandra-style; see docs/indexing.md §6.1).
+    // 0 disables size-tiered auto-compaction.
+    size_t compaction_tier_threshold = 4;
+    // Size bucket growth factor between tiers (default 4 → L0, ~4×, ~16×…).
+    size_t compaction_bucket_ratio = 4;
+    // Optional hard cap: full-compact when total segment count reaches this.
+    // 0 disables the cap. Kept as a safety net beside size-tiered policy.
     size_t max_segments_before_compact = 8;
   };
 
@@ -84,6 +91,9 @@ class Db {
   void RequestFlushLocked();
   Status FlushLocked();
   Status CompactLocked();
+  // Merges the segments at `indices` (into segments_). Full-overlap merges
+  // (all live segments) purge tombstones; partial merges keep them.
+  Status CompactSelectedLocked(const std::vector<size_t>& indices);
 
   Row Reconcile(const RowId& id) const;
   Status AppendWal(const Row& row);

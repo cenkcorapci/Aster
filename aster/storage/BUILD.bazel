@@ -7,10 +7,12 @@ package(default_visibility = ["//visibility:public"])
 cc_library(
     name = "memory",
     srcs = [
+        "compaction.cc",
         "memtable.cc",
         "segment.cc",
     ],
     hdrs = [
+        "compaction.h",
         "memtable.h",
         "segment.h",
     ],

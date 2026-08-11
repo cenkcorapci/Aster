@@ -16,6 +16,7 @@
 
 #include "aster/index/distance.h"
 #include "aster/query/topk.h"
+#include "aster/storage/compaction.h"
 #include "aster/storage/manifest.h"
 #include "aster/storage/sstable.h"
 
@@ -495,11 +496,32 @@ Status Db::FlushLocked() {
 }
 
 Status Db::MaybeCompact() {
-  if (options_.max_segments_before_compact == 0) return Status::Ok();
-  if (segments_.size() < options_.max_segments_before_compact) {
+  // Cascade size-tiered merges: a merged segment may fill the next tier.
+  constexpr int kMaxCascades = 64;
+  for (int i = 0; i < kMaxCascades; ++i) {
+    if (options_.compaction_tier_threshold > 0) {
+      std::vector<size_t> sizes;
+      sizes.reserve(segments_.size());
+      for (const auto& seg : segments_) {
+        sizes.push_back(seg->row_count());
+      }
+      auto pick = SelectSizeTieredCompaction(
+          sizes, options_.compaction_tier_threshold,
+          options_.compaction_bucket_ratio);
+      if (pick.has_value()) {
+        if (auto st = CompactSelectedLocked(pick->input_indices); !st.ok()) {
+          return st;
+        }
+        continue;
+      }
+    }
+    if (options_.max_segments_before_compact > 0 &&
+        segments_.size() >= options_.max_segments_before_compact) {
+      return CompactLocked();
+    }
     return Status::Ok();
   }
-  return CompactLocked();
+  return Status::Ok();
 }
 
 Status Db::Compact() {
@@ -512,40 +534,71 @@ Status Db::CompactLocked() {
   if (segments_.size() < 2 && !SegmentHasTombstone(segments_)) {
     return Status::Ok();
   }
+  std::vector<size_t> all(segments_.size());
+  for (size_t i = 0; i < all.size(); ++i) all[i] = i;
+  return CompactSelectedLocked(all);
+}
+
+Status Db::CompactSelectedLocked(const std::vector<size_t>& indices) {
+  if (indices.empty()) return Status::Ok();
+
+  std::vector<std::shared_ptr<const Segment>> inputs;
+  inputs.reserve(indices.size());
+  for (size_t idx : indices) {
+    if (idx >= segments_.size()) {
+      return Status::InvalidArgument("compaction index out of range");
+    }
+    inputs.push_back(segments_[idx]);
+  }
+
+  const bool full_overlap = indices.size() == segments_.size();
+  if (!full_overlap && inputs.size() < 2) return Status::Ok();
+  if (full_overlap && inputs.size() < 2 && !SegmentHasTombstone(inputs)) {
+    return Status::Ok();
+  }
+
   const uint64_t id = next_segment_id_++;
 
   std::vector<std::string> old_paths;
   if (!options_.data_dir.empty()) {
-    old_paths.reserve(segments_.size());
-    for (const auto& seg : segments_) {
+    old_paths.reserve(inputs.size());
+    for (const auto& seg : inputs) {
       old_paths.push_back(SegmentPath(seg->id()));
     }
   }
 
-  auto compacted = CompactSegments(id, options_.metric, segments_,
-                                   /*drop_tombstones=*/true);
+  // Tombstones may only be dropped on full-overlap compaction
+  // (tla/AsterLsmIndex.tla NoResurrection / M1-T11).
+  auto compacted = CompactSegments(id, options_.metric, inputs,
+                                   /*drop_tombstones=*/full_overlap);
+  const bool omit_empty = full_overlap && compacted->row_count() == 0;
 
-  if (compacted->row_count() == 0) {
-    segments_.clear();
-    if (!options_.data_dir.empty()) {
-      if (auto st = PublishManifest(); !st.ok()) return st;
-      for (const auto& path : old_paths) {
-        ::remove(path.c_str());
-      }
-      GarbageCollectOrphans();
-    }
-    return Status::Ok();
-  }
-
-  if (!options_.data_dir.empty()) {
+  if (!options_.data_dir.empty() && !omit_empty) {
     if (auto st = WriteSstable(SegmentPath(id), id, options_.metric,
                                compacted->rows());
         !st.ok()) {
       return st;
     }
   }
-  segments_.clear();
-  segments_.push_back(std::move(compacted));
+
+  std::vector<bool> drop(segments_.size(), false);
+  for (size_t idx : indices) drop[idx] = true;
+
+  std::vector<std::shared_ptr<const Segment>> next;
+  next.reserve(segments_.size() - inputs.size() + (omit_empty ? 0 : 1));
+  const size_t insert_at = *std::min_element(indices.begin(), indices.end());
+  bool inserted = false;
+  for (size_t i = 0; i < segments_.size(); ++i) {
+    if (i == insert_at && !inserted) {
+      if (!omit_empty) next.push_back(compacted);
+      inserted = true;
+    }
+    if (!drop[i]) next.push_back(segments_[i]);
+  }
+  if (!inserted && !omit_empty) next.push_back(compacted);
+
+  segments_ = std::move(next);
+
   if (!options_.data_dir.empty()) {
     if (auto st = PublishManifest(); !st.ok()) return st;
     for (const auto& path : old_paths) {

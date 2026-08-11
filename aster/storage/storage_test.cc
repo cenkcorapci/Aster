@@ -8,6 +8,7 @@
 
 #include "aster/index/bloom.h"
 #include "aster/core/features.h"
+#include "aster/storage/compaction.h"
 #include "aster/storage/manifest.h"
 #include "aster/storage/memtable.h"
 #include "aster/storage/segment.h"
@@ -522,6 +523,52 @@ TEST(Manifest, CorruptAndMissing) {
 TEST(Crc32, KnownEmptyAndNonEmpty) {
   EXPECT_NE(Crc32("", 0), Crc32("a", 1));
   EXPECT_EQ(Crc32("abc", 3), Crc32("abc", 3));
+}
+
+TEST(SizeTiered, BucketByExponentialSize) {
+  EXPECT_EQ(SizeTieredBucket(0), 0);
+  EXPECT_EQ(SizeTieredBucket(1), 0);
+  EXPECT_EQ(SizeTieredBucket(3), 0);
+  EXPECT_EQ(SizeTieredBucket(4), 1);
+  EXPECT_EQ(SizeTieredBucket(15), 1);
+  EXPECT_EQ(SizeTieredBucket(16), 2);
+  EXPECT_EQ(SizeTieredBucket(64), 3);
+}
+
+TEST(SizeTiered, NoPickBelowThreshold) {
+  std::vector<size_t> sizes = {1, 1, 1};
+  EXPECT_FALSE(SelectSizeTieredCompaction(sizes, /*tier_threshold=*/4).has_value());
+  EXPECT_FALSE(SelectSizeTieredCompaction(sizes, /*tier_threshold=*/0).has_value());
+  EXPECT_FALSE(SelectSizeTieredCompaction({1}, /*tier_threshold=*/4).has_value());
+}
+
+TEST(SizeTiered, SelectsLowestOverflowingTier) {
+  // Four flush-sized segments → pick all of tier 0.
+  std::vector<size_t> sizes = {1, 1, 1, 1};
+  auto pick = SelectSizeTieredCompaction(sizes, 4);
+  ASSERT_TRUE(pick.has_value());
+  EXPECT_EQ(pick->tier, 0);
+  ASSERT_EQ(pick->input_indices.size(), 4u);
+  EXPECT_EQ(pick->input_indices[0], 0u);
+  EXPECT_EQ(pick->input_indices[3], 3u);
+
+  // Mixed tiers: three small + four medium-sized → pick the medium tier (4).
+  sizes = {1, 1, 1, 8, 8, 8, 8};
+  pick = SelectSizeTieredCompaction(sizes, 4);
+  ASSERT_TRUE(pick.has_value());
+  EXPECT_EQ(pick->tier, SizeTieredBucket(8));
+  ASSERT_EQ(pick->input_indices.size(), 4u);
+  EXPECT_EQ(pick->input_indices[0], 3u);
+  EXPECT_EQ(pick->input_indices[3], 6u);
+}
+
+TEST(SizeTiered, PrefersLowerTierWhenBothOverflow) {
+  // Both tier 0 and tier 1 overflow; lowest tier wins.
+  std::vector<size_t> sizes = {1, 1, 1, 1, 8, 8, 8, 8};
+  auto pick = SelectSizeTieredCompaction(sizes, 4);
+  ASSERT_TRUE(pick.has_value());
+  EXPECT_EQ(pick->tier, 0);
+  EXPECT_EQ(pick->input_indices.size(), 4u);
 }
 
 }  // namespace

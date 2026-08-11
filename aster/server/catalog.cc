@@ -126,6 +126,7 @@ Status Catalog::Load() {
     db_opt.data_dir = CollectionDir(info.name);
     db_opt.wal_sync = options_.wal_sync;
     db_opt.memtable_flush_bytes = options_.memtable_flush_bytes;
+    db_opt.compaction_tier_threshold = options_.compaction_tier_threshold;
     db_opt.max_segments_before_compact = options_.max_segments_before_compact;
     auto db = Db::Open(db_opt);
     if (!db.ok()) return db.status();
@@ -175,6 +176,7 @@ Status Catalog::CreateCollection(const CollectionInfo& info) {
   db_opt.data_dir = CollectionDir(info.name);
   db_opt.wal_sync = options_.wal_sync;
   db_opt.memtable_flush_bytes = options_.memtable_flush_bytes;
+  db_opt.compaction_tier_threshold = options_.compaction_tier_threshold;
   db_opt.max_segments_before_compact = options_.max_segments_before_compact;
   auto db = Db::Open(db_opt);
   if (!db.ok()) return db.status();
