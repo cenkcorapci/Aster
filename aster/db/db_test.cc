@@ -289,6 +289,7 @@ TEST(Db, CorruptWalRowIsBoundsChecked) {
   auto bad = Db::Open(options);
   EXPECT_FALSE(bad.ok());
   EXPECT_EQ(bad.status().code(), StatusCode::kCorruption);
+}
 
 TEST(Db, CompactRemovesOrphanedSSTables) {
   const std::string dir = ::testing::TempDir() + "/aster_db_compact_cleanup";
