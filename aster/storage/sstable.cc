@@ -10,6 +10,7 @@
 #include <utility>
 
 #include "aster/core/features.h"
+#include "aster/index/tags.h"
 #include "aster/storage/wal.h"  // Crc32
 
 #if ASTER_ENABLE_COMPRESSION
@@ -289,62 +290,23 @@ std::string BuildVectorPayload(const std::vector<Row>& rows, uint32_t dimension,
   return payload;
 }
 
-// Tag bitmap block (§7.6). Until full portable Roaring (M2), each tag's
-// roaring_blob is a dense little-endian bitset over row ordinals.
+// Tag bitmap block (§7.6). TagIndex serializes dense little-endian bitsets
+// via the roaring-compatible API (aster/index/tags.h); portable CRoaring may
+// replace the blob encoding later without changing this frame layout.
 std::string BuildTagsPayload(const std::vector<Row>& rows) {
-  std::map<std::string, std::vector<uint32_t>> tag_to_ords;
-  for (uint32_t i = 0; i < rows.size(); ++i) {
-    for (const auto& tag : rows[i].tags) {
-      tag_to_ords[tag].push_back(i);
-    }
-  }
-  if (tag_to_ords.empty()) return {};
-
-  const uint32_t nbytes =
-      static_cast<uint32_t>((rows.size() + 7) / 8);
-  std::string payload;
-  AppendU32(payload, static_cast<uint32_t>(tag_to_ords.size()));
-  for (const auto& [tag, ords] : tag_to_ords) {
-    AppendU16(payload, static_cast<uint16_t>(tag.size()));
-    payload.append(tag);
-    std::string bits(nbytes, '\0');
-    for (uint32_t o : ords) {
-      bits[o / 8] = static_cast<char>(
-          static_cast<uint8_t>(bits[o / 8]) | (1u << (o % 8)));
-    }
-    AppendU32(payload, static_cast<uint32_t>(bits.size()));
-    payload.append(bits);
-  }
-  return payload;
+  return TagIndex::Build(rows).SerializePayload();
 }
 
 Status ParseTagsPayload(const std::string& payload, size_t row_count,
                         std::vector<std::set<std::string>>* out) {
   out->assign(row_count, {});
   if (payload.empty()) return Status::Ok();
-  size_t off = 0;
-  if (off + 4 > payload.size()) return Status::Corruption("tags truncated");
-  const uint32_t tag_count = ReadU32(payload, off);
-  for (uint32_t t = 0; t < tag_count; ++t) {
-    if (off + 2 > payload.size()) return Status::Corruption("tags truncated");
-    const uint16_t tag_len = ReadU16(payload, off);
-    if (off + tag_len + 4 > payload.size()) {
-      return Status::Corruption("tags truncated");
+  const TagIndex idx =
+      TagIndex::ParsePayload(payload, static_cast<uint32_t>(row_count));
+  for (const auto& [tag, bm] : idx.tags()) {
+    for (uint32_t ord : bm.ordinals()) {
+      if (ord < row_count) (*out)[ord].insert(tag);
     }
-    const std::string tag = payload.substr(off, tag_len);
-    off += tag_len;
-    const uint32_t blob_len = ReadU32(payload, off);
-    if (off + blob_len > payload.size()) {
-      return Status::Corruption("tags bitmap truncated");
-    }
-    for (size_t i = 0; i < row_count; ++i) {
-      const size_t byte_i = i / 8;
-      if (byte_i >= blob_len) break;
-      if ((static_cast<uint8_t>(payload[off + byte_i]) & (1u << (i % 8))) != 0) {
-        (*out)[i].insert(tag);
-      }
-    }
-    off += blob_len;
   }
   return Status::Ok();
 }

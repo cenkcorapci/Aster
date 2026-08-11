@@ -3,9 +3,12 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <set>
+#include <string>
 #include <vector>
 
 #include "aster/core/types.h"
+#include "aster/index/tags.h"
 #include "aster/index/vector_index.h"
 
 namespace aster {
@@ -29,22 +32,33 @@ class Segment {
   uint64_t id() const { return id_; }
   size_t row_count() const { return rows_ ? rows_->size() : 0; }
   const std::vector<Row>& rows() const { return *rows_; }
+  const TagIndex& tag_index() const { return tag_index_; }
 
   // Point lookup by binary search over the sorted id index.
   std::optional<Row> Get(const RowId& row_id) const;
 
   // ANN search over non-tombstoned rows of this segment.
-  std::vector<SearchHit> Search(VectorView query, uint32_t top_k,
-                                uint32_t ef_search) const;
+  // When `tags` is non-empty, only ordinals matching the tag bitmap AND are
+  // scored (post-filter / bitmap-driven exact scan — docs/indexing.md §7).
+  std::vector<SearchHit> Search(
+      VectorView query, uint32_t top_k, uint32_t ef_search,
+      const std::set<std::string>& tags = {}) const;
 
  private:
-  Segment(uint64_t id, std::shared_ptr<const std::vector<Row>> rows,
-          std::unique_ptr<VectorIndex> index)
-      : id_(id), rows_(std::move(rows)), index_(std::move(index)) {}
+  Segment(uint64_t id, Metric metric,
+          std::shared_ptr<const std::vector<Row>> rows,
+          std::unique_ptr<VectorIndex> index, TagIndex tag_index)
+      : id_(id),
+        metric_(metric),
+        rows_(std::move(rows)),
+        index_(std::move(index)),
+        tag_index_(std::move(tag_index)) {}
 
   uint64_t id_;
+  Metric metric_;
   std::shared_ptr<const std::vector<Row>> rows_;
   std::unique_ptr<VectorIndex> index_;
+  TagIndex tag_index_;
 };
 
 // Merges segments into one, applying LWW per id. Tombstones may only be

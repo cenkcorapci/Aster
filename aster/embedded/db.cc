@@ -5,6 +5,7 @@
 #include <queue>
 
 #include "aster/index/distance.h"
+#include "aster/index/tags.h"
 #include "aster/query/topk.h"
 
 namespace aster {
@@ -17,7 +18,8 @@ bool HasAllTags(const Row& row, const std::set<std::string>& wanted) {
 }
 
 std::vector<SearchHit> MemtableTopK(const Memtable& memtable, Metric metric,
-                                    VectorView query, uint32_t top_k) {
+                                    VectorView query, uint32_t top_k,
+                                    const std::set<std::string>& tags) {
   if (top_k == 0 || query.empty() || memtable.empty()) return {};
 
   float qnorm = 0.0f;
@@ -32,6 +34,7 @@ std::vector<SearchHit> MemtableTopK(const Memtable& memtable, Metric metric,
 
   memtable.ForEach([&](const Row& row) {
     if (row.tombstone || row.vector.empty()) return;
+    if (!tags.empty() && !HasAllTags(row, tags)) return;
     float score;
     if (metric == Metric::kCosine) {
       float n2 = 0.0f;
@@ -55,6 +58,26 @@ std::vector<SearchHit> MemtableTopK(const Memtable& memtable, Metric metric,
     hits[i - 1] = {row->id, score};
   }
   return hits;
+}
+
+double EstimateFilterSelectivity(
+    const Memtable& memtable,
+    const std::vector<std::shared_ptr<const Segment>>& segments,
+    const std::set<std::string>& tags) {
+  if (tags.empty()) return 1.0;
+  uint64_t match = 0;
+  uint64_t total = 0;
+  for (const auto& segment : segments) {
+    total += segment->row_count();
+    match += segment->tag_index().MatchCount(tags);
+  }
+  memtable.ForEach([&](const Row& row) {
+    if (row.tombstone) return;
+    ++total;
+    if (HasAllTags(row, tags)) ++match;
+  });
+  if (total == 0) return 1.0;
+  return static_cast<double>(match) / static_cast<double>(total);
 }
 
 }  // namespace
@@ -114,14 +137,19 @@ std::optional<Row> Db::Get(const RowId& id) const {
 }
 
 std::vector<SearchHit> Db::Search(const SearchRequest& request) const {
-  const uint32_t fetch_k = request.top_k * 2 + 16;
+  const double sigma =
+      EstimateFilterSelectivity(memtable_, segments_, request.tags);
+  const uint32_t fetch_k =
+      request.tags.empty()
+          ? BaseFetchK(request.top_k)
+          : AdaptiveFetchK(request.top_k, request.ef_search, sigma);
   std::vector<std::vector<SearchHit>> candidates;
   candidates.reserve(1 + segments_.size());
-  candidates.push_back(
-      MemtableTopK(memtable_, options_.metric, request.vector, fetch_k));
+  candidates.push_back(MemtableTopK(memtable_, options_.metric, request.vector,
+                                    fetch_k, request.tags));
   for (const auto& segment : segments_) {
-    candidates.push_back(
-        segment->Search(request.vector, fetch_k, request.ef_search));
+    candidates.push_back(segment->Search(request.vector, fetch_k,
+                                         request.ef_search, request.tags));
   }
 
   std::vector<SearchHit> merged = MergeTopK(candidates, fetch_k);

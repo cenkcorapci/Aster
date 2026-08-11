@@ -366,13 +366,12 @@ Bitmap membership is by **row ordinal** (position in the ID index), not by
 `vector_slot`. Empty tag set for the segment ⇒ empty block
 (`HAS_TAGS` clear).
 
-**Roaring bytes:** portable (little-endian) Roaring bitmap serialization.
-Full encode/decode lands with M2-T07. **For M1-T02:** if every row has an
-empty tag set, write an empty tag block and clear `HAS_TAGS`. If any row
-has tags, either (a) emit correct portable roaring payloads and set
-`HAS_TAGS`, or (b) leave the block empty / clear `HAS_TAGS` and document
-in the PR that filtered disk search is deferred — unit tests without tags
-remain valid.
+**Roaring bytes:** dense little-endian bitset over row ordinals via the
+roaring-compatible API in `aster/index/tags.h` (M2-T07). Sparse in-memory
+`TagBitmap` / `TagIndex` power per-segment filtered search and adaptive
+`fetch_k`; SSTable payloads round-trip through `TagIndex::SerializePayload`
+/ `ParsePayload`. A future drop-in may emit portable CRoaring bytes in the
+same `roaring_blob` field without changing the frame layout.
 
 ### 7.7 Tree block (optional)
 

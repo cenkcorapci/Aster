@@ -12,6 +12,7 @@ cc_library(
         "hnsw_build.cc",
         "hnsw_graph.cc",
         "hnsw_search.cc",
+        "tags.cc",
     ],
     hdrs = [
         "bloom.h",
@@ -19,6 +20,7 @@ cc_library(
         "hnsw_build.h",
         "hnsw_graph.h",
         "hnsw_search.h",
+        "tags.h",
         "vector_index.h",
     ],
     deps = ["//aster/core"],
@@ -38,6 +40,16 @@ cc_test(
     name = "distance_test",
     size = "small",
     srcs = ["distance_test.cc"],
+    deps = [
+        ":index",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cc_test(
+    name = "tags_test",
+    size = "small",
+    srcs = ["tags_test.cc"],
     deps = [
         ":index",
         "@googletest//:gtest_main",

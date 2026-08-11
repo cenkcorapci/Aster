@@ -10,6 +10,8 @@
 #include <vector>
 
 #include "aster/db/db.h"
+#include "aster/index/tags.h"
+#include "aster/storage/segment.h"
 
 namespace aster {
 namespace {
@@ -288,6 +290,74 @@ TEST(Db, TagFilterRequiresAllTags) {
   req.vector = {1.0f, 0.0f};
   req.tags = {"red", "sale"};
   EXPECT_TRUE(db.Search(req).empty());
+}
+
+TEST(Db, FilteredSearchMatchesExactSemanticsOnSegment) {
+  // Many near-query rows without the filter tag; one far tagged row.
+  // Unfiltered top-k never sees the tagged row; bitmap-driven filtered
+  // search must still return it (docs/indexing.md §7).
+  Db db(SmallDb());
+  for (int i = 0; i < 40; ++i) {
+    ASSERT_TRUE(db.Upsert(MakeRow("near-" + std::to_string(i),
+                                  {1.0f, static_cast<float>(i) * 0.001f},
+                                  static_cast<Timestamp>(i + 1)))
+                    .ok());
+  }
+  ASSERT_TRUE(
+      db.Upsert(MakeRow("tagged", {-1.0f, 0.0f}, 100, {"rare"})).ok());
+  ASSERT_TRUE(db.Flush().ok());
+
+  SearchRequest unfiltered;
+  unfiltered.vector = {1.0f, 0.0f};
+  unfiltered.top_k = 5;
+  auto plain = db.Search(unfiltered);
+  ASSERT_FALSE(plain.empty());
+  for (const auto& hit : plain) {
+    EXPECT_NE(hit.id, "tagged");
+  }
+
+  SearchRequest filtered;
+  filtered.vector = {1.0f, 0.0f};
+  filtered.top_k = 5;
+  filtered.tags = {"rare"};
+  auto hits = db.Search(filtered);
+  ASSERT_EQ(hits.size(), 1u);
+  EXPECT_EQ(hits[0].id, "tagged");
+}
+
+TEST(Db, AdaptiveFetchKUsedForSelectiveFilter) {
+  // Fixture where σ is low enough that AdaptiveFetchK exceeds BaseFetchK.
+  // Pin the policy function against the segment tag index selectivity.
+  std::vector<Row> rows;
+  for (int i = 0; i < 100; ++i) {
+    Row row;
+    row.id = "r" + std::to_string(i);
+    row.vector = {1.0f, 0.0f};
+    row.timestamp = static_cast<Timestamp>(i + 1);
+    if (i == 0) row.tags = {"needle"};
+    rows.push_back(std::move(row));
+  }
+  auto segment = Segment::Build(1, Metric::kL2, std::move(rows));
+  const double sigma = segment->tag_index().Selectivity({"needle"});
+  EXPECT_DOUBLE_EQ(sigma, 0.01);
+  const uint32_t k = 10;
+  const uint32_t ef = 128;
+  EXPECT_GT(AdaptiveFetchK(k, ef, sigma), BaseFetchK(k));
+  EXPECT_EQ(AdaptiveFetchK(k, ef, sigma), ef);
+
+  SearchRequest req;
+  req.vector = {1.0f, 0.0f};
+  req.top_k = k;
+  req.ef_search = ef;
+  req.tags = {"needle"};
+  Db db(SmallDb());
+  for (const Row& row : segment->rows()) {
+    ASSERT_TRUE(db.Upsert(row).ok());
+  }
+  ASSERT_TRUE(db.Flush().ok());
+  auto hits = db.Search(req);
+  ASSERT_EQ(hits.size(), 1u);
+  EXPECT_EQ(hits[0].id, "r0");
 }
 
 TEST(Db, TombstoneUpsertAllowedWithoutDimension) {

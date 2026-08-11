@@ -15,6 +15,7 @@
 #include <utility>
 
 #include "aster/index/distance.h"
+#include "aster/index/tags.h"
 #include "aster/query/topk.h"
 #include "aster/storage/compaction.h"
 #include "aster/storage/manifest.h"
@@ -39,8 +40,11 @@ bool SegmentHasTombstone(
 }
 
 // Bounded top-k over the memtable without materializing an O(n) hit list.
+// When `tags` is non-empty, only rows that contain all tags are considered
+// so selective filters cannot be starved by unfiltered over-fetch.
 std::vector<SearchHit> MemtableTopK(const Memtable& memtable, Metric metric,
-                                    VectorView query, uint32_t top_k) {
+                                    VectorView query, uint32_t top_k,
+                                    const std::set<std::string>& tags) {
   if (top_k == 0 || query.empty() || memtable.empty()) return {};
 
   float qnorm = 0.0f;
@@ -55,6 +59,7 @@ std::vector<SearchHit> MemtableTopK(const Memtable& memtable, Metric metric,
 
   memtable.ForEach([&](const Row& row) {
     if (row.tombstone || row.vector.empty()) return;
+    if (!tags.empty() && !HasAllTags(row, tags)) return;
     float score;
     if (metric == Metric::kCosine) {
       float n2 = 0.0f;
@@ -78,6 +83,27 @@ std::vector<SearchHit> MemtableTopK(const Memtable& memtable, Metric metric,
     hits[i - 1] = {row->id, score};
   }
   return hits;
+}
+
+// Estimate filter selectivity σ across live segments (+ memtable tag scan).
+double EstimateFilterSelectivity(
+    const Memtable& memtable,
+    const std::vector<std::shared_ptr<const Segment>>& segments,
+    const std::set<std::string>& tags) {
+  if (tags.empty()) return 1.0;
+  uint64_t match = 0;
+  uint64_t total = 0;
+  for (const auto& segment : segments) {
+    total += segment->row_count();
+    match += segment->tag_index().MatchCount(tags);
+  }
+  memtable.ForEach([&](const Row& row) {
+    if (row.tombstone) return;
+    ++total;
+    if (HasAllTags(row, tags)) ++match;
+  });
+  if (total == 0) return 1.0;
+  return static_cast<double>(match) / static_cast<double>(total);
 }
 
 void PutU32(std::string& b, uint32_t v) {
@@ -434,14 +460,19 @@ std::optional<Row> Db::Get(const RowId& id) const {
 
 std::vector<SearchHit> Db::Search(const SearchRequest& request) const {
   std::lock_guard lock(mu_);
-  const uint32_t fetch_k = request.top_k * 2 + 16;
+  const double sigma =
+      EstimateFilterSelectivity(memtable_, segments_, request.tags);
+  const uint32_t fetch_k =
+      request.tags.empty()
+          ? BaseFetchK(request.top_k)
+          : AdaptiveFetchK(request.top_k, request.ef_search, sigma);
   std::vector<std::vector<SearchHit>> candidates;
   candidates.reserve(1 + segments_.size());
-  candidates.push_back(
-      MemtableTopK(memtable_, options_.metric, request.vector, fetch_k));
+  candidates.push_back(MemtableTopK(memtable_, options_.metric, request.vector,
+                                    fetch_k, request.tags));
   for (const auto& segment : segments_) {
-    candidates.push_back(
-        segment->Search(request.vector, fetch_k, request.ef_search));
+    candidates.push_back(segment->Search(request.vector, fetch_k,
+                                         request.ef_search, request.tags));
   }
 
   std::vector<SearchHit> merged = MergeTopK(candidates, fetch_k);
@@ -451,6 +482,8 @@ std::vector<SearchHit> Db::Search(const SearchRequest& request) const {
     if (results.size() >= request.top_k) break;
     const Row row = Reconcile(hit.id);
     if (row.tombstone) continue;
+    // Defense-in-depth post-filter after LWW reconcile (segment bitmaps are
+    // per-segment; a newer memtable/segment version may drop tags).
     if (!request.tags.empty() && !HasAllTags(row, request.tags)) continue;
     results.push_back(
         {hit.id, Score(options_.metric, request.vector, row.vector)});
