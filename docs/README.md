@@ -3,11 +3,11 @@
 | Doc | Purpose |
 | --- | --- |
 | [Tutorials](tutorials/README.md) | Hands-on guides (start here) |
-| [Business plan](business-plan.md) | SaaS positioning and phased delivery |
+| [Business plan](business-plan.md) | SaaS positioning, pricing, cloud architecture |
 | [Development plan](development-plan.md) | Milestones and roadmap |
-| [Design](design.md) | Architecture (LSM + segmented HNSW + ring) |
+| [Design](design.md) | Engine architecture (LSM + segmented HNSW + ring) |
 | [Code structure](code-structure.md) | Layers, packages, profiles |
-| [Indexing](indexing.md) | ANN / HNSW reference (normative for M2+) |
+| [Indexing](indexing.md) | ANN / HNSW contract (normative for M2+) |
 | [SSTable format](sstable-format.md) | On-disk segment layout |
 | [Client API](client-api.md) | Collection-centric product API (target) |
 | [Versioning](versioning.md) | Single-version release policy |

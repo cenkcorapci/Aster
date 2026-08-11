@@ -322,5 +322,69 @@ TEST(Db, CompactRemovesOrphanedSSTables) {
   EXPECT_EQ(access((dir + "/seg_000003.ast").c_str(), F_OK), 0);
 }
 
+TEST(Db, CompactPurgesTombstonesInSingleSegment) {
+  const std::string dir = ::testing::TempDir() + "/aster_db_single_tomb";
+  Db::Options options = SmallDb();
+  options.data_dir = dir;
+  options.wal_sync = SyncPolicy::kNever;
+  options.max_segments_before_compact = 0;
+
+  auto db = Db::Open(options);
+  ASSERT_TRUE(db.ok());
+  ASSERT_TRUE(db.value()->Upsert(MakeRow("a", {1.0f, 0.0f}, 1)).ok());
+  ASSERT_TRUE(db.value()->Delete("a", 2).ok());
+  ASSERT_TRUE(db.value()->Flush().ok());
+  ASSERT_EQ(db.value()->segment_count(), 1u);
+  EXPECT_EQ(db.value()->approximate_row_count(), 1u);  // tombstone retained
+  EXPECT_EQ(access((dir + "/seg_000001.ast").c_str(), F_OK), 0);
+
+  ASSERT_TRUE(db.value()->Compact().ok());
+  EXPECT_EQ(db.value()->segment_count(), 0u);
+  EXPECT_EQ(db.value()->approximate_row_count(), 0u);
+  EXPECT_NE(access((dir + "/seg_000001.ast").c_str(), F_OK), 0);
+}
+
+TEST(Db, OpenGarbageCollectsOrphanSegmentsAndTmp) {
+  const std::string dir = ::testing::TempDir() + "/aster_db_orphan_gc";
+  Db::Options options = SmallDb();
+  options.data_dir = dir;
+  options.wal_sync = SyncPolicy::kNever;
+
+  {
+    auto db = Db::Open(options);
+    ASSERT_TRUE(db.ok());
+    ASSERT_TRUE(db.value()->Upsert(MakeRow("a", {1.0f, 0.0f}, 1)).ok());
+    ASSERT_TRUE(db.value()->Flush().ok());
+  }
+
+  // Simulate a crashed flush/compaction leaving orphans behind.
+  {
+    std::FILE* f = std::fopen((dir + "/seg_009999.ast").c_str(), "wb");
+    ASSERT_NE(f, nullptr);
+    std::fputs("orphan", f);
+    std::fclose(f);
+  }
+  {
+    std::FILE* f = std::fopen((dir + "/seg_000001.ast.tmp").c_str(), "wb");
+    ASSERT_NE(f, nullptr);
+    std::fputs("tmp", f);
+    std::fclose(f);
+  }
+  {
+    std::FILE* f = std::fopen((dir + "/MANIFEST.tmp").c_str(), "wb");
+    ASSERT_NE(f, nullptr);
+    std::fputs("tmp", f);
+    std::fclose(f);
+  }
+
+  auto reopened = Db::Open(options);
+  ASSERT_TRUE(reopened.ok());
+  EXPECT_TRUE(reopened.value()->Get("a").has_value());
+  EXPECT_EQ(access((dir + "/seg_000001.ast").c_str(), F_OK), 0);
+  EXPECT_NE(access((dir + "/seg_009999.ast").c_str(), F_OK), 0);
+  EXPECT_NE(access((dir + "/seg_000001.ast.tmp").c_str(), F_OK), 0);
+  EXPECT_NE(access((dir + "/MANIFEST.tmp").c_str(), F_OK), 0);
+}
+
 }  // namespace
 }  // namespace aster

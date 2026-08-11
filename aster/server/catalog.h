@@ -55,8 +55,7 @@ class Catalog {
   static Result<Metric> MetricFromString(const std::string& s);
 
   Status CreateCollection(const CollectionInfo& info);
-  // Removes the collection from the catalog. On-disk files under
-  // data_dir/<name>/ are left in place (manual cleanup / future GC).
+  // Removes the collection from the catalog and deletes data_dir/<name>/.
   Status DropCollection(const std::string& name);
   std::vector<CollectionInfo> ListCollections() const;
   std::optional<CollectionInfo> GetCollection(const std::string& name) const;

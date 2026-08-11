@@ -1,13 +1,16 @@
 #include "aster/db/db.h"
 
+#include <dirent.h>
 #include <errno.h>
 #include <cstdio>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <queue>
+#include <set>
 #include <utility>
 
 #include "aster/index/distance.h"
@@ -21,6 +24,16 @@ namespace {
 bool HasAllTags(const Row& row, const std::set<std::string>& wanted) {
   return std::includes(row.tags.begin(), row.tags.end(), wanted.begin(),
                        wanted.end());
+}
+
+bool SegmentHasTombstone(
+    const std::vector<std::shared_ptr<const Segment>>& segments) {
+  for (const auto& seg : segments) {
+    for (const Row& row : seg->rows()) {
+      if (row.tombstone) return true;
+    }
+  }
+  return false;
 }
 
 // Bounded top-k over the memtable without materializing an O(n) hit list.
@@ -179,6 +192,12 @@ std::string JoinPath(const std::string& dir, const std::string& name) {
   return dir + "/" + name;
 }
 
+bool IsSegmentFileName(const std::string& name) {
+  // seg_NNNNNN.ast or leftover seg_*.ast.tmp from a crashed write.
+  if (name.rfind("seg_", 0) != 0) return false;
+  return name.find(".ast") != std::string::npos;
+}
+
 }  // namespace
 
 Db::Db(Options options) : options_(std::move(options)) {}
@@ -196,6 +215,39 @@ std::string Db::ManifestPath() const {
 
 std::string Db::WalPath() const {
   return JoinPath(options_.data_dir, "WAL");
+}
+
+void Db::GarbageCollectOrphans() {
+  if (options_.data_dir.empty()) return;
+
+  std::set<std::string> live;
+  for (const auto& seg : segments_) {
+    char name[64];
+    std::snprintf(name, sizeof(name), "seg_%06llu.ast",
+                  static_cast<unsigned long long>(seg->id()));
+    live.insert(name);
+  }
+
+  DIR* dir = ::opendir(options_.data_dir.c_str());
+  if (!dir) return;
+  while (dirent* ent = ::readdir(dir)) {
+    const std::string name = ent->d_name;
+    if (name == "." || name == "..") continue;
+    if (name == "MANIFEST.tmp") {
+      ::remove(JoinPath(options_.data_dir, name).c_str());
+      continue;
+    }
+    // seg_*.ast not in the manifest, or any seg_*.ast.tmp from a crashed write.
+    if (!IsSegmentFileName(name)) continue;
+    if (name.size() >= 4 && name.compare(name.size() - 4, 4, ".tmp") == 0) {
+      ::remove(JoinPath(options_.data_dir, name).c_str());
+      continue;
+    }
+    if (live.count(name) == 0) {
+      ::remove(JoinPath(options_.data_dir, name).c_str());
+    }
+  }
+  ::closedir(dir);
 }
 
 Result<std::unique_ptr<Db>> Db::Open(Options options) {
@@ -241,6 +293,10 @@ Result<std::unique_ptr<Db>> Db::Open(Options options) {
   auto wal = WalWriter::Open(db->WalPath(), options.wal_sync);
   if (!wal.ok()) return wal.status();
   db->wal_ = std::move(wal.value());
+
+  // Drop SSTables / tmp files not referenced by the live manifest. Crashed
+  // flushes and compactions otherwise leave unbounded orphan disk usage.
+  db->GarbageCollectOrphans();
   return db;
 }
 
@@ -347,6 +403,10 @@ Status Db::Flush() {
   if (!options_.data_dir.empty()) {
     if (auto st = WriteSstable(SegmentPath(id), id, options_.metric, *rows);
         !st.ok()) {
+      // Memtable was already sealed; restore so in-process reads still work.
+      // WAL is intact, so a reopen would recover the same rows.
+      for (Row& row : *rows) memtable_.Apply(std::move(row));
+      --next_segment_id_;
       return st;
     }
   }
@@ -371,7 +431,14 @@ Status Db::MaybeCompact() {
 }
 
 Status Db::Compact() {
-  if (segments_.size() < 2) return Status::Ok();
+  // Full compaction covers every on-disk segment, so tombstones may be
+  // dropped (tla/AsterLsmIndex.tla NoResurrection). A single segment still
+  // needs a rewrite when it contains tombstones — otherwise deleted rows
+  // retain id-index / metadata forever.
+  if (segments_.empty()) return Status::Ok();
+  if (segments_.size() < 2 && !SegmentHasTombstone(segments_)) {
+    return Status::Ok();
+  }
   const uint64_t id = next_segment_id_++;
 
   // Collect old SSTable paths before clearing segments so we can remove them
@@ -386,6 +453,21 @@ Status Db::Compact() {
 
   auto compacted = CompactSegments(id, options_.metric, segments_,
                                    /*drop_tombstones=*/true);
+
+  if (compacted->row_count() == 0) {
+    // Nothing live left — drop all segment files instead of writing an empty
+    // SSTable that would still cost prelude/footer bytes.
+    segments_.clear();
+    if (!options_.data_dir.empty()) {
+      if (auto st = PublishManifest(); !st.ok()) return st;
+      for (const auto& path : old_paths) {
+        ::remove(path.c_str());
+      }
+      GarbageCollectOrphans();
+    }
+    return Status::Ok();
+  }
+
   if (!options_.data_dir.empty()) {
     if (auto st = WriteSstable(SegmentPath(id), id, options_.metric,
                                compacted->rows());
@@ -398,11 +480,12 @@ Status Db::Compact() {
   if (!options_.data_dir.empty()) {
     if (auto st = PublishManifest(); !st.ok()) return st;
     // Remove the now-superseded SSTable files. Deletion is best-effort:
-    // a leftover file on disk is harmless (Open ignores files not in the
-    // manifest), but failing to remove it would cause unbounded disk growth.
+    // a leftover file on disk is harmless after Open GC, but failing to
+    // remove it would cause unbounded disk growth across many compactions.
     for (const auto& path : old_paths) {
-      ::remove(path.c_str());  // best-effort; ignore errors
+      ::remove(path.c_str());
     }
+    GarbageCollectOrphans();
   }
   return Status::Ok();
 }

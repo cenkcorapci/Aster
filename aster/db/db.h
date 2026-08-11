@@ -50,6 +50,8 @@ class Db {
   Status Flush();
 
   // Full compaction: merges all segments, LWW, purges tombstones.
+  // Rewrites even a single segment when it still contains tombstones;
+  // removes all SSTables when nothing live remains.
   Status Compact();
 
   size_t segment_count() const { return segments_.size(); }
@@ -63,6 +65,8 @@ class Db {
   Status AppendWal(const Row& row);
   Status PublishManifest();
   Status MaybeCompact();
+  // Deletes seg_*.ast / *.tmp files not referenced by the live segment set.
+  void GarbageCollectOrphans();
   std::string SegmentPath(uint64_t id) const;
   std::string ManifestPath() const;
   std::string WalPath() const;

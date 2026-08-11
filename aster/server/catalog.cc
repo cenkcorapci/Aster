@@ -1,8 +1,11 @@
 #include "aster/server/catalog.h"
 
+#include <dirent.h>
 #include <cstdio>
 #include <fstream>
+#include <string>
 #include <sys/stat.h>
+#include <unistd.h>
 
 namespace aster {
 namespace {
@@ -12,6 +15,28 @@ bool EnsureDir(const std::string& path) {
   struct stat st {};
   if (::stat(path.c_str(), &st) == 0) return S_ISDIR(st.st_mode);
   return ::mkdir(path.c_str(), 0755) == 0;
+}
+
+// Best-effort recursive delete of a collection data directory.
+void RemoveTree(const std::string& path) {
+  DIR* dir = ::opendir(path.c_str());
+  if (!dir) {
+    ::remove(path.c_str());
+    return;
+  }
+  while (dirent* ent = ::readdir(dir)) {
+    const std::string name = ent->d_name;
+    if (name == "." || name == "..") continue;
+    const std::string child = path + "/" + name;
+    struct stat st {};
+    if (::stat(child.c_str(), &st) == 0 && S_ISDIR(st.st_mode)) {
+      RemoveTree(child);
+    } else {
+      ::remove(child.c_str());
+    }
+  }
+  ::closedir(dir);
+  ::rmdir(path.c_str());
 }
 
 }  // namespace
@@ -165,13 +190,20 @@ Status Catalog::CreateCollection(const CollectionInfo& info) {
 }
 
 Status Catalog::DropCollection(const std::string& name) {
-  std::lock_guard lock(mu_);
-  if (!infos_.count(name)) {
-    return Status::NotFound("collection not found");
+  std::string dir;
+  {
+    std::lock_guard lock(mu_);
+    if (!infos_.count(name)) {
+      return Status::NotFound("collection not found");
+    }
+    dir = CollectionDir(name);
+    // Drop the Db first so WAL fds close before we unlink files.
+    dbs_.erase(name);
+    infos_.erase(name);
+    if (auto st = PersistCatalog(); !st.ok()) return st;
   }
-  dbs_.erase(name);
-  infos_.erase(name);
-  return PersistCatalog();
+  RemoveTree(dir);
+  return Status::Ok();
 }
 
 std::vector<CollectionInfo> Catalog::ListCollections() const {

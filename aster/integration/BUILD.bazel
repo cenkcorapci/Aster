@@ -17,6 +17,7 @@ cc_test(
         "//aster/metrics",
         "//aster/platform",
         "//aster/query",
+        "//aster/server",
         "//aster/storage",
         "@googletest//:gtest_main",
     ],

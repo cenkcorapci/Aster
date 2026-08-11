@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <dirent.h>
 #include <sys/stat.h>
 
 #include <set>
@@ -12,6 +13,7 @@
 #include "aster/metrics/metrics.h"
 #include "aster/platform/posix_storage.h"
 #include "aster/query/topk.h"
+#include "aster/server/catalog.h"
 #include "aster/storage/manifest.h"
 #include "aster/storage/sstable.h"
 
@@ -26,6 +28,38 @@ Row MakeRow(const std::string& id, std::vector<float> vec, Timestamp ts,
   row.timestamp = ts;
   row.tags = std::move(tags);
   return row;
+}
+
+uint64_t DirBytes(const std::string& path) {
+  uint64_t total = 0;
+  DIR* dir = ::opendir(path.c_str());
+  if (!dir) return 0;
+  while (dirent* ent = ::readdir(dir)) {
+    const std::string name = ent->d_name;
+    if (name == "." || name == "..") continue;
+    const std::string child = path + "/" + name;
+    struct stat st {};
+    if (::stat(child.c_str(), &st) != 0) continue;
+    if (S_ISDIR(st.st_mode)) {
+      total += DirBytes(child);
+    } else {
+      total += static_cast<uint64_t>(st.st_size);
+    }
+  }
+  ::closedir(dir);
+  return total;
+}
+
+int CountFilesWithPrefix(const std::string& path, const std::string& prefix) {
+  int n = 0;
+  DIR* dir = ::opendir(path.c_str());
+  if (!dir) return 0;
+  while (dirent* ent = ::readdir(dir)) {
+    const std::string name = ent->d_name;
+    if (name.rfind(prefix, 0) == 0) ++n;
+  }
+  ::closedir(dir);
+  return n;
 }
 
 // End-to-end: write → flush → search → delete → compact → reopen.
@@ -201,6 +235,130 @@ TEST(Integration, LwwAcrossSegmentsAfterReopen) {
   EXPECT_FLOAT_EQ(row->vector[1], 1.0f);
   EXPECT_FLOAT_EQ(Score(Metric::kDot, row->vector, std::vector<float>{0.0f, 1.0f}),
                   1.0f);
+}
+
+// Simulates an update/delete-heavy workload and asserts disk usage shrinks
+// after compaction / drop (guards against silent storage leaks).
+TEST(Integration, StorageUsageSimulationUpdateDeleteCompactDrop) {
+  constexpr int kDocs = 200;
+  constexpr uint32_t kDim = 32;
+  const std::string root = ::testing::TempDir() + "/aster_integ_storage_sim";
+  ::mkdir(root.c_str(), 0755);
+
+  Catalog::Options cat_opt;
+  cat_opt.data_dir = root;
+  cat_opt.wal_sync = SyncPolicy::kNever;
+  cat_opt.max_segments_before_compact = 0;  // manual compact for measurement
+  auto cat = Catalog::Open(cat_opt);
+  ASSERT_TRUE(cat.ok()) << cat.status().message();
+
+  CollectionInfo info;
+  info.name = "sim";
+  info.dimension = kDim;
+  info.metric = Metric::kL2;
+  ASSERT_TRUE(cat.value()->CreateCollection(info).ok());
+  const std::string col_dir = root + "/sim";
+
+  auto MakeVec = [&](int seed) {
+    std::vector<float> v(kDim);
+    for (uint32_t i = 0; i < kDim; ++i) {
+      v[i] = static_cast<float>((seed * 31 + static_cast<int>(i)) % 100) / 100.0f;
+    }
+    return v;
+  };
+
+  // Phase 1: insert + flush in batches (multiple segments / versions).
+  for (int i = 0; i < kDocs; ++i) {
+    ASSERT_TRUE(cat.value()
+                    ->Upsert("sim", MakeRow("d" + std::to_string(i), MakeVec(i),
+                                            static_cast<Timestamp>(i + 1)))
+                    .ok());
+    if ((i + 1) % 40 == 0) {
+      ASSERT_TRUE(cat.value()->Flush("sim").ok());
+    }
+  }
+  ASSERT_TRUE(cat.value()->Flush("sim").ok());
+  const uint64_t after_insert = DirBytes(col_dir);
+  const int segs_after_insert = CountFilesWithPrefix(col_dir, "seg_");
+  EXPECT_GE(segs_after_insert, 2);
+  EXPECT_GT(after_insert, 0u);
+
+  // Phase 2: rewrite every doc (LWW supersedes) across new segments.
+  for (int i = 0; i < kDocs; ++i) {
+    ASSERT_TRUE(
+        cat.value()
+            ->Upsert("sim", MakeRow("d" + std::to_string(i), MakeVec(i + 1000),
+                                    static_cast<Timestamp>(1000 + i)))
+            .ok());
+    if ((i + 1) % 40 == 0) {
+      ASSERT_TRUE(cat.value()->Flush("sim").ok());
+    }
+  }
+  ASSERT_TRUE(cat.value()->Flush("sim").ok());
+  const uint64_t after_update = DirBytes(col_dir);
+  EXPECT_GT(after_update, after_insert);  // old + new versions on disk
+
+  ASSERT_TRUE(cat.value()->Compact("sim").ok());
+  const uint64_t after_compact = DirBytes(col_dir);
+  EXPECT_LT(after_compact, after_update);
+  EXPECT_LE(CountFilesWithPrefix(col_dir, "seg_"), 1);
+  // One live copy of each vector should fit well under 2× the post-insert size.
+  EXPECT_LT(after_compact, after_insert * 2);
+
+  // Phase 3: delete everything, compact to empty (no leftover SSTables).
+  for (int i = 0; i < kDocs; ++i) {
+    ASSERT_TRUE(cat.value()
+                    ->Delete("sim", "d" + std::to_string(i),
+                             static_cast<Timestamp>(5000 + i))
+                    .ok());
+  }
+  ASSERT_TRUE(cat.value()->Flush("sim").ok());
+  ASSERT_TRUE(cat.value()->Compact("sim").ok());
+  EXPECT_EQ(CountFilesWithPrefix(col_dir, "seg_"), 0);
+  const uint64_t after_delete = DirBytes(col_dir);
+  EXPECT_LT(after_delete, after_compact);
+  EXPECT_LT(after_delete, 4096u);  // WAL+MANIFEST only, roughly
+
+  // Phase 4: drop must remove the collection directory entirely.
+  ASSERT_TRUE(cat.value()->DropCollection("sim").ok());
+  struct stat st {};
+  EXPECT_NE(::stat(col_dir.c_str(), &st), 0);
+  EXPECT_EQ(CountFilesWithPrefix(root, "seg_"), 0);
+}
+
+TEST(Integration, OpenRemovesOrphansAfterSimulatedCrashFlush) {
+  const std::string dir = ::testing::TempDir() + "/aster_integ_orphan_crash";
+  Db::Options options;
+  options.dimension = 8;
+  options.metric = Metric::kL2;
+  options.data_dir = dir;
+  options.wal_sync = SyncPolicy::kNever;
+  options.max_segments_before_compact = 0;
+
+  {
+    auto db = Db::Open(options);
+    ASSERT_TRUE(db.ok());
+    for (int i = 0; i < 20; ++i) {
+      std::vector<float> v(8, static_cast<float>(i));
+      ASSERT_TRUE(db.value()
+                      ->Upsert(MakeRow("x" + std::to_string(i), v,
+                                       static_cast<Timestamp>(i + 1)))
+                      .ok());
+    }
+    ASSERT_TRUE(db.value()->Flush().ok());
+  }
+
+  // Orphan from a "crashed" compaction write that never made the manifest.
+  std::vector<Row> junk = {MakeRow("orphan", std::vector<float>(8, 9.0f), 99)};
+  ASSERT_TRUE(WriteSstable(dir + "/seg_000777.ast", 777, Metric::kL2, junk).ok());
+  EXPECT_EQ(CountFilesWithPrefix(dir, "seg_"), 2);
+
+  auto reopened = Db::Open(options);
+  ASSERT_TRUE(reopened.ok());
+  EXPECT_EQ(reopened.value()->segment_count(), 1u);
+  EXPECT_EQ(CountFilesWithPrefix(dir, "seg_"), 1);
+  EXPECT_TRUE(reopened.value()->Get("x0").has_value());
+  EXPECT_FALSE(reopened.value()->Get("orphan").has_value());
 }
 
 }  // namespace

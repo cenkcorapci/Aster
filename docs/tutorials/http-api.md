@@ -1,8 +1,8 @@
 # Tutorial: HTTP API (single-node SaaS kernel)
 
-Firebase-style JSON API over multi-collection durable storage. This is the
-Phase 1 surface from [business-plan.md](../business-plan.md): local server
-today, control plane / S3 later.
+JSON API over multi-collection durable storage — Phase 1 kernel from the
+[business plan](../business-plan.md). Local server today; control plane / S3
+later.
 
 Search is **exact** until HNSW (M2). Auth is an optional shared API key.
 
@@ -23,7 +23,7 @@ bazel run //aster/cli:aster -- serve --data-dir /tmp/aster-data --port 8080
 | `GET` | `/v1/collections` | List collections |
 | `PUT` | `/v1/collections/{name}` | Create (`dimension`, `metric`) |
 | `GET` | `/v1/collections/{name}` | Describe |
-| `DELETE` | `/v1/collections/{name}` | Drop (catalog entry; data dir kept) |
+| `DELETE` | `/v1/collections/{name}` | Drop collection and delete its data dir |
 | `PUT` | `/v1/collections/{name}/docs/{id}` | Upsert document |
 | `GET` | `/v1/collections/{name}/docs/{id}` | Get document |
 | `DELETE` | `/v1/collections/{name}/docs/{id}` | Tombstone delete |
@@ -70,13 +70,10 @@ data_dir/
   …
 ```
 
-## What’s next (business plan)
+## What’s next
 
-| Phase | Still open |
-| --- | --- |
-| 1b | Segmented HNSW, SSTable compression |
-| 2 | S3 backend, spot workers |
-| 3 | Signup, billing, per-tenant keys, dashboard |
+Still open for SaaS: segmented HNSW + compression (Phase 1), S3/spot workers
+(Phase 2), signup/billing/keys (Phase 3). See [business-plan.md](../business-plan.md).
 
-Related: [database management](database-management.md) (embed `Db`),
-[client libraries](client-libraries.md) (Thrift facades → M5).
+Related: [database management](database-management.md),
+[client libraries](client-libraries.md).

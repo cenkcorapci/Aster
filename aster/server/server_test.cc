@@ -6,6 +6,7 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <unistd.h>
 #include <vector>
 
 #include "aster/server/catalog.h"
@@ -100,6 +101,36 @@ TEST(Catalog, CreateUpsertSearchPersist) {
   ASSERT_TRUE(got.ok());
   ASSERT_TRUE(got.value().has_value());
   EXPECT_EQ(got.value()->id, "a");
+}
+
+TEST(Catalog, DropCollectionDeletesDataDirectory) {
+  const std::string dir = TempDir("aster_catalog_drop");
+  Catalog::Options opt;
+  opt.data_dir = dir;
+  opt.wal_sync = SyncPolicy::kNever;
+  auto cat = Catalog::Open(opt);
+  ASSERT_TRUE(cat.ok());
+
+  CollectionInfo info;
+  info.name = "ephemeral";
+  info.dimension = 2;
+  info.metric = Metric::kL2;
+  ASSERT_TRUE(cat.value()->CreateCollection(info).ok());
+
+  Row row;
+  row.id = "a";
+  row.vector = {1.0f, 0.0f};
+  row.timestamp = 1;
+  ASSERT_TRUE(cat.value()->Upsert("ephemeral", row).ok());
+  ASSERT_TRUE(cat.value()->Flush("ephemeral").ok());
+
+  const std::string col_dir = dir + "/ephemeral";
+  EXPECT_EQ(access(col_dir.c_str(), F_OK), 0);
+  EXPECT_EQ(access((col_dir + "/seg_000001.ast").c_str(), F_OK), 0);
+
+  ASSERT_TRUE(cat.value()->DropCollection("ephemeral").ok());
+  EXPECT_NE(access(col_dir.c_str(), F_OK), 0);
+  EXPECT_FALSE(cat.value()->GetCollection("ephemeral").has_value());
 }
 
 TEST(HttpApi, EndToEndLocalhost) {
