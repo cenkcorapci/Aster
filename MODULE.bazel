@@ -18,6 +18,8 @@ bazel_dep(name = "platforms", version = "1.0.0")
 bazel_dep(name = "lz4", version = "1.10.0.bcr.1")
 bazel_dep(name = "zstd", version = "1.5.7.bcr.1")
 bazel_dep(name = "googletest", version = "1.17.0.bcr.2", dev_dependency = True)
+# YAML corpus parser for //clients/conformance (M5-T03).
+bazel_dep(name = "yaml-cpp", version = "0.9.0", dev_dependency = True)
 
 # Apache Thrift C++ runtime (minimal subset; see third_party/thrift.BUILD).
 # Compiler codegen is not hermetic yet — C++ stubs are checked in under

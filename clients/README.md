@@ -6,6 +6,8 @@ source of truth for the wire protocol.
 
 **Status:** public facades exist; transport + codegen = milestone **M5**.
 Hands-on guide: [docs/tutorials/client-libraries.md](../docs/tutorials/client-libraries.md).
+Language-agnostic wire conformance corpus: [`conformance/`](conformance/)
+(`bazel test //clients/conformance:yaml_corpus_test`).
 For real data today, embed the engine via Bazel
 `//aster:embedded_lib` (`aster::Db` — see
 [docs/code-structure.md](../docs/code-structure.md) § Depending on the

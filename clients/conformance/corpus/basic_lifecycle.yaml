@@ -1,0 +1,46 @@
+# Language-agnostic Aster RPC conformance case.
+# Ops map 1:1 to aster/rpc/aster.thrift service methods.
+name: basic_lifecycle
+description: >
+  create → configure → upsert → get → search → drop covering the
+  core collection lifecycle against the Thrift wire API.
+steps:
+  - op: createCollection
+    name: demo
+
+  - op: configureCollection
+    name: demo
+    dimension: 4
+    metric: COSINE
+
+  - op: upsert
+    collection: demo
+    id: d1
+    vector: [1.0, 0.0, 0.0, 0.0]
+    tags: [even]
+    consistency: ONE
+
+  - op: get
+    collection: demo
+    id: d1
+    consistency: ONE
+    expect:
+      id: d1
+      tags: [even]
+
+  - op: search
+    collection: demo
+    vector: [1.0, 0.0, 0.0, 0.0]
+    topK: 3
+    expect:
+      first_id: d1
+      min_score: 0.9
+
+  - op: dropCollection
+    name: demo
+
+  - op: get
+    collection: demo
+    id: d1
+    consistency: ONE
+    expect_error: true

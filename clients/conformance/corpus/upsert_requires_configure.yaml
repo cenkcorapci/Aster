@@ -1,0 +1,36 @@
+# Lifecycle gating: upsert before configureCollection must fail.
+name: upsert_requires_configure
+description: >
+  createCollection alone leaves the collection unusable; upsert must
+  throw AsterError until configureCollection supplies dimension/metric.
+steps:
+  - op: createCollection
+    name: pending
+
+  - op: upsert
+    collection: pending
+    id: p1
+    vector: [1.0, 0.0, 0.0, 0.0]
+    consistency: ONE
+    expect_error: true
+
+  - op: configureCollection
+    name: pending
+    dimension: 4
+    metric: L2
+
+  - op: upsert
+    collection: pending
+    id: p1
+    vector: [1.0, 0.0, 0.0, 0.0]
+    consistency: ONE
+
+  - op: get
+    collection: pending
+    id: p1
+    consistency: ONE
+    expect:
+      id: p1
+
+  - op: dropCollection
+    name: pending

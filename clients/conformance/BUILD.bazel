@@ -1,0 +1,33 @@
+# Language-agnostic RPC conformance corpus (M5-T03).
+#
+# YAML cases under corpus/ exercise the Thrift wire ops shared by all
+# //clients/* libraries. The C++ runner boots the M4-T02 Thrift server
+# fixture and drives ops via generated AsterClient (reference until the
+# idiomatic //clients/cpp transport lands in M5-T04).
+
+load("@rules_cc//cc:cc_test.bzl", "cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+filegroup(
+    name = "corpus",
+    srcs = glob(["corpus/*.yaml"]),
+)
+
+cc_test(
+    name = "yaml_corpus_test",
+    size = "small",
+    srcs = ["yaml_corpus_test.cc"],
+    data = [":corpus"],
+    target_compatible_with = select({
+        "//platforms:is_baremetal": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    }),
+    deps = [
+        "//aster/rpc:thrift_server",
+        "//aster/server",
+        "@apache_thrift//:thrift",
+        "@googletest//:gtest_main",
+        "@yaml-cpp//:yaml-cpp",
+    ],
+)

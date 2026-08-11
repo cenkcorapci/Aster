@@ -1,0 +1,56 @@
+# Upsert multiple docs, search ranking, remove, and re-search.
+name: search_and_remove
+description: >
+  Two documents with distinct vectors; nearest-neighbor search returns
+  the matching id; remove drops visibility for subsequent get/search.
+steps:
+  - op: createCollection
+    name: items
+
+  - op: configureCollection
+    name: items
+    dimension: 4
+    metric: COSINE
+
+  - op: upsert
+    collection: items
+    id: a
+    vector: [1.0, 0.0, 0.0, 0.0]
+    tags: [alpha]
+    consistency: ONE
+
+  - op: upsert
+    collection: items
+    id: b
+    vector: [0.0, 1.0, 0.0, 0.0]
+    tags: [bravo]
+    consistency: ONE
+
+  - op: search
+    collection: items
+    vector: [1.0, 0.0, 0.0, 0.0]
+    topK: 2
+    expect:
+      first_id: a
+      min_score: 0.9
+
+  - op: remove
+    collection: items
+    id: a
+    consistency: ONE
+
+  - op: get
+    collection: items
+    id: a
+    consistency: ONE
+    expect_error: true
+
+  - op: search
+    collection: items
+    vector: [1.0, 0.0, 0.0, 0.0]
+    topK: 2
+    expect:
+      first_id: b
+
+  - op: dropCollection
+    name: items
