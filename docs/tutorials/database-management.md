@@ -5,7 +5,8 @@ demo CLI / BusyBox image). This is the **supported in-process path** today:
 one collection per `Db`, exact (brute-force) search, durable SSTables + WAL
 when `data_dir` is set.
 
-The public contract is [`aster/db/db.h`](../../aster/db/db.h). Breaking
+The public contract is [`aster/db/db.h`](../../aster/db/db.h). Link with
+Bazel dep [`//aster:embedded_lib`](../../aster/BUILD.bazel). Breaking
 changes are announced in [`CHANGELOG.md`](../../CHANGELOG.md) and follow
 [versioning.md](../versioning.md) (version macros: `ASTER_VERSION_*` in
 `aster/core/version.h`).

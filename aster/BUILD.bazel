@@ -1,12 +1,27 @@
 # Top-level aliases for the engines people actually link against.
 
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
 package(default_visibility = ["//visibility:public"])
+
+# Canonical installable in-process / embedded engine (`aster::Db`).
+# Downstream Bazel consumers should depend on this single target; it pulls
+# in storage, index, query, and core transitively. Public contract:
+# aster/db/db.h (see docs/versioning.md § Embedded C++ API).
+#
+#   cc_library(..., deps = ["@aster//aster:embedded_lib"])  # as a module
+#   cc_library(..., deps = ["//aster:embedded_lib"])         # in-repo
+cc_library(
+    name = "embedded_lib",
+    deps = ["//aster/db"],
+)
 
 alias(
     name = "db",
     actual = "//aster/db",
 )
 
+# Tiny MCU / Arduino engine (`aster::embedded::Db`) — no WAL/SSTable.
 alias(
     name = "embedded",
     actual = "//aster/embedded",

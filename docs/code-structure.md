@@ -66,6 +66,37 @@ other hosts use `--config=raspberry_pi_cross` or `./scripts/build-matrix.sh --fu
 | `PosixStorage` | Done (path traversal hardened) |
 | S3 | Skeleton (M3-T04); multipart / Range GET / SigV4 in M8-T01 |
 
+## Depending on the embedded library
+
+For in-process / hosted embeds (`aster::Db`, durable WAL + SSTables), depend
+on the single public target:
+
+```python
+cc_library(
+    name = "my_app",
+    srcs = ["my_app.cc"],
+    deps = ["//aster:embedded_lib"],  # or @aster//aster:embedded_lib as a module
+)
+```
+
+```cpp
+#include "aster/db/db.h"
+```
+
+`//aster:embedded_lib` is a `cc_library` that re-exports `//aster/db` (and its
+transitive engine deps). Prefer it over depending on `//aster/db` or leaf
+packages directly. Alias `//aster:db` still works.
+
+MCU / Tiny / Arduino builds use a separate target (no POSIX disk path):
+
+```bash
+bazel build --config=arduino //aster:embedded
+# → bazel-bin/aster/embedded/libembedded.a  (aster::embedded::Db)
+```
+
+API contract and versioning: [versioning.md](versioning.md) § Embedded C++ API.
+Hands-on: [tutorials/database-management.md](tutorials/database-management.md).
+
 ## Tests
 
 ```bash
@@ -74,3 +105,4 @@ bazel test //aster/...
 
 CI runs the same target on every push/PR to `main`. Coverage gate:
 `./scripts/run-coverage.sh` (≥90% on product libs).
+

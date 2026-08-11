@@ -5,6 +5,11 @@ The project follows a single-version policy; see [docs/versioning.md](docs/versi
 
 ## [Unreleased]
 
+### Added
+- Installable embedded library target `//aster:embedded_lib` — single
+  `cc_library` for downstream in-process deps (re-exports `//aster/db`).
+  See [docs/code-structure.md](docs/code-structure.md).
+
 ### Stabilized
 - Embedded `aster::Db` public API (`aster/db/db.h`) is the in-process contract.
   Version macros live in `aster/core/version.h` (`ASTER_VERSION_*`, synced with

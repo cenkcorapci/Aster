@@ -2,10 +2,12 @@
 
 // Public embedded / in-process API contract for Aster.
 //
-// This header is the stable surface for linking `//aster/db` into a process
-// (single collection, LSM memtable + segments). Downstream code should depend
-// only on the public declarations below — not on private members or .cc
-// details.
+// This header is the stable surface for linking the installable engine into a
+// process (single collection, LSM memtable + segments). Prefer Bazel dep
+// `//aster:embedded_lib` (re-exports `//aster/db`). Downstream code should
+// depend only on the public declarations below — not on private members or
+// .cc details.
+
 //
 // Versioning
 // ----------

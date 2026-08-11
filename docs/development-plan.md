@@ -75,8 +75,8 @@ Goal: “SQLite for vectors” as a first-class product.
 **Done so far:** compile-time profiles, Arduino/Tiny embedded lib, POSIX +
 memory backends, BusyBox Docker (~few MB static), build matrix scripts.
 
-**Still open:** amalgamated release, memory budget enforcement, S3
-skeleton, Pi soak exit criteria.
+**Still open:** memory budget enforcement, Pi soak exit criteria.
+Installable `//aster:embedded_lib` target is done (M3-T02).
 
 ### M4 — Server & observability (~4 weeks)
 

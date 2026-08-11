@@ -43,8 +43,9 @@ Cross-major compatibility is not promised.
 
 [`aster/db/db.h`](../aster/db/db.h) is the **public contract** for in-process /
 embedded use (options, `Open`, `Upsert` / `Delete` / `Get` / `Search`,
-`Flush` / `Compact`, and the documented inspectors). Private members and
-`.cc` internals are not part of the contract.
+`Flush` / `Compact`, and the documented inspectors). Link via Bazel
+`//aster:embedded_lib`. Private members and `.cc` internals are not part of
+the contract.
 
 | Concern | Rule |
 | --- | --- |
