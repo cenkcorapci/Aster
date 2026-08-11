@@ -12,6 +12,20 @@
 namespace aster {
 namespace {
 
+const char* BackendName(DistanceBackend b) {
+  switch (b) {
+    case DistanceBackend::kAvx512:
+      return "avx512";
+    case DistanceBackend::kAvx2:
+      return "avx2";
+    case DistanceBackend::kNeon:
+      return "neon";
+    case DistanceBackend::kScalar:
+      return "scalar";
+  }
+  return "unknown";
+}
+
 std::vector<float> RandomVector(size_t dim, std::mt19937& rng) {
   std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
   std::vector<float> v(dim);
@@ -20,20 +34,30 @@ std::vector<float> RandomVector(size_t dim, std::mt19937& rng) {
 }
 
 TEST(DistanceDispatch, ReportsBackendConsistentWithCpu) {
-  if (CpuSupportsAvx2()) {
-    EXPECT_EQ(ActiveDistanceBackend(), DistanceBackend::kAvx2);
-    std::printf("M2-T08: AVX2+FMA available; ActiveDistanceBackend=kAvx2\n");
+  const DistanceBackend active = ActiveDistanceBackend();
+  // Preference: AVX-512 > AVX2 > NEON > scalar.
+  if (CpuSupportsAvx512()) {
+    EXPECT_EQ(active, DistanceBackend::kAvx512);
+  } else if (CpuSupportsAvx2()) {
+    EXPECT_EQ(active, DistanceBackend::kAvx2);
+  } else if (CpuSupportsNeon()) {
+    EXPECT_EQ(active, DistanceBackend::kNeon);
   } else {
-    EXPECT_EQ(ActiveDistanceBackend(), DistanceBackend::kScalar);
-#if defined(__aarch64__) || defined(__arm__)
-    std::printf(
-        "M2-T08: Apple Silicon / ARM host — no AVX2; dispatch selects "
-        "scalar (NEON is M2-T09). Tests still validate scalar path.\n");
-#else
-    std::printf(
-        "M2-T08: AVX2 not available on this CPU; dispatch selects scalar.\n");
-#endif
+    EXPECT_EQ(active, DistanceBackend::kScalar);
   }
+
+  std::printf(
+      "M2-T09: ActiveDistanceBackend=%s (avx512=%d avx2=%d neon=%d)\n",
+      BackendName(active), CpuSupportsAvx512() ? 1 : 0,
+      CpuSupportsAvx2() ? 1 : 0, CpuSupportsNeon() ? 1 : 0);
+
+#if defined(__aarch64__) || defined(__arm__)
+  EXPECT_TRUE(CpuSupportsNeon());
+  EXPECT_EQ(active, DistanceBackend::kNeon);
+  std::printf(
+      "M2-T09: Apple Silicon / ARM host — dispatch selects NEON "
+      "(ActiveDistanceBackend=kNeon).\n");
+#endif
 }
 
 class DistanceSimdMatch : public ::testing::TestWithParam<size_t> {};
@@ -77,7 +101,7 @@ INSTANTIATE_TEST_SUITE_P(
       return "dim_" + std::to_string(info.param);
     });
 
-TEST(DistanceMicrobench, Avx2FasterThanScalarWhenAvailable) {
+TEST(DistanceMicrobench, SimdFasterThanScalarWhenAvailable) {
   constexpr size_t kDim = 384;
   constexpr int kWarmup = 200;
   constexpr int kIters = 20000;
@@ -113,21 +137,22 @@ TEST(DistanceMicrobench, Avx2FasterThanScalarWhenAvailable) {
   const double dispatch_dot_ns =
       time_fn([](const auto& x, const auto& y) { return Dot(x, y); });
 
+  const DistanceBackend backend = ActiveDistanceBackend();
   std::printf(
-      "M2-T08 microbench dim=%zu iters=%d: L2 scalar=%.1fns dispatch=%.1fns "
+      "M2-T09 microbench dim=%zu iters=%d: L2 scalar=%.1fns dispatch=%.1fns "
       "(%.2fx); Dot scalar=%.1fns dispatch=%.1fns (%.2fx); backend=%s; "
       "sink=%g\n",
       kDim, kIters, scalar_l2_ns, dispatch_l2_ns,
       scalar_l2_ns / dispatch_l2_ns, scalar_dot_ns, dispatch_dot_ns,
-      scalar_dot_ns / dispatch_dot_ns,
-      CpuSupportsAvx2() ? "avx2" : "scalar", static_cast<double>(sink));
+      scalar_dot_ns / dispatch_dot_ns, BackendName(backend),
+      static_cast<double>(sink));
 
-  if (!CpuSupportsAvx2()) {
+  if (backend == DistanceBackend::kScalar) {
     GTEST_SKIP()
-        << "AVX2 unavailable — speedup check skipped (scalar==dispatch)";
+        << "SIMD unavailable — speedup check skipped (scalar==dispatch)";
   }
 
-  // On a supported CPU, AVX2 should beat scalar for 384-d by a clear margin.
+  // On a supported CPU, SIMD should beat scalar for 384-d by a clear margin.
   // Use a conservative 1.3x floor so CI noise doesn't flake.
   EXPECT_GT(scalar_l2_ns / dispatch_l2_ns, 1.3);
   EXPECT_GT(scalar_dot_ns / dispatch_dot_ns, 1.3);

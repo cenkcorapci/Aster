@@ -4,17 +4,21 @@
 
 namespace aster {
 
-// Distance kernels with runtime SIMD dispatch (AVX2 when available; scalar
-// elsewhere). NEON / AVX-512 land in M2-T09. Scalar remains the portable
-// fallback and the correctness reference.
+// Distance kernels with runtime SIMD dispatch. Preference order:
+//   AVX-512 > AVX2 > NEON > scalar
+// Scalar remains the portable fallback and the correctness reference.
 
 enum class DistanceBackend {
   kScalar,
+  kNeon,
   kAvx2,
+  kAvx512,
 };
 
-// True when this process can safely run AVX2 distance kernels (x86 + CPUID).
+// CPU feature probes used by dispatch and tests.
+bool CpuSupportsAvx512();
 bool CpuSupportsAvx2();
+bool CpuSupportsNeon();
 DistanceBackend ActiveDistanceBackend();
 
 // Dispatched public API.

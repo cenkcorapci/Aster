@@ -9,10 +9,67 @@
 #include <immintrin.h>
 #endif
 
+#if defined(__aarch64__) || defined(__ARM_NEON)
+#define ASTER_HAVE_NEON 1
+#include <arm_neon.h>
+#endif
+
 namespace aster {
 namespace {
 
 #if defined(ASTER_HAVE_X86)
+
+// --- AVX-512 (16-wide) -----------------------------------------------------
+
+__attribute__((target("avx512f,fma"))) inline float HSum512(__m512 v) {
+  return _mm512_reduce_add_ps(v);
+}
+
+__attribute__((target("avx512f,fma"))) float L2SquaredAvx512(VectorView a,
+                                                             VectorView b) {
+  assert(a.size() == b.size());
+  const size_t n = a.size();
+  const float* pa = a.data();
+  const float* pb = b.data();
+
+  __m512 acc = _mm512_setzero_ps();
+  size_t i = 0;
+  for (; i + 16 <= n; i += 16) {
+    const __m512 va = _mm512_loadu_ps(pa + i);
+    const __m512 vb = _mm512_loadu_ps(pb + i);
+    const __m512 diff = _mm512_sub_ps(va, vb);
+    acc = _mm512_fmadd_ps(diff, diff, acc);
+  }
+  float sum = HSum512(acc);
+  for (; i < n; ++i) {
+    const float d = pa[i] - pb[i];
+    sum += d * d;
+  }
+  _mm256_zeroupper();
+  return sum;
+}
+
+__attribute__((target("avx512f,fma"))) float DotAvx512(VectorView a,
+                                                       VectorView b) {
+  assert(a.size() == b.size());
+  const size_t n = a.size();
+  const float* pa = a.data();
+  const float* pb = b.data();
+
+  __m512 acc = _mm512_setzero_ps();
+  size_t i = 0;
+  for (; i + 16 <= n; i += 16) {
+    const __m512 va = _mm512_loadu_ps(pa + i);
+    const __m512 vb = _mm512_loadu_ps(pb + i);
+    acc = _mm512_fmadd_ps(va, vb, acc);
+  }
+  float sum = HSum512(acc);
+  for (; i < n; ++i) sum += pa[i] * pb[i];
+  _mm256_zeroupper();
+  return sum;
+}
+
+// --- AVX2 (8-wide) ---------------------------------------------------------
 
 // Horizontal sum of 8 floats in a YMM register. Must share the AVX2 target
 // with callers so __m256 does not cross an ABI boundary.
@@ -73,23 +130,91 @@ __attribute__((target("avx2,fma"))) float DotAvx2(VectorView a, VectorView b) {
 
 #endif  // ASTER_HAVE_X86
 
+#if defined(ASTER_HAVE_NEON)
+
+// --- ARM NEON (4-wide) -----------------------------------------------------
+
+inline float HSum128(float32x4_t v) {
+  const float32x2_t sum2 = vadd_f32(vget_low_f32(v), vget_high_f32(v));
+  return vget_lane_f32(vpadd_f32(sum2, sum2), 0);
+}
+
+float L2SquaredNeon(VectorView a, VectorView b) {
+  assert(a.size() == b.size());
+  const size_t n = a.size();
+  const float* pa = a.data();
+  const float* pb = b.data();
+
+  float32x4_t acc = vdupq_n_f32(0.0f);
+  size_t i = 0;
+  for (; i + 4 <= n; i += 4) {
+    const float32x4_t va = vld1q_f32(pa + i);
+    const float32x4_t vb = vld1q_f32(pb + i);
+    const float32x4_t diff = vsubq_f32(va, vb);
+    acc = vfmaq_f32(acc, diff, diff);
+  }
+  float sum = HSum128(acc);
+  for (; i < n; ++i) {
+    const float d = pa[i] - pb[i];
+    sum += d * d;
+  }
+  return sum;
+}
+
+float DotNeon(VectorView a, VectorView b) {
+  assert(a.size() == b.size());
+  const size_t n = a.size();
+  const float* pa = a.data();
+  const float* pb = b.data();
+
+  float32x4_t acc = vdupq_n_f32(0.0f);
+  size_t i = 0;
+  for (; i + 4 <= n; i += 4) {
+    const float32x4_t va = vld1q_f32(pa + i);
+    const float32x4_t vb = vld1q_f32(pb + i);
+    acc = vfmaq_f32(acc, va, vb);
+  }
+  float sum = HSum128(acc);
+  for (; i < n; ++i) sum += pa[i] * pb[i];
+  return sum;
+}
+
+#endif  // ASTER_HAVE_NEON
+
 using BinaryFn = float (*)(VectorView, VectorView);
 
 BinaryFn SelectL2() {
 #if defined(ASTER_HAVE_X86)
+  if (CpuSupportsAvx512()) return &L2SquaredAvx512;
   if (CpuSupportsAvx2()) return &L2SquaredAvx2;
+#endif
+#if defined(ASTER_HAVE_NEON)
+  if (CpuSupportsNeon()) return &L2SquaredNeon;
 #endif
   return &L2SquaredScalar;
 }
 
 BinaryFn SelectDot() {
 #if defined(ASTER_HAVE_X86)
+  if (CpuSupportsAvx512()) return &DotAvx512;
   if (CpuSupportsAvx2()) return &DotAvx2;
+#endif
+#if defined(ASTER_HAVE_NEON)
+  if (CpuSupportsNeon()) return &DotNeon;
 #endif
   return &DotScalar;
 }
 
 }  // namespace
+
+bool CpuSupportsAvx512() {
+#if defined(ASTER_HAVE_X86) && (defined(__GNUC__) || defined(__clang__))
+  __builtin_cpu_init();
+  return __builtin_cpu_supports("avx512f");
+#else
+  return false;
+#endif
+}
 
 bool CpuSupportsAvx2() {
 #if defined(ASTER_HAVE_X86) && (defined(__GNUC__) || defined(__clang__))
@@ -98,13 +223,24 @@ bool CpuSupportsAvx2() {
   __builtin_cpu_init();
   return __builtin_cpu_supports("avx2") && __builtin_cpu_supports("fma");
 #else
-  // ARM (incl. Apple Silicon) and other ISAs: scalar until M2-T09 (NEON).
+  return false;
+#endif
+}
+
+bool CpuSupportsNeon() {
+#if defined(ASTER_HAVE_NEON)
+  // aarch64 mandates NEON; 32-bit ARM only reaches here when __ARM_NEON is set.
+  return true;
+#else
   return false;
 #endif
 }
 
 DistanceBackend ActiveDistanceBackend() {
-  return CpuSupportsAvx2() ? DistanceBackend::kAvx2 : DistanceBackend::kScalar;
+  if (CpuSupportsAvx512()) return DistanceBackend::kAvx512;
+  if (CpuSupportsAvx2()) return DistanceBackend::kAvx2;
+  if (CpuSupportsNeon()) return DistanceBackend::kNeon;
+  return DistanceBackend::kScalar;
 }
 
 float L2SquaredScalar(VectorView a, VectorView b) {

@@ -99,7 +99,7 @@ Status updates happen in this file (see start-the-tasks.md § Claiming).
 | M2-T06 | open | index | M2-T05 | Compaction graph merge: insert-into-largest (optional opt) | `aster/index/hnsw*` | Benchmark shows win on skewed merges; staleness debt forces rebuild |
 | M2-T07 | open | index | M1-T03 | Tag roaring bitmaps per segment + post-filter over-fetch | `aster/index/tags*`, `aster/db/` | Filtered search matches exact filter semantics; adaptive fetch_k |
 | M2-T08 | done | index | M0-T02 | SIMD distance: AVX2 + runtime dispatch | `aster/index/distance*` | Correct vs scalar; measurable speedup on supported CPU |
-| M2-T09 | open | index | M2-T08 | SIMD distance: AVX-512 + ARM NEON | `aster/index/distance*` | CI builds for amd64+arm64; dispatch selects best |
+| M2-T09 | done | index | M2-T08 | SIMD distance: AVX-512 + ARM NEON | `aster/index/distance*` | CI builds for amd64+arm64; dispatch selects best |
 | M2-T10 | open | qa | M2-T03, M2-T04 | Recall CI gate (SIFT1M/GloVe subset, recall@10 ≥ 0.95 @ ef=128) | `.github/` or CI + `aster/qa/` | Nightly job; PR gate on regression |
 | M2-T11 | open | qa | M2-T04, M2-T08 | Latency bench: 1M×384d search p50 < 5 ms | `aster/qa/` | Numbers checked into docs or CI artifact |
 
