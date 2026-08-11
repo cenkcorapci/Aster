@@ -12,6 +12,7 @@
 | [SSTable format](sstable-format.md) | On-disk `.ast` segment layout |
 | [Client API](client-api.md) | Collection-centric product API (target) |
 | [Versioning](versioning.md) | Single-version policy; embedded `aster::Db` contract |
+| [Write bench](bench-write.md) | Laptop upserts/sec + kill-9 fuzz (M1-T14) |
 | [Tasks](tasks.md) / [Start the tasks](start-the-tasks.md) | Parallel work board |
 
 Related:

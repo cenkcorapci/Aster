@@ -1,0 +1,51 @@
+load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
+load("@rules_cc//cc:cc_test.bzl", "cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+# kill -9 / crash-recovery fuzz (M1-T14).
+# Default: short CI run (~15s). Long soak:
+#   ASTER_FUZZ_SECONDS=3600 bazel test //aster/qa:kill9_fuzz_test
+cc_test(
+    name = "kill9_fuzz_test",
+    size = "small",
+    timeout = "long",
+    srcs = ["kill9_fuzz_test.cc"],
+    target_compatible_with = select({
+        "//platforms:is_baremetal": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    }),
+    deps = [
+        "//aster/db",
+        "@googletest//:gtest_main",
+    ],
+)
+
+# Laptop write microbench binary (flush + compaction).
+#   bazel run //aster/qa:write_bench -- --rows 200000
+cc_binary(
+    name = "write_bench",
+    srcs = ["write_bench.cc"],
+    target_compatible_with = select({
+        "//platforms:is_baremetal": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    }),
+    deps = [
+        "//aster/db",
+    ],
+)
+
+# Smoke: runs a tiny write bench and asserts the harness works.
+cc_test(
+    name = "write_bench_test",
+    size = "small",
+    srcs = ["write_bench_test.cc"],
+    target_compatible_with = select({
+        "//platforms:is_baremetal": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    }),
+    deps = [
+        "//aster/db",
+        "@googletest//:gtest_main",
+    ],
+)

@@ -81,7 +81,7 @@ Status updates happen in this file (see start-the-tasks.md § Claiming).
 | M1-T11 | done | db | M1-T10 | Tombstone GC only on full-overlap compaction | `aster/storage/segment*`, tests | Unit + TLA mapping: partial compact keeps tombstones; full purges (`NoResurrection`) |
 | M1-T12 | done | storage | M1-T02 | CBOR metadata encode/decode | `aster/storage/` or `aster/core/` | Fixture JSON ↔ CBOR bytes round-trip |
 | M1-T13 | done | storage | M1-T02 | LZ4/Zstd block compression behind feature flag | `aster/storage/`, `MODULE.bazel` | Compressed SSTable smaller than raw; uncompressed mode still default for Tiny |
-| M1-T14 | open | qa | M1-T06, M1-T09, M1-T10 | kill -9 fuzz harness + laptop write benchmark | `aster/tests/` or `aster/qa/` | Fuzz green for 1h; ≥100k upserts/sec documented |
+| M1-T14 | done | qa | M1-T06, M1-T09, M1-T10 | kill -9 fuzz harness + laptop write benchmark | `aster/qa/`, `docs/bench-write.md` | Short fuzz green; 1h via `ASTER_FUZZ_SECONDS=3600`; ≥100k upserts/sec documented (Apple M4) |
 
 ---
 

@@ -12,6 +12,7 @@ The project follows a single-version policy; see [docs/versioning.md](docs/versi
   here; see [docs/versioning.md](docs/versioning.md) § Embedded C++ API.
 
 ## [0.1.0] - 2026-08-07
+- M1-T14: kill-9 crash-recovery fuzz (`//aster/qa:kill9_fuzz_test`) + laptop write bench (`//aster/qa:write_bench`, `docs/bench-write.md`).
 - Claim wave-1 parallel tasks: M1-T01, M3-T05, M4-T06, M6-T07.
 - Complete M0 foundation: Bazel C++ engine, clients, TLA+, task board.
 - Design docs.

@@ -20,6 +20,7 @@ aster/
 ├── metrics/        counters / histograms (Prometheus = M4)
 ├── cli/            local demo binary
 ├── bench/          soak / load binary
+├── qa/             kill-9 fuzz + write microbench (M1-T14)
 └── integration/    end-to-end tests
 clients/            seven language facades (transport = M5)
 docs/               design, tutorials, roadmap
