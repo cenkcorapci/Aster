@@ -1,0 +1,39 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: aster-sim
+  labels:
+    app.kubernetes.io/part-of: aster-sim
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: aster-sim
+  namespace: aster-sim
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: aster-sim-scaler
+  namespace: aster-sim
+rules:
+  - apiGroups: ["apps"]
+    resources: ["statefulsets", "statefulsets/scale"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+  - apiGroups: [""]
+    resources: ["pods", "services", "endpoints"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: aster-sim-scaler
+  namespace: aster-sim
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: aster-sim-scaler
+subjects:
+  - kind: ServiceAccount
+    name: aster-sim
+    namespace: aster-sim

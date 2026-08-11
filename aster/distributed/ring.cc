@@ -25,6 +25,10 @@ void Ring::RemoveNode(const NodeId& node) {
   }
 }
 
+std::vector<NodeId> Ring::Nodes() const {
+  return std::vector<NodeId>(nodes_.begin(), nodes_.end());
+}
+
 std::vector<NodeId> Ring::GetReplicas(const RowId& key, uint32_t rf) const {
   std::vector<NodeId> replicas;
   if (tokens_.empty() || rf == 0) return replicas;

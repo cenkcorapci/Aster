@@ -118,10 +118,17 @@ HttpResponse ApiHandler::Handle(const HttpRequest& req) const {
   }
 
   if (req.method == "GET" && req.path == "/metrics") {
+    const auto u = catalog_->Usage();
+    auto& reg = MetricsRegistry::Instance();
+    reg.Gauge("collection_count").Set(static_cast<int64_t>(u.collections));
+    reg.Gauge("vectors_estimate")
+        .Set(static_cast<int64_t>(u.vectors_estimate));
+    reg.Gauge("segment_count").Set(static_cast<int64_t>(u.segments));
+    reg.Gauge("memtable_rows").Set(static_cast<int64_t>(u.memtable_rows));
     HttpResponse r;
     r.status = 200;
     r.content_type = "text/plain; version=0.0.4";
-    r.body = MetricsRegistry::Instance().Render();
+    r.body = reg.Render();
     return r;
   }
   if (req.method == "GET" && req.path == "/v1/usage") {
@@ -131,6 +138,24 @@ HttpResponse ApiHandler::Handle(const HttpRequest& req) const {
        << ",\"vectors_estimate\":" << u.vectors_estimate
        << ",\"upserts\":" << u.upserts << ",\"deletes\":" << u.deletes
        << ",\"searches\":" << u.searches << ",\"gets\":" << u.gets << "}";
+    return {200, "application/json", os.str()};
+  }
+
+  // Durable scale-down hook: flush every collection so WAL is sealed before
+  // the pod is killed (preStop / drain). Idempotent.
+  if (req.method == "POST" && req.path == "/v1/admin/drain") {
+    const auto cols = catalog_->ListCollections();
+    size_t flushed = 0;
+    for (const auto& c : cols) {
+      auto st = catalog_->Flush(c.name);
+      if (!st.ok()) {
+        return JsonStatus(500, "drain flush failed: " + st.message());
+      }
+      ++flushed;
+    }
+    std::ostringstream os;
+    os << "{\"status\":\"drained\",\"collections_flushed\":" << flushed << "}";
+    MetricsRegistry::Instance().Counter("drain_total").Inc();
     return {200, "application/json", os.str()};
   }
 
@@ -205,7 +230,13 @@ HttpResponse ApiHandler::Handle(const HttpRequest& req) const {
     const std::string& name = parts[2];
     const std::string& action = parts[3];
     if (action == "flush" && req.method == "POST") {
+      const auto t0 = std::chrono::steady_clock::now();
       auto st = catalog_->Flush(name);
+      const auto ms =
+          std::chrono::duration<double, std::milli>(
+              std::chrono::steady_clock::now() - t0)
+              .count();
+      MetricsRegistry::Instance().Histogram("flush_latency_ms").Observe(ms);
       if (!st.ok()) return FromStatus(st);
       return {200, "application/json", "{\"status\":\"flushed\"}"};
     }
@@ -245,6 +276,7 @@ HttpResponse ApiHandler::Handle(const HttpRequest& req) const {
           .Histogram("hnsw_search_latency")
           .Observe(ms);
       if (!hits.ok()) return FromStatus(hits.status());
+      MetricsRegistry::Instance().Counter("searches_total").Inc();
       std::ostringstream os;
       os << "{\"hits\":[";
       bool first = true;
@@ -315,6 +347,7 @@ HttpResponse ApiHandler::Handle(const HttpRequest& req) const {
               .count();
       MetricsRegistry::Instance().Histogram("write_latency_ms").Observe(ms);
       if (!st.ok()) return FromStatus(st);
+      MetricsRegistry::Instance().Counter("upserts_total").Inc();
       return {200, "application/json", "{\"status\":\"ok\"}"};
     }
     if (req.method == "DELETE") {
@@ -329,8 +362,15 @@ HttpResponse ApiHandler::Handle(const HttpRequest& req) const {
                 std::chrono::system_clock::now().time_since_epoch())
                 .count());
       }
+      const auto t0 = std::chrono::steady_clock::now();
       auto st = catalog_->Delete(name, id, ts);
+      const auto ms =
+          std::chrono::duration<double, std::milli>(
+              std::chrono::steady_clock::now() - t0)
+              .count();
+      MetricsRegistry::Instance().Histogram("delete_latency_ms").Observe(ms);
       if (!st.ok()) return FromStatus(st);
+      MetricsRegistry::Instance().Counter("deletes_total").Inc();
       return {200, "application/json", "{\"status\":\"deleted\"}"};
     }
     return JsonStatus(405, "method not allowed");

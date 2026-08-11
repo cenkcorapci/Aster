@@ -3,6 +3,7 @@
 #
 # ASTER_MODE=demo   → /usr/local/bin/aster (default)
 # ASTER_MODE=bench  → /usr/local/bin/aster-bench with env-derived flags
+# ASTER_MODE=serve  → /usr/local/bin/aster serve (HTTP API, 0.0.0.0)
 set -eu
 
 ASTER_BIN="${ASTER_BIN:-/usr/local/bin/aster}"
@@ -38,6 +39,14 @@ if [ "$#" -eq 0 ]; then
       --top-k "${ASTER_TOP_K:-10}" \
       --flush-every "${ASTER_FLUSH_EVERY:-500}"
     ASTER_BIN="$ASTER_BENCH_BIN"
+  elif [ "$ASTER_MODE" = "serve" ]; then
+    set -- serve \
+      --data-dir "$ASTER_DATA_DIR" \
+      --host "${ASTER_HOST:-0.0.0.0}" \
+      --port "${ASTER_PORT:-8080}"
+    if [ -n "${ASTER_API_KEY:-}" ]; then
+      set -- "$@" --api-key "$ASTER_API_KEY"
+    fi
   else
     set -- --data-dir "$ASTER_DATA_DIR"
   fi

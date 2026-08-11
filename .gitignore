@@ -85,3 +85,11 @@ tla/*.jar
 # Vibe coding
 prompt.md
 __pycache__/
+
+# Local bench / compare outputs
+bench-results/
+
+# Arduino / ESP32 firmware sim (PlatformIO + cached QEMU)
+deploy/sim-arduino/.pio/
+deploy/sim-arduino/.venv/
+.cache/sim-arduino/

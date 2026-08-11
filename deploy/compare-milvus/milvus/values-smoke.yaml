@@ -1,0 +1,64 @@
+# Lightweight Milvus for smoke on kind: standalone + external MinIO.
+# Chart defaults enable pulsarv3; that OOMs a laptop when paired with Aster.
+cluster:
+  enabled: false
+
+image:
+  all:
+    repository: milvusdb/milvus
+    tag: v2.4.15
+    pullPolicy: IfNotPresent
+
+standalone:
+  replicas: 1
+  messageQueue: rocksmq
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+
+minio:
+  enabled: false
+
+externalS3:
+  enabled: true
+  host: aster-minio
+  port: 9000
+  accessKey: asterbench
+  secretKey: asterbench-secret
+  useSSL: false
+  bucketName: milvus-bucket
+  rootPath: files
+  cloudProvider: minio
+  useIAM: false
+
+etcd:
+  replicaCount: 1
+  persistence:
+    enabled: false
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+
+pulsar:
+  enabled: false
+
+pulsarv3:
+  enabled: false
+
+kafka:
+  enabled: false
+
+woodpecker:
+  enabled: false
+
+attu:
+  enabled: false
+
+metrics:
+  serviceMonitor:
+    enabled: false

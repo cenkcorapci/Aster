@@ -1,0 +1,80 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sim-controller
+  namespace: aster-sim
+  labels:
+    app: sim-controller
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sim-controller
+  template:
+    metadata:
+      labels:
+        app: sim-controller
+    spec:
+      serviceAccountName: aster-sim
+      containers:
+        - name: controller
+          image: python:3.12-slim
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: NAMESPACE
+              value: aster-sim
+            - name: MIN_NODES
+              value: "__MIN_NODES__"
+            - name: MAX_NODES
+              value: "__MAX_NODES__"
+            - name: START_NODES
+              value: "__START_NODES__"
+            - name: INDEXES
+              value: "__INDEXES__"
+            - name: TARGET_TOTAL_ROWS
+              value: "__TARGET_TOTAL_ROWS__"
+            - name: ACTUAL_TOTAL_ROWS
+              value: "__ACTUAL_TOTAL_ROWS__"
+            - name: SCALE_EVERY_SEC
+              value: "__SCALE_EVERY_SEC__"
+            - name: WORK_RPS
+              value: "__WORK_RPS__"
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              pip install -q -r /app/requirements.txt
+              exec python -u /app/controller.py
+          ports:
+            - containerPort: 9101
+              name: metrics
+          volumeMounts:
+            - name: app
+              mountPath: /app
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+      volumes:
+        - name: app
+          configMap:
+            name: sim-controller-code
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sim-controller
+  namespace: aster-sim
+  labels:
+    app: sim-controller
+spec:
+  selector:
+    app: sim-controller
+  ports:
+    - name: metrics
+      port: 9101
+      targetPort: 9101

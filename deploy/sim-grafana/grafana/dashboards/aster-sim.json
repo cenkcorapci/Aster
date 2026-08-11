@@ -1,0 +1,142 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "title": "Cluster replicas (StatefulSet scale)",
+      "type": "timeseries",
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "sim_cluster_replicas",
+          "legendFormat": "replicas"
+        },
+        {
+          "expr": "count(up{job=\"aster\"} == 1)",
+          "legendFormat": "aster pods up"
+        }
+      ]
+    },
+    {
+      "title": "Ops rate (cluster)",
+      "type": "timeseries",
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "sum(rate(upserts_total[1m]))", "legendFormat": "upserts/s" },
+        { "expr": "sum(rate(deletes_total[1m]))", "legendFormat": "deletes/s" },
+        { "expr": "sum(rate(searches_total[1m]))", "legendFormat": "searches/s" },
+        { "expr": "sum(rate(sim_controller_ops_total[1m]))", "legendFormat": "controller ops/s" }
+      ]
+    },
+    {
+      "title": "Write latency p50 / p95 (ms)",
+      "type": "timeseries",
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 7 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(write_latency_ms_bucket[1m])) by (le))",
+          "legendFormat": "write p50"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(write_latency_ms_bucket[1m])) by (le))",
+          "legendFormat": "write p95"
+        },
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(read_latency_ms_bucket[1m])) by (le))",
+          "legendFormat": "search p50"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(read_latency_ms_bucket[1m])) by (le))",
+          "legendFormat": "search p95"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(delete_latency_ms_bucket[1m])) by (le))",
+          "legendFormat": "delete p95"
+        }
+      ]
+    },
+    {
+      "title": "Indexes & vectors (per node)",
+      "type": "timeseries",
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 7 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "collection_count", "legendFormat": "collections {{pod}}" },
+        { "expr": "vectors_estimate", "legendFormat": "vectors {{pod}}" },
+        { "expr": "segment_count", "legendFormat": "segments {{pod}}" },
+        { "expr": "memtable_rows", "legendFormat": "memtable {{pod}}" }
+      ]
+    },
+    {
+      "title": "CPU cores (cadvisor, per pod)",
+      "type": "timeseries",
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 14 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"aster-sim\",pod=~\"aster-node-.*\",container=\"aster\"}[1m])) by (pod)",
+          "legendFormat": "{{pod}}"
+        },
+        {
+          "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"aster-sim\",pod=~\"aster-node-.*\",container=\"aster\"}[1m]))",
+          "legendFormat": "TOTAL aster"
+        }
+      ]
+    },
+    {
+      "title": "Memory working set (bytes, per pod)",
+      "type": "timeseries",
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 14 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "sum(container_memory_working_set_bytes{namespace=\"aster-sim\",pod=~\"aster-node-.*\",container=\"aster\"}) by (pod)",
+          "legendFormat": "{{pod}}"
+        },
+        {
+          "expr": "sum(container_memory_working_set_bytes{namespace=\"aster-sim\",pod=~\"aster-node-.*\",container=\"aster\"})",
+          "legendFormat": "TOTAL aster"
+        }
+      ]
+    },
+    {
+      "title": "Controller: scale events & index targets",
+      "type": "timeseries",
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 21 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "sim_scale_events_total", "legendFormat": "scale events" },
+        { "expr": "sim_indexes_configured", "legendFormat": "indexes" },
+        { "expr": "sim_target_total_rows", "legendFormat": "target rows" },
+        { "expr": "sim_actual_total_rows", "legendFormat": "actual row budget" }
+      ]
+    },
+    {
+      "title": "Drain / flush activity",
+      "type": "timeseries",
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 21 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "sum(rate(drain_total[1m]))", "legendFormat": "drains/s" },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(flush_latency_ms_bucket[1m])) by (le))",
+          "legendFormat": "flush p95 ms"
+        }
+      ]
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["aster", "sim"],
+  "templating": { "list": [] },
+  "time": { "from": "now-30m", "to": "now" },
+  "title": "Aster live simulation",
+  "uid": "aster-sim",
+  "version": 1
+}

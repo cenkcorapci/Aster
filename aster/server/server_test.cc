@@ -162,6 +162,10 @@ TEST(HttpApi, EndToEndLocalhost) {
   auto health = handler.Handle(HttpRequest{"GET", "/health", "", "", ""});
   EXPECT_EQ(health.status, 200);
 
+  auto drained = http("POST", "/v1/admin/drain", "");
+  EXPECT_EQ(drained.status, 200);
+  EXPECT_NE(drained.body.find("drained"), std::string::npos);
+
   server.Stop();
   th.join();
 }

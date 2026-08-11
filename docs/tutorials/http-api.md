@@ -28,6 +28,7 @@ bazel run //aster/cli:aster -- serve --data-dir /tmp/aster-data --port 8080
 | `GET` | `/v1/collections/{name}/docs/{id}` | Get document |
 | `DELETE` | `/v1/collections/{name}/docs/{id}` | Tombstone delete |
 | `POST` | `/v1/collections/{name}/search` | Top-k search |
+| `POST` | `/v1/admin/drain` | Flush all collections (scale-down / preStop) |
 | `POST` | `/v1/collections/{name}/flush` | Flush memtable |
 | `POST` | `/v1/collections/{name}/compact` | Full compact |
 
