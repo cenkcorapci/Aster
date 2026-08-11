@@ -1,6 +1,6 @@
 # Switches to rules_python py_library + py_wheel in milestone M6
-# (docs/development-plan.md); filegroup keeps `bazel build //...` green
-# until then.
+# (docs/development-plan.md); filegroup keeps package sources visible until then.
+load("//tools/thrift:thrift.bzl", "aster_thrift_stubs")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -10,4 +10,17 @@ filegroup(
         "README.md",
         "pyproject.toml",
     ],
+)
+
+aster_thrift_stubs(
+    name = "thrift_stubs",
+    thrift_gen = "py",
+    outs = {
+        "gen-py/__init__.py": "__init__.py",
+        "gen-py/aster/__init__.py": "aster/__init__.py",
+        "gen-py/aster/rpc/__init__.py": "aster/rpc/__init__.py",
+        "gen-py/aster/rpc/Aster.py": "aster/rpc/Aster.py",
+        "gen-py/aster/rpc/constants.py": "aster/rpc/constants.py",
+        "gen-py/aster/rpc/ttypes.py": "aster/rpc/ttypes.py",
+    },
 )

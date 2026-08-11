@@ -1,9 +1,19 @@
 # Switches to rules_rust rust_library + crate publishing in milestone M6
 # (docs/development-plan.md).
+load("//tools/thrift:thrift.bzl", "aster_thrift_stubs")
 
 package(default_visibility = ["//visibility:public"])
 
 filegroup(
     name = "srcs",
     srcs = glob(["src/**/*.rs"]) + ["Cargo.toml"],
+)
+
+# Apache Thrift `rs` generator (deprecated upstream but still ships in 0.24.x).
+aster_thrift_stubs(
+    name = "thrift_stubs",
+    thrift_gen = "rs",
+    outs = {
+        "gen-rs/aster.rs": "aster.rs",
+    },
 )

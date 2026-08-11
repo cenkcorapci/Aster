@@ -22,9 +22,13 @@ bazel_dep(name = "googletest", version = "1.17.0.bcr.2", dev_dependency = True)
 bazel_dep(name = "yaml-cpp", version = "0.9.0", dev_dependency = True)
 
 # Apache Thrift C++ runtime (minimal subset; see third_party/thrift.BUILD).
-# Compiler codegen is not hermetic yet — C++ stubs are checked in under
-# aster/rpc/gen-cpp/ and refreshed via scripts/regen-thrift-cpp.sh.
+# Server C++ stubs remain checked in under aster/rpc/gen-cpp/ (scripts/regen-thrift-cpp.sh).
+# Client-language stub *generation* (M5-T02) uses the host/CI thrift binary via
+# @thrift_compiler — see tools/thrift/ and //clients:thrift_stubs.
 http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+host_thrift_repository = use_repo_rule("//tools/thrift:host_thrift_repo.bzl", "host_thrift_repository")
+
+host_thrift_repository(name = "thrift_compiler")
 
 http_archive(
     name = "apache_thrift",
@@ -249,10 +253,9 @@ zig = use_extension(
 use_repo(zig, "zig_sdk")
 
 
-# Client-library rulesets are wired in per milestone M6 (see
-# docs/development-plan.md). They are intentionally not added yet so that
-# `bazel build //...` stays fast and hermetic while the core engine is the
-# focus:
+# Client-library packaging rulesets land in M6 (docs/development-plan.md).
+# M5-T02 only adds Thrift stub *codegen* (`//clients/*/thrift_stubs`); language
+# rulesets stay commented so `bazel build //aster/...` remains lean:
 #   bazel_dep(name = "rules_python", ...)       # //clients/python wheel
 #   bazel_dep(name = "rules_go", ...)           # //clients/go
 #   bazel_dep(name = "rules_rust", ...)         # //clients/rust crate

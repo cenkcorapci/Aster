@@ -1,0 +1,11 @@
+# Thrift codegen helpers for //clients/... (M5-T02).
+#
+# The compiler binary is provided by @thrift_compiler (host PATH / CI install).
+# The C++ runtime remains @apache_thrift//:thrift (see MODULE.bazel).
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files([
+    "thrift.bzl",
+    "host_thrift_repo.bzl",
+])

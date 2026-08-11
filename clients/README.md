@@ -36,9 +36,21 @@ consistency are per-call options. Errors carry `AsterError.code`.
 
 ## Build & release
 
-Until M6, each directory has a native package file and a Bazel
-`filegroup` placeholder. A single `vX.Y.Z` tag publishes all clients —
-see [docs/versioning.md](../docs/versioning.md) and
+**Thrift stubs (M5-T02):** each language package exposes
+`//clients/<lang>:thrift_stubs`, aggregated as `//clients:thrift_stubs`.
+Generation uses the host/CI `thrift` binary (`@thrift_compiler`, prefer
+0.24.x) via `tools/thrift/thrift.bzl`. Scala has no Apache Thrift generator
+and aliases the Java stubs. Local/CI:
+
+```bash
+# macOS: brew install thrift
+# Linux CI: ./scripts/ci-install-thrift.sh
+bazel build //clients:thrift_stubs
+```
+
+Until M6, each directory still has a native package file and a Bazel
+`filegroup` placeholder for sources. A single `vX.Y.Z` tag publishes all
+clients — see [docs/versioning.md](../docs/versioning.md) and
 [docs/development-plan.md](../docs/development-plan.md) (M5–M6).
 
 ## Wire compatibility contract (M5-T01)

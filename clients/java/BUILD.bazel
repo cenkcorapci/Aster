@@ -1,9 +1,30 @@
 # Switches to java_library + rules_jvm_external Maven publishing in
 # milestone M6 (docs/development-plan.md). Coordinates: io.aster:aster-client.
+load("//tools/thrift:thrift.bzl", "aster_thrift_stubs")
 
 package(default_visibility = ["//visibility:public"])
 
 filegroup(
     name = "srcs",
     srcs = glob(["src/**/*.java"]),
+)
+
+aster_thrift_stubs(
+    name = "thrift_stubs",
+    thrift_gen = "java",
+    outs = {
+        "gen-java/io/aster/rpc/Aster.java": "io/aster/rpc/Aster.java",
+        "gen-java/io/aster/rpc/AsterError.java": "io/aster/rpc/AsterError.java",
+        "gen-java/io/aster/rpc/CollectionConfig.java": "io/aster/rpc/CollectionConfig.java",
+        "gen-java/io/aster/rpc/ConsistencyLevel.java": "io/aster/rpc/ConsistencyLevel.java",
+        "gen-java/io/aster/rpc/DistanceMetric.java": "io/aster/rpc/DistanceMetric.java",
+        "gen-java/io/aster/rpc/Document.java": "io/aster/rpc/Document.java",
+        "gen-java/io/aster/rpc/HnswConfig.java": "io/aster/rpc/HnswConfig.java",
+        "gen-java/io/aster/rpc/SearchHit.java": "io/aster/rpc/SearchHit.java",
+        "gen-java/io/aster/rpc/SearchRequest.java": "io/aster/rpc/SearchRequest.java",
+        "gen-java/io/aster/rpc/SearchResponse.java": "io/aster/rpc/SearchResponse.java",
+        "gen-java/io/aster/rpc/StorageMode.java": "io/aster/rpc/StorageMode.java",
+        "gen-java/io/aster/rpc/VectorConfig.java": "io/aster/rpc/VectorConfig.java",
+        "gen-java/io/aster/rpc/asterConstants.java": "io/aster/rpc/asterConstants.java",
+    },
 )

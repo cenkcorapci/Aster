@@ -1,9 +1,20 @@
 # Switches to rules_go go_library in milestone M6 (docs/development-plan.md).
 # Go consumers can already `go get` this module directly via git tags.
+load("//tools/thrift:thrift.bzl", "aster_thrift_stubs")
 
 package(default_visibility = ["//visibility:public"])
 
 filegroup(
     name = "srcs",
-    srcs = glob(["**/*.go"]) + ["go.mod"],
+    srcs = glob(["**/*.go"]),
+)
+
+aster_thrift_stubs(
+    name = "thrift_stubs",
+    thrift_gen = "go:skip_remote",
+    outs = {
+        "gen-go/aster/rpc/GoUnusedProtection__.go": "aster/rpc/GoUnusedProtection__.go",
+        "gen-go/aster/rpc/aster-consts.go": "aster/rpc/aster-consts.go",
+        "gen-go/aster/rpc/aster.go": "aster/rpc/aster.go",
+    },
 )

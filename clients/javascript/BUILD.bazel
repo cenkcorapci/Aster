@@ -1,9 +1,21 @@
 # Switches to aspect_rules_js/ts + npm packaging in milestone M6
 # (docs/development-plan.md). Package: @aster-db/client.
+load("//tools/thrift:thrift.bzl", "aster_thrift_stubs")
 
 package(default_visibility = ["//visibility:public"])
 
 filegroup(
     name = "srcs",
     srcs = glob(["src/**/*.ts"]) + ["package.json"],
+)
+
+aster_thrift_stubs(
+    name = "thrift_stubs",
+    thrift_gen = "js:node,ts,es6",
+    outs = {
+        "gen-nodejs/Aster.js": "Aster.js",
+        "gen-nodejs/Aster.d.ts": "Aster.d.ts",
+        "gen-nodejs/aster_types.js": "aster_types.js",
+        "gen-nodejs/aster_types.d.ts": "aster_types.d.ts",
+    },
 )

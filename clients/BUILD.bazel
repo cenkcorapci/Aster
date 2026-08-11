@@ -1,0 +1,17 @@
+# Aggregate client Thrift stub codegen (M5-T02).
+# Packaging rulesets (wheels, crates, Maven, npm) arrive in M6.
+
+package(default_visibility = ["//visibility:public"])
+
+filegroup(
+    name = "thrift_stubs",
+    srcs = [
+        "//clients/cpp:thrift_stubs",
+        "//clients/python:thrift_stubs",
+        "//clients/go:thrift_stubs",
+        "//clients/rust:thrift_stubs",
+        "//clients/java:thrift_stubs",
+        "//clients/scala:thrift_stubs",
+        "//clients/javascript:thrift_stubs",
+    ],
+)

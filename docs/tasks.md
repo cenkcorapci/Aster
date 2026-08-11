@@ -150,7 +150,7 @@ Status updates happen in this file (see start-the-tasks.md § Claiming).
 | ID | Status | Lane | Depends | Title | Touch | Done when |
 | --- | --- | --- | --- | --- | --- | --- |
 | M5-T01 | done | rpc | M4-T01 | Freeze IDL + document wire compatibility rules | `aster/rpc/aster.thrift`, `clients/README.md`, `docs/client-api.md` | IDL MAJOR + wire compat/versioning policy written |
-| M5-T02 | open | release | M5-T01 | Thrift codegen Bazel rules for all client languages | `clients/*/BUILD.bazel`, `MODULE.bazel` | Each language generates stubs in CI |
+| M5-T02 | done | release | M5-T01 | Thrift codegen Bazel rules for all client languages | `clients/*/BUILD.bazel`, `MODULE.bazel` | Each language generates stubs in CI |
 | M5-T03 | done | qa | M5-T01, M4-T02 | Conformance YAML corpus + server test fixture | `clients/conformance/` | Corpus runs against C++ reference client |
 | M5-T04 | open | clients-cpp | M5-T02, M4-T02 | C++ client transport (pool, retry, failover) | `clients/cpp/` | Conformance green |
 | M5-T05 | open | clients-python | M5-T02, M4-T02 | Python client transport | `clients/python/` | Conformance green |

@@ -1,4 +1,5 @@
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("//tools/thrift:thrift.bzl", "aster_thrift_stubs")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -7,4 +8,18 @@ cc_library(
     name = "aster_client",
     hdrs = ["aster_client.h"],
     include_prefix = "aster/client",
+)
+
+# Client-side C++ stubs from aster.thrift (separate from //aster/rpc gen-cpp).
+aster_thrift_stubs(
+    name = "thrift_stubs",
+    thrift_gen = "cpp:no_skeleton",
+    outs = {
+        "gen-cpp/Aster.cpp": "Aster.cpp",
+        "gen-cpp/Aster.h": "Aster.h",
+        "gen-cpp/aster_constants.cpp": "aster_constants.cpp",
+        "gen-cpp/aster_constants.h": "aster_constants.h",
+        "gen-cpp/aster_types.cpp": "aster_types.cpp",
+        "gen-cpp/aster_types.h": "aster_types.h",
+    },
 )

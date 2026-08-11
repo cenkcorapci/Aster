@@ -1,9 +1,17 @@
 # Switches to rules_scala scala_library + Maven publishing in milestone M6
 # (docs/development-plan.md). Coordinates: io.aster:aster-client-scala.
+#
+# Apache Thrift has no Scala generator in 0.24.x; the Scala client consumes
+# the Java stubs (JVM interop) produced by //clients/java:thrift_stubs.
 
 package(default_visibility = ["//visibility:public"])
 
 filegroup(
     name = "srcs",
     srcs = glob(["src/**/*.scala"]),
+)
+
+alias(
+    name = "thrift_stubs",
+    actual = "//clients/java:thrift_stubs",
 )

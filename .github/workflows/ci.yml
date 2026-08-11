@@ -127,3 +127,27 @@ jobs:
           reporter: java-junit
           fail-on-error: false
           fail-on-empty: false
+
+  # M5-T02: generate Thrift stubs for every client language via Bazel.
+  client-thrift-codegen:
+    name: Client Thrift codegen
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Install Thrift compiler 0.24
+        run: ./scripts/ci-install-thrift.sh
+
+      - name: Set up Bazel
+        uses: bazel-contrib/setup-bazel@0.19.0
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}-client-thrift
+          repository-cache: true
+          cache-save: ${{ github.event_name != 'pull_request' }}
+
+      - name: Generate client Thrift stubs
+        run: bazel build //clients:thrift_stubs
