@@ -27,3 +27,13 @@ cc_test(
         "@googletest//:gtest_main",
     ],
 )
+
+cc_test(
+    name = "distance_test",
+    size = "small",
+    srcs = ["distance_test.cc"],
+    deps = [
+        ":index",
+        "@googletest//:gtest_main",
+    ],
+)
