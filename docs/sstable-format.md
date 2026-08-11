@@ -1,6 +1,6 @@
 # Aster SSTable binary format (RFC)
 
-**Status:** implemented for M1 (compression / HNSW side-car still open)  
+**Status:** implemented for M1 (HNSW side-car still open)  
 **Audience:** SSTable writer/reader in `aster/storage/sstable.*`
 
 This document is the normative on-disk layout for an Aster **immutable

@@ -21,6 +21,8 @@ cc_library(
 )
 
 # Durable on-disk formats (WAL / SSTable / manifest). Hosted POSIX only.
+# LZ4/ZSTD are linked always for the disk lib; call sites are gated by
+# ASTER_ENABLE_COMPRESSION (off under Tiny / --config=tiny).
 cc_library(
     name = "disk",
     srcs = [
@@ -41,6 +43,8 @@ cc_library(
         ":memory",
         "//aster/core",
         "//aster/index",
+        "@lz4//:lz4",
+        "@zstd//:zstd",
     ],
 )
 

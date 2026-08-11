@@ -14,10 +14,19 @@
 namespace aster {
 
 // On-disk SSTable (.ast) per docs/sstable-format.md.
-// Compression is None in this milestone (Tiny-compatible default).
+// Directory compression field: 0=None, 1=LZ4, 2=ZSTD.
+
+enum class CompressionCodec : uint8_t {
+  kNone = 0,
+  kLz4 = 1,
+  kZstd = 2,
+};
 
 struct SstableWriteOptions {
   uint32_t sparse_stride = 16;
+  // Default None keeps Tiny / uncompressed layouts as the common path.
+  // Non-None requires ASTER_ENABLE_COMPRESSION (Edge/Server profiles).
+  CompressionCodec compression = CompressionCodec::kNone;
 };
 
 // Writes an immutable segment file. Rows must already be sorted by id with

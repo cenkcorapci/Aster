@@ -9,7 +9,13 @@
 #include <set>
 #include <utility>
 
+#include "aster/core/features.h"
 #include "aster/storage/wal.h"  // Crc32
+
+#if ASTER_ENABLE_COMPRESSION
+#include <lz4.h>
+#include <zstd.h>
+#endif
 
 namespace aster {
 namespace {
@@ -86,6 +92,101 @@ std::string WrapBlock(const std::string& payload) {
   AppendU32(out, static_cast<uint32_t>(payload.size()));
   out.append(payload);
   return out;
+}
+
+Result<std::string> CompressBlockImage(const std::string& uncompressed,
+                                       CompressionCodec codec) {
+  if (codec == CompressionCodec::kNone) return uncompressed;
+#if !ASTER_ENABLE_COMPRESSION
+  return Status::InvalidArgument("compression disabled in this build");
+#else
+  if (codec == CompressionCodec::kLz4) {
+    const int src_size = static_cast<int>(uncompressed.size());
+    const int bound = LZ4_compressBound(src_size);
+    if (bound <= 0) {
+      return Status(StatusCode::kInternal, "lz4 compressBound failed");
+    }
+    std::string out(static_cast<size_t>(bound), '\0');
+    const int n = LZ4_compress_default(uncompressed.data(), out.data(),
+                                       src_size, bound);
+    if (n <= 0) {
+      return Status(StatusCode::kInternal, "lz4 compress failed");
+    }
+    out.resize(static_cast<size_t>(n));
+    return out;
+  }
+  if (codec == CompressionCodec::kZstd) {
+    const size_t bound = ZSTD_compressBound(uncompressed.size());
+    std::string out(bound, '\0');
+    const size_t n =
+        ZSTD_compress(out.data(), bound, uncompressed.data(),
+                      uncompressed.size(), /*level=*/1);
+    if (ZSTD_isError(n)) {
+      return Status(StatusCode::kInternal,
+                    std::string("zstd compress: ") + ZSTD_getErrorName(n));
+    }
+    out.resize(n);
+    return out;
+  }
+  return Status::InvalidArgument("unknown compression codec");
+#endif
+}
+
+Result<std::string> DecompressBlockImage(const char* on_disk, size_t on_disk_len,
+                                         CompressionCodec codec) {
+  if (codec == CompressionCodec::kNone) {
+    return std::string(on_disk, on_disk_len);
+  }
+#if !ASTER_ENABLE_COMPRESSION
+  return Status::Corruption("compressed block requires ASTER_ENABLE_COMPRESSION");
+#else
+  if (codec == CompressionCodec::kLz4) {
+    // Uncompressed image starts with u32 payload_len; total size = 4 + that.
+    // LZ4_decompress_safe needs the exact dest capacity — peek after a
+    // conservative upper bound: on_disk_len * 255 is LZ4's worst expansion,
+    // but we know the image begins with a length prefix once decompressed.
+    // Use LZ4_decompress_safe with a growing buffer seeded from a max of
+    // 16x or at least 64 KiB, capped reasonably.
+    size_t cap = std::max(on_disk_len * 8, size_t{65536});
+    constexpr size_t kMaxUncompressed = 256ull << 20;  // 256 MiB
+    if (cap > kMaxUncompressed) cap = kMaxUncompressed;
+    for (int attempt = 0; attempt < 4; ++attempt) {
+      std::string out(cap, '\0');
+      const int n = LZ4_decompress_safe(on_disk, out.data(),
+                                        static_cast<int>(on_disk_len),
+                                        static_cast<int>(cap));
+      if (n >= 0) {
+        out.resize(static_cast<size_t>(n));
+        return out;
+      }
+      if (cap >= kMaxUncompressed) break;
+      cap = std::min(cap * 2, kMaxUncompressed);
+    }
+    return Status::Corruption("lz4 decompress failed");
+  }
+  if (codec == CompressionCodec::kZstd) {
+    const unsigned long long frame_size =
+        ZSTD_getFrameContentSize(on_disk, on_disk_len);
+    size_t cap = 0;
+    if (frame_size != ZSTD_CONTENTSIZE_ERROR &&
+        frame_size != ZSTD_CONTENTSIZE_UNKNOWN &&
+        frame_size < (256ull << 20)) {
+      cap = static_cast<size_t>(frame_size);
+    } else {
+      cap = std::max(on_disk_len * 8, size_t{65536});
+    }
+    std::string out(cap, '\0');
+    const size_t n =
+        ZSTD_decompress(out.data(), cap, on_disk, on_disk_len);
+    if (ZSTD_isError(n)) {
+      return Status::Corruption(std::string("zstd decompress: ") +
+                                ZSTD_getErrorName(n));
+    }
+    out.resize(n);
+    return out;
+  }
+  return Status::Corruption("unknown compression codec");
+#endif
 }
 
 std::string BuildBloomPayload(const BloomFilter& bloom) {
@@ -268,6 +369,17 @@ std::string BuildMetadataPayload(const std::vector<Row>& rows,
 Status WriteSstable(const std::string& path, uint64_t segment_id, Metric metric,
                     const std::vector<Row>& rows,
                     const SstableWriteOptions& options) {
+  if (options.compression != CompressionCodec::kNone &&
+      !CompressionEnabled()) {
+    return Status::InvalidArgument(
+        "compression requires ASTER_ENABLE_COMPRESSION");
+  }
+  if (options.compression != CompressionCodec::kNone &&
+      options.compression != CompressionCodec::kLz4 &&
+      options.compression != CompressionCodec::kZstd) {
+    return Status::InvalidArgument("unknown compression codec");
+  }
+
   // Validate sorted unique ids.
   for (size_t i = 1; i < rows.size(); ++i) {
     if (rows[i].id <= rows[i - 1].id) {
@@ -324,6 +436,20 @@ Status WriteSstable(const std::string& path, uint64_t segment_id, Metric metric,
   blocks_raw[5] = tags_payload.empty() ? std::string() : WrapBlock(tags_payload);
   blocks_raw[6] = std::string();  // tree empty
 
+  const CompressionCodec codec = options.compression;
+  const uint8_t codec_u8 = static_cast<uint8_t>(codec);
+
+  std::string blocks_on_disk[kNumBlocks];
+  for (size_t i = 0; i < kNumBlocks; ++i) {
+    if (blocks_raw[i].empty()) {
+      blocks_on_disk[i].clear();
+      continue;
+    }
+    auto compressed = CompressBlockImage(blocks_raw[i], codec);
+    if (!compressed.ok()) return compressed.status();
+    blocks_on_disk[i] = std::move(compressed.value());
+  }
+
   BlockDesc descs[kNumBlocks];
   std::string file;
   file.resize(kPreludeBytes, '\0');
@@ -331,15 +457,17 @@ Status WriteSstable(const std::string& path, uint64_t segment_id, Metric metric,
   size_t cursor = kPreludeBytes;
   for (size_t i = 0; i < kNumBlocks; ++i) {
     cursor = Align8(cursor);
-    // Prefer 32-align for uncompressed vector block.
-    if (i == 3 && !blocks_raw[i].empty()) {
+    // Prefer 32-align for uncompressed vector block (mmap SIMD).
+    if (i == 3 && !blocks_on_disk[i].empty() &&
+        codec == CompressionCodec::kNone) {
       while (cursor % 32 != 0) ++cursor;
     }
     descs[i].offset = cursor;
-    descs[i].on_disk_len = static_cast<uint32_t>(blocks_raw[i].size());
-    descs[i].compression = 0;
+    descs[i].on_disk_len = static_cast<uint32_t>(blocks_on_disk[i].size());
+    descs[i].compression =
+        blocks_on_disk[i].empty() ? 0 : codec_u8;
     if (file.size() < cursor) file.append(cursor - file.size(), '\0');
-    file.append(blocks_raw[i]);
+    file.append(blocks_on_disk[i]);
     cursor = file.size();
   }
   cursor = Align8(cursor);
@@ -507,12 +635,21 @@ Result<std::unique_ptr<SstableReader>> SstableReader::Open(
 
   auto unwrap = [&](size_t bi) -> Result<std::string> {
     if (descs[bi].on_disk_len == 0) return std::string();
-    size_t bo = descs[bi].offset;
-    const uint32_t plen = ReadU32(data, bo);
-    if (bo + plen > descs[bi].offset + descs[bi].on_disk_len) {
+    const CompressionCodec codec =
+        static_cast<CompressionCodec>(descs[bi].compression);
+    auto image = DecompressBlockImage(data.data() + descs[bi].offset,
+                                      descs[bi].on_disk_len, codec);
+    if (!image.ok()) return image.status();
+    const std::string& uncompressed = image.value();
+    if (uncompressed.size() < 4) {
+      return Status::Corruption("block image too small");
+    }
+    size_t bo = 0;
+    const uint32_t plen = ReadU32(uncompressed, bo);
+    if (bo + plen > uncompressed.size()) {
       return Status::Corruption("block length overrun");
     }
-    return data.substr(bo, plen);
+    return uncompressed.substr(bo, plen);
   };
 
   auto bloom_payload = unwrap(0);

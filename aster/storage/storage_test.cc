@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "aster/index/bloom.h"
+#include "aster/core/features.h"
 #include "aster/storage/manifest.h"
 #include "aster/storage/memtable.h"
 #include "aster/storage/segment.h"
@@ -375,6 +376,105 @@ TEST(Sstable, CustomSparseStride) {
   EXPECT_EQ(reader.value()->Get("id-039")->vector[0], 39.0f);
   std::remove(path.c_str());
 }
+
+std::vector<Row> MakeCompressibleRows(int n) {
+  std::vector<Row> rows;
+  rows.reserve(static_cast<size_t>(n));
+  const std::string meta(512, 'm');  // highly compressible CBOR-ish blob
+  for (int i = 0; i < n; ++i) {
+    char id[32];
+    std::snprintf(id, sizeof(id), "row-%04d", i);
+    // Repeated float pattern compresses well vs random noise.
+    std::vector<float> vec(32, 0.125f);
+    Row row = MakeRow(id, std::move(vec), static_cast<Timestamp>(i + 1));
+    row.metadata = meta;
+    rows.push_back(std::move(row));
+  }
+  return rows;
+}
+
+#if ASTER_ENABLE_COMPRESSION
+
+TEST(Sstable, Lz4RoundTripAndSmaller) {
+  const auto rows = MakeCompressibleRows(64);
+  const std::string none_path = ::testing::TempDir() + "/seg_none.ast";
+  const std::string lz4_path = ::testing::TempDir() + "/seg_lz4.ast";
+  std::remove(none_path.c_str());
+  std::remove(lz4_path.c_str());
+
+  ASSERT_TRUE(WriteSstable(none_path, 1, Metric::kL2, rows).ok());
+  SstableWriteOptions opts;
+  opts.compression = CompressionCodec::kLz4;
+  ASSERT_TRUE(WriteSstable(lz4_path, 1, Metric::kL2, rows, opts).ok());
+
+  auto none_sz = [&](const std::string& p) {
+    std::ifstream in(p, std::ios::binary | std::ios::ate);
+    return static_cast<size_t>(in.tellg());
+  };
+  EXPECT_LT(none_sz(lz4_path), none_sz(none_path));
+
+  auto reader = SstableReader::Open(lz4_path);
+  ASSERT_TRUE(reader.ok()) << reader.status().message();
+  EXPECT_EQ(reader.value()->row_count(), rows.size());
+  auto got = reader.value()->Get("row-0000");
+  ASSERT_TRUE(got.has_value());
+  EXPECT_EQ(got->metadata, rows[0].metadata);
+  ASSERT_EQ(got->vector.size(), 32u);
+  EXPECT_FLOAT_EQ(got->vector[0], 0.125f);
+  auto last = reader.value()->Get("row-0063");
+  ASSERT_TRUE(last.has_value());
+  EXPECT_EQ(last->metadata.size(), 512u);
+
+  std::remove(none_path.c_str());
+  std::remove(lz4_path.c_str());
+}
+
+TEST(Sstable, ZstdRoundTripAndSmaller) {
+  const auto rows = MakeCompressibleRows(64);
+  const std::string none_path = ::testing::TempDir() + "/seg_none_z.ast";
+  const std::string zstd_path = ::testing::TempDir() + "/seg_zstd.ast";
+  std::remove(none_path.c_str());
+  std::remove(zstd_path.c_str());
+
+  ASSERT_TRUE(WriteSstable(none_path, 2, Metric::kCosine, rows).ok());
+  SstableWriteOptions opts;
+  opts.compression = CompressionCodec::kZstd;
+  ASSERT_TRUE(WriteSstable(zstd_path, 2, Metric::kCosine, rows, opts).ok());
+
+  auto file_sz = [](const std::string& p) {
+    std::ifstream in(p, std::ios::binary | std::ios::ate);
+    return static_cast<size_t>(in.tellg());
+  };
+  EXPECT_LT(file_sz(zstd_path), file_sz(none_path));
+
+  auto reader = SstableReader::Open(zstd_path);
+  ASSERT_TRUE(reader.ok()) << reader.status().message();
+  auto all = reader.value()->LoadAll();
+  ASSERT_EQ(all.size(), rows.size());
+  for (size_t i = 0; i < rows.size(); ++i) {
+    EXPECT_EQ(all[i].id, rows[i].id);
+    EXPECT_EQ(all[i].metadata, rows[i].metadata);
+    ASSERT_EQ(all[i].vector.size(), rows[i].vector.size());
+    EXPECT_FLOAT_EQ(all[i].vector[0], rows[i].vector[0]);
+  }
+
+  std::remove(none_path.c_str());
+  std::remove(zstd_path.c_str());
+}
+
+#else
+
+TEST(Sstable, CompressionRejectedWhenDisabled) {
+  const auto rows = MakeCompressibleRows(4);
+  const std::string path = ::testing::TempDir() + "/seg_comp_off.ast";
+  SstableWriteOptions opts;
+  opts.compression = CompressionCodec::kLz4;
+  EXPECT_FALSE(WriteSstable(path, 1, Metric::kL2, rows, opts).ok());
+  opts.compression = CompressionCodec::kZstd;
+  EXPECT_FALSE(WriteSstable(path, 1, Metric::kL2, rows, opts).ok());
+}
+
+#endif
 
 TEST(Manifest, AtomicSwapLeavesPriorGeneration) {
   const std::string dir = ::testing::TempDir();
