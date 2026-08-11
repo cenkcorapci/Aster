@@ -6,10 +6,12 @@ package(default_visibility = ["//visibility:public"])
 cc_library(
     name = "distributed",
     srcs = [
+        "gossip.cc",
         "rebalance.cc",
         "ring.cc",
     ],
     hdrs = [
+        "gossip.h",
         "rebalance.h",
         "ring.h",
     ],
@@ -20,6 +22,7 @@ cc_test(
     name = "distributed_test",
     size = "small",
     srcs = [
+        "gossip_test.cc",
         "rebalance_test.cc",
         "ring_test.cc",
     ],
