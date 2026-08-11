@@ -9,10 +9,12 @@ cc_library(
         "bloom.cc",
         "distance.cc",
         "exact_index.cc",
+        "hnsw_graph.cc",
     ],
     hdrs = [
         "bloom.h",
         "distance.h",
+        "hnsw_graph.h",
         "vector_index.h",
     ],
     deps = ["//aster/core"],

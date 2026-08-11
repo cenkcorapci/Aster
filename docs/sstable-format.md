@@ -485,7 +485,7 @@ tests may parse with a test-only decoder).
 - Bump `format_version` on any incompatible change to header, directory,
   block order, or CRC scope.
 - Additive reserved fields stay zero until a version bump claims them.
-- Parallel `.hnsw` format is versioned separately (M2).
+- Parallel [`.hnsw` format](hnsw-format.md) is versioned separately (M2).
 
 ---
 

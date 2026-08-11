@@ -26,6 +26,8 @@ Contents:
 11. [Parameter reference](#11-parameter-reference)
 12. [References](#12-references)
 
+On-disk graph layout (M2): [`hnsw-format.md`](hnsw-format.md).
+
 ---
 
 ## 1. Background: the ANN problem
@@ -257,7 +259,8 @@ stateDiagram-v2
 
 The graph file is derived data: it can always be rebuilt from the segment's
 vector block. A crash during build loses only CPU work. The manifest never
-points to a partially written graph (write-temp-then-atomic-swap).
+points to a partially written graph (write-temp-then-atomic-swap). Binary
+layout: [`hnsw-format.md`](hnsw-format.md).
 
 ## 5. Deletes, updates, and visibility rules
 

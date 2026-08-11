@@ -91,7 +91,8 @@ Status updates happen in this file (see start-the-tasks.md § Claiming).
 
 | ID | Status | Lane | Depends | Title | Touch | Done when |
 | --- | --- | --- | --- | --- | --- | --- |
-| M2-T01 | open | index | M1-T03 | HNSW graph data structures + on-disk graph file format | `aster/index/hnsw*`, `docs/` | Graph serialize/load round-trip; format note linked from indexing.md |
+| M2-T01 | in_progress | index | M1-T03 | HNSW graph data structures + on-disk graph file format | `aster/index/hnsw*`, `docs/` | Graph serialize/load round-trip; format note linked from indexing.md |
+<!-- claim: M2-T01 | agent: composer | branch: task/M2-T01-hnsw-graph | since: 2026-08-11 -->
 | M2-T02 | open | index | M2-T01 | HNSW insert/build (`M`, `ef_construction`, `max_layers`) | `aster/index/hnsw*` | Build on fixture; neighbors within degree bounds; heuristic selection tested |
 | M2-T03 | open | index | M2-T02 | HNSW search with per-query `ef_search` | `aster/index/hnsw*` | Recall vs exact index on small fixture ≥ 0.9 @ high ef |
 | M2-T04 | open | db | M2-T03, M1-T09 | Wire PENDING→BUILDING→READY build state machine | `aster/db/`, `aster/storage/` | Segment searchable via exact until READY; then graph; matches TLA SegState |

@@ -8,7 +8,8 @@
 | [Design](design.md) | Engine architecture (LSM + segmented HNSW + ring) |
 | [Code structure](code-structure.md) | Layers, packages, profiles |
 | [Indexing](indexing.md) | ANN / HNSW contract (normative for M2+) |
-| [SSTable format](sstable-format.md) | On-disk segment layout |
+| [HNSW format](hnsw-format.md) | On-disk `.hnsw` graph layout (M2) |
+| [SSTable format](sstable-format.md) | On-disk `.ast` segment layout |
 | [Client API](client-api.md) | Collection-centric product API (target) |
 | [Versioning](versioning.md) | Single-version release policy |
 | [Tasks](tasks.md) / [Start the tasks](start-the-tasks.md) | Parallel work board |

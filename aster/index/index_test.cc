@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <cstdio>
+#include <string>
 #include <vector>
 
 #include "aster/index/bloom.h"
@@ -127,6 +129,91 @@ TEST(HnswParams, DefaultsPresentWhenEnabled) {
   EXPECT_EQ(p.ef_construction, 128u);
   EXPECT_EQ(p.ef_search_default, 64u);
   EXPECT_EQ(p.max_layers, 16u);
+  EXPECT_EQ(HnswLayer0MaxDegree(p), 32u);
+}
+
+HnswGraph MakeFixtureGraph() {
+  HnswParams params;
+  params.m = 4;
+  params.ef_construction = 32;
+  params.ef_search_default = 16;
+  params.max_layers = 8;
+
+  HnswGraph g(params);
+  g.set_segment_id(42);
+
+  // Tiny hand-built hierarchy (no insert heuristic — M2-T02):
+  //   layer 2: 0
+  //   layer 1: 0 — 2
+  //   layer 0: 0 — 1 — 2 — 3
+  EXPECT_TRUE(g.AddNode(/*row_ordinal=*/10, /*level=*/2).ok());
+  EXPECT_TRUE(g.AddNode(/*row_ordinal=*/11, /*level=*/0).ok());
+  EXPECT_TRUE(g.AddNode(/*row_ordinal=*/12, /*level=*/1).ok());
+  EXPECT_TRUE(g.AddNode(/*row_ordinal=*/13, /*level=*/0).ok());
+
+  EXPECT_EQ(g.entry_point(), 0u);
+  EXPECT_EQ(g.max_level(), 2u);
+  EXPECT_TRUE(g.SetNeighbors(0, 0, {1, 2}).ok());
+  EXPECT_TRUE(g.SetNeighbors(1, 0, {0, 2}).ok());
+  EXPECT_TRUE(g.SetNeighbors(2, 0, {0, 1, 3}).ok());
+  EXPECT_TRUE(g.SetNeighbors(3, 0, {2}).ok());
+  EXPECT_TRUE(g.SetNeighbors(0, 1, {2}).ok());
+  EXPECT_TRUE(g.SetNeighbors(2, 1, {0}).ok());
+  EXPECT_TRUE(g.SetNeighbors(0, 2, {}).ok());
+  return g;
+}
+
+TEST(HnswGraph, SerializeLoadRoundTripBytes) {
+  const HnswGraph g = MakeFixtureGraph();
+  const std::string bytes = g.Serialize();
+  ASSERT_GE(bytes.size(),
+            static_cast<size_t>(HnswGraph::kHeaderBytes + HnswGraph::kFooterBytes));
+
+  auto loaded = HnswGraph::Load(bytes);
+  ASSERT_TRUE(loaded.ok()) << loaded.status().message();
+  EXPECT_EQ(loaded.value(), g);
+  EXPECT_EQ(loaded.value().segment_id(), 42u);
+  EXPECT_EQ(loaded.value().RowOrdinal(2), 12u);
+  EXPECT_EQ(loaded.value().Neighbors(2, 0), (std::vector<uint32_t>{0, 1, 3}));
+}
+
+TEST(HnswGraph, SerializeLoadRoundTripFile) {
+  const HnswGraph g = MakeFixtureGraph();
+  const std::string path = "aster_hnsw_roundtrip_test.hnsw";
+  ASSERT_TRUE(g.WriteToFile(path).ok());
+
+  auto loaded = HnswGraph::LoadFromFile(path);
+  std::remove(path.c_str());
+  ASSERT_TRUE(loaded.ok()) << loaded.status().message();
+  EXPECT_EQ(loaded.value(), g);
+}
+
+TEST(HnswGraph, EmptyGraphRoundTrip) {
+  HnswGraph g(HnswParams{});
+  const std::string bytes = g.Serialize();
+  EXPECT_EQ(bytes.size(), 80u) << "magic0=" << (bytes.empty() ? -1 : (int)(unsigned char)bytes[0]);
+  auto loaded = HnswGraph::Load(bytes);
+  ASSERT_TRUE(loaded.ok()) << loaded.status().message() << " size=" << bytes.size();
+  EXPECT_EQ(loaded.value(), g);
+  EXPECT_EQ(loaded.value().entry_point(), HnswGraph::kNoEntry);
+  EXPECT_EQ(loaded.value().node_count(), 0u);
+}
+
+TEST(HnswGraph, CorruptMagicRejected) {
+  HnswGraph g = MakeFixtureGraph();
+  std::string bytes = g.Serialize();
+  bytes[0] = static_cast<char>(bytes[0] ^ 0xFF);
+  auto loaded = HnswGraph::Load(bytes);
+  EXPECT_FALSE(loaded.ok());
+  EXPECT_EQ(loaded.status().code(), StatusCode::kCorruption);
+}
+
+TEST(HnswGraph, TruncatedRejected) {
+  HnswGraph g = MakeFixtureGraph();
+  std::string bytes = g.Serialize();
+  bytes.resize(bytes.size() / 2);
+  auto loaded = HnswGraph::Load(bytes);
+  EXPECT_FALSE(loaded.ok());
 }
 #else
 TEST(HnswParams, TypeOmittedUnderTiny) {
