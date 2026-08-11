@@ -16,7 +16,7 @@
 namespace aster {
 
 // Sequential HNSW insert/build over an in-memory vector set (docs/indexing.md
-// §2.2). Produces an HnswGraph via AddNode/SetNeighbors; search is M2-T03.
+// §2.2). Produces an HnswGraph via AddNode/SetNeighbors; query: hnsw_search.h.
 class HnswBuilder {
  public:
   explicit HnswBuilder(Metric metric, HnswParams params = {},

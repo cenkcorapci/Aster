@@ -44,10 +44,11 @@ std::unique_ptr<VectorIndex> BuildExactIndex(
     Metric metric, std::shared_ptr<const std::vector<Row>> rows);
 
 #if ASTER_ENABLE_HNSW
-// Segmented HNSW build/search land in M2-T02 / M2-T03:
-// std::unique_ptr<VectorIndex> BuildHnswIndex(Metric, HnswParams,
-//                                             std::vector<IndexEntry>);
-// Graph topology + on-disk format: HnswGraph (hnsw_graph.h, docs/hnsw-format.md).
+// Segmented HNSW: build via HnswBuilder (hnsw_build.h); query via HnswSearch /
+// BuildHnswIndex (hnsw_search.h). Graph: HnswGraph (docs/hnsw-format.md).
+std::unique_ptr<VectorIndex> BuildHnswIndex(Metric metric, HnswParams params,
+                                            std::vector<IndexEntry> entries,
+                                            uint64_t rng_seed = 1);
 #endif
 
 }  // namespace aster

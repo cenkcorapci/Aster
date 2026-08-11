@@ -12,6 +12,7 @@
 
 #if ASTER_ENABLE_HNSW
 #include "aster/index/hnsw_build.h"
+#include "aster/index/hnsw_search.h"
 #endif
 
 namespace aster {
@@ -312,6 +313,124 @@ TEST(HnswBuild, HeuristicRespectsMaxKeep) {
       HnswBuilder::SelectNeighborsHeuristic(Metric::kDot, base, cands, 3);
   EXPECT_LE(picked.size(), 3u);
   EXPECT_FALSE(picked.empty());
+}
+
+float RecallAtK(const std::vector<SearchHit>& approx,
+                const std::vector<SearchHit>& truth) {
+  if (truth.empty()) return 1.0f;
+  std::vector<RowId> want;
+  want.reserve(truth.size());
+  for (const auto& h : truth) want.push_back(h.id);
+  std::sort(want.begin(), want.end());
+  size_t hits = 0;
+  for (const auto& h : approx) {
+    if (std::binary_search(want.begin(), want.end(), h.id)) ++hits;
+  }
+  return static_cast<float>(hits) / static_cast<float>(truth.size());
+}
+
+TEST(HnswSearch, EmptyAndSingleNode) {
+  HnswParams params;
+  params.m = 4;
+  params.ef_construction = 8;
+  params.ef_search_default = 4;
+  params.max_layers = 4;
+
+  auto empty = BuildHnswIndex(Metric::kL2, params, {});
+  ASSERT_NE(empty, nullptr);
+  EXPECT_EQ(empty->size(), 0u);
+  const std::vector<float> q = {1.0f, 0.0f};
+  EXPECT_TRUE(empty->Search(q, 5, 16).empty());
+
+  const std::vector<float> v = {1.0f, 0.0f};
+  std::vector<IndexEntry> one = {{"only", v}};
+  auto index = BuildHnswIndex(Metric::kL2, params, std::move(one));
+  ASSERT_EQ(index->size(), 1u);
+  auto hits = index->Search(v, 3, /*ef_search=*/8);
+  ASSERT_EQ(hits.size(), 1u);
+  EXPECT_EQ(hits[0].id, "only");
+}
+
+TEST(HnswSearch, RecallVsExactAtHighEf) {
+  HnswParams params;
+  params.m = 8;
+  params.ef_construction = 64;
+  params.ef_search_default = 32;
+  params.max_layers = 8;
+
+  // Small 2-d grid fixture (64 points). Own vectors first so IndexEntry
+  // views stay valid (no reallocation while building entries).
+  std::vector<std::vector<float>> data;
+  data.reserve(64);
+  for (int y = 0; y < 8; ++y) {
+    for (int x = 0; x < 8; ++x) {
+      data.push_back({static_cast<float>(x), static_cast<float>(y)});
+    }
+  }
+  std::vector<IndexEntry> entries;
+  entries.reserve(data.size());
+  for (size_t i = 0; i < data.size(); ++i) {
+    entries.push_back({"row-" + std::to_string(i), data[i]});
+  }
+
+  std::vector<IndexEntry> exact_entries = entries;
+  std::vector<IndexEntry> hnsw_entries = entries;
+  auto exact = BuildExactIndex(Metric::kL2, std::move(exact_entries));
+  auto hnsw =
+      BuildHnswIndex(Metric::kL2, params, std::move(hnsw_entries), /*rng_seed=*/7);
+  ASSERT_EQ(exact->size(), 64u);
+  ASSERT_EQ(hnsw->size(), 64u);
+
+  constexpr uint32_t k = 10;
+  constexpr uint32_t ef_high = 128;
+  float sum_recall = 0.0f;
+  int queries = 0;
+  // Query near each grid point and a few off-grid centers.
+  for (int y = 0; y < 8; y += 2) {
+    for (int x = 0; x < 8; x += 2) {
+      const std::vector<float> query = {static_cast<float>(x) + 0.25f,
+                                        static_cast<float>(y) + 0.25f};
+      auto truth = exact->Search(query, k, /*ef_search=*/0);
+      auto approx = hnsw->Search(query, k, ef_high);
+      ASSERT_EQ(truth.size(), k);
+      ASSERT_EQ(approx.size(), k);
+      sum_recall += RecallAtK(approx, truth);
+      ++queries;
+    }
+  }
+  ASSERT_GT(queries, 0);
+  const float mean_recall = sum_recall / static_cast<float>(queries);
+  EXPECT_GE(mean_recall, 0.9f) << "mean recall@10 @ ef=" << ef_high;
+}
+
+TEST(HnswSearch, EfSearchDefaultWhenZero) {
+  HnswParams params;
+  params.m = 4;
+  params.ef_construction = 16;
+  params.ef_search_default = 16;
+  params.max_layers = 4;
+
+  std::vector<std::vector<float>> vectors;
+  vectors.reserve(9);
+  for (int i = 0; i < 9; ++i) {
+    vectors.push_back({static_cast<float>(i), 0.0f});
+  }
+  HnswBuilder builder(Metric::kL2, params, /*rng_seed=*/3);
+  auto built = builder.Build(vectors);
+  ASSERT_TRUE(built.ok()) << built.status().message();
+
+  const std::vector<float> query = {4.0f, 0.0f};
+  auto with_default =
+      HnswSearch(Metric::kL2, built.value(), vectors, query, /*top_k=*/3,
+                 /*ef_search=*/0);
+  auto with_explicit =
+      HnswSearch(Metric::kL2, built.value(), vectors, query, /*top_k=*/3,
+                 params.ef_search_default);
+  ASSERT_EQ(with_default.size(), with_explicit.size());
+  for (size_t i = 0; i < with_default.size(); ++i) {
+    EXPECT_EQ(with_default[i].first, with_explicit[i].first);
+    EXPECT_FLOAT_EQ(with_default[i].second, with_explicit[i].second);
+  }
 }
 #else
 TEST(HnswParams, TypeOmittedUnderTiny) {

@@ -26,8 +26,8 @@ inline uint32_t HnswLayer0MaxDegree(const HnswParams& p) { return 2u * p.m; }
 
 // Immutable per-segment HNSW adjacency (topology only). Vectors live in the
 // sibling SSTable; `RowOrdinal(i)` maps graph node i to a live-row slot.
-// On-disk layout: docs/hnsw-format.md. Insert/build: hnsw_build.h (M2-T02);
-// search: M2-T03.
+// On-disk layout: docs/hnsw-format.md. Insert/build: hnsw_build.h;
+// search: hnsw_search.h.
 class HnswGraph {
  public:
   static constexpr uint32_t kNoEntry = 0xFFFFFFFFu;
