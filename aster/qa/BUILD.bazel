@@ -1,4 +1,5 @@
 load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("@rules_cc//cc:cc_test.bzl", "cc_test")
 
 package(default_visibility = ["//visibility:public"])
@@ -46,6 +47,76 @@ cc_test(
     }),
     deps = [
         "//aster/db",
+        "@googletest//:gtest_main",
+    ],
+)
+
+# ---------------------------------------------------------------------------
+# M2-T10: HNSW recall@10 >= 0.95 @ ef=128 vs exact (SIFT/GloVe-like subsets).
+# PR gate: //aster/qa:recall_gate_test (also under //aster/...).
+# Nightly: //aster/qa:recall_gate_nightly_test (manual; larger corpus).
+# Local:  bazel run //aster/qa:recall_gate -- --scale=pr|nightly
+# ---------------------------------------------------------------------------
+cc_library(
+    name = "recall_gate_lib",
+    srcs = ["recall_gate_lib.cc"],
+    hdrs = ["recall_gate_lib.h"],
+    target_compatible_with = select({
+        "//platforms:is_baremetal": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    }),
+    deps = [
+        "//aster/core",
+        "//aster/index",
+    ],
+)
+
+cc_binary(
+    name = "recall_gate",
+    srcs = ["recall_gate.cc"],
+    target_compatible_with = select({
+        "//platforms:is_baremetal": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    }),
+    deps = [
+        ":recall_gate_lib",
+        "//aster/core",
+    ],
+)
+
+cc_test(
+    name = "recall_gate_test",
+    size = "small",
+    srcs = ["recall_gate_test.cc"],
+    target_compatible_with = select({
+        "//platforms:is_baremetal": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    }),
+    deps = [
+        ":recall_gate_lib",
+        "//aster/core",
+        "@googletest//:gtest_main",
+    ],
+)
+
+# Larger deterministic subsets; excluded from wildcard `bazel test //aster/...`
+# via the `manual` tag. Nightly workflow runs this target explicitly.
+cc_test(
+    name = "recall_gate_nightly_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["recall_gate_test.cc"],
+    env = {
+        "ASTER_RECALL_SCALE": "nightly",
+    },
+    tags = ["manual"],
+    target_compatible_with = select({
+        "//platforms:is_baremetal": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    }),
+    deps = [
+        ":recall_gate_lib",
+        "//aster/core",
         "@googletest//:gtest_main",
     ],
 )

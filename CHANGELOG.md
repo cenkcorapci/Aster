@@ -6,6 +6,10 @@ The project follows a single-version policy; see [docs/versioning.md](docs/versi
 ## [Unreleased]
 
 ### Added
+- M2-T10: HNSW recall@10 CI gate (`//aster/qa:recall_gate_test`, nightly
+  `//aster/qa:recall_gate_nightly_test`) — SIFT/GloVe-like subsets must
+  reach ≥ 0.95 @ ef=128 vs exact; workflows `.github/workflows/recall-gate.yml`
+  and `recall-nightly.yml`.
 - Installable embedded library target `//aster:embedded_lib` — single
   `cc_library` for downstream in-process deps (re-exports `//aster/db`).
   See [docs/code-structure.md](docs/code-structure.md).
