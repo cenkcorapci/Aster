@@ -119,7 +119,7 @@ Status updates happen in this file (see start-the-tasks.md § Claiming).
 | M3-T05a | done | platform | M3-T05 | Arduino / bare-metal `//aster/embedded` + BusyBox musl image | `aster/embedded/`, `deploy/docker/`, `scripts/` | `libembedded.a` builds; `aster:local` image runs demo |
 | M3-T06 | done | platform | M2-T09, M3-T05 | ARM (NEON) CI build for Edge profile | CI | Green arm64 job; local: `--config=raspberry_pi` / `build-matrix.sh --full` |
 | M3-T07 | done | platform | M1-T09 | Arena / slab allocators on write path + memory budget | `aster/core/memory*`, `aster/db/` | Budget exceeded → clear Status; no unbounded growth in soak |
-| M3-T08 | open | qa | M3-T05, M3-T03, M2-T04 | Pi/edge validation runbook + results | `docs/` | Documented RSS <128 MB with 1M vectors |
+| M3-T08 | done | qa | M3-T05, M3-T03, M2-T04 | Pi/edge validation runbook + results | `docs/` | [Runbook + measured RSS (`rss_mb=107.22` @ vectors_per_node=1,000,000, dimension=16)](m3-t08-pi-edge-rss-validation.md) and reproducible command parsing RSS <128 MB gate |
 
 ---
 
