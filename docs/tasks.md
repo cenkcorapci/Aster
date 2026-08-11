@@ -114,7 +114,8 @@ Status updates happen in this file (see start-the-tasks.md § Claiming).
 | M3-T01 | open | db | M1-T06 | Stabilize embedded `aster::Db` public API + versioning | `aster/db/db.h`, docs | Header is the contract; no breaking changes without note |
 | M3-T02 | open | release | M3-T01 | Amalgamated / installable embedded library target | `aster/`, BUILD files | Downstream can depend on one `cc_library` or release tarball |
 | M3-T03 | done | platform | M0 | PosixStorage backend (files + mmap) | `aster/platform/posix*` | Implements `StorageBackend`; Db can persist via it |
-| M3-T04 | open | platform | M3-T03 | S3 storage backend skeleton (Put/Get/List/Remove) | `aster/platform/s3*` | Integration test against LocalStack or mock; not production-complete |
+| M3-T04 | in_progress | platform | M3-T03 | S3 storage backend skeleton (Put/Get/List/Remove) | `aster/platform/s3*` | Integration test against LocalStack or mock; not production-complete |
+<!-- claim: M3-T04 | agent: composer | branch: task/M3-T04-s3-storage | since: 2026-08-11 -->
 | M3-T05 | done | platform | — | Compile-time profiles: Tiny / Edge / Server | `aster/`, `.bazelrc` | Feature flags compile; Tiny excludes HNSW |
 | M3-T05a | done | platform | M3-T05 | Arduino / bare-metal `//aster/embedded` + BusyBox musl image | `aster/embedded/`, `deploy/docker/`, `scripts/` | `libembedded.a` builds; `aster:local` image runs demo |
 | M3-T06 | open | platform | M2-T09, M3-T05 | ARM (NEON) CI build for Edge profile | CI | Green arm64 job; local: `--config=raspberry_pi` / `build-matrix.sh --full` |

@@ -7,6 +7,8 @@
 
 #include "aster/platform/memory_storage.h"
 #include "aster/platform/posix_storage.h"
+#include "aster/platform/s3_fake.h"
+#include "aster/platform/s3_storage.h"
 
 namespace aster {
 namespace {
@@ -98,6 +100,69 @@ TEST(PosixStorage, RejectsPathTraversal) {
   EXPECT_FALSE(store.Remove("foo/../bar").ok());
   ASSERT_TRUE(store.Put("safe/nested.dat", "ok").ok());
   EXPECT_EQ(store.Read("safe/nested.dat").value(), "ok");
+}
+
+// Integration-style test: S3Storage ↔ in-process FakeS3 (no AWS / LocalStack).
+TEST(S3Storage, PutGetListRemoveAgainstFakeS3) {
+  FakeS3Server::Options opt;
+  opt.bucket = "aster-test";
+  FakeS3Server fake(opt);
+  ASSERT_TRUE(fake.Start().ok());
+  ASSERT_GT(fake.port(), 0);
+
+  S3Config cfg;
+  cfg.endpoint = fake.endpoint();
+  cfg.bucket = fake.bucket();
+  cfg.path_style = true;
+  S3Storage store(cfg);
+
+  ASSERT_TRUE(store.Put("a/x", "one").ok());
+  ASSERT_TRUE(store.Put("a/y", "two").ok());
+  ASSERT_TRUE(store.Put("b/z", "three").ok());
+
+  EXPECT_TRUE(store.Exists("a/x"));
+  EXPECT_FALSE(store.Exists("missing"));
+
+  auto got = store.Read("a/x");
+  ASSERT_TRUE(got.ok()) << got.status().message();
+  EXPECT_EQ(got.value(), "one");
+
+  auto listed = store.List("a/");
+  ASSERT_TRUE(listed.ok()) << listed.status().message();
+  ASSERT_EQ(listed.value().size(), 2u);
+  EXPECT_EQ(listed.value()[0], "a/x");
+  EXPECT_EQ(listed.value()[1], "a/y");
+
+  ASSERT_TRUE(store.Remove("a/x").ok());
+  EXPECT_FALSE(store.Exists("a/x"));
+  auto missing = store.Read("a/x");
+  ASSERT_FALSE(missing.ok());
+  EXPECT_EQ(missing.status().code(), StatusCode::kNotFound);
+
+  auto rm_missing = store.Remove("a/x");
+  EXPECT_FALSE(rm_missing.ok());
+  EXPECT_EQ(rm_missing.code(), StatusCode::kNotFound);
+
+  // Overwrite
+  ASSERT_TRUE(store.Put("a/y", "two-b").ok());
+  EXPECT_EQ(store.Read("a/y").value(), "two-b");
+
+  fake.Stop();
+}
+
+TEST(S3Storage, RejectsEmptyKeyAndBadEndpoint) {
+  S3Config cfg;
+  cfg.endpoint = "http://127.0.0.1:1";
+  cfg.bucket = "b";
+  S3Storage store(cfg);
+  EXPECT_FALSE(store.Put("", "x").ok());
+  EXPECT_FALSE(store.Read("").ok());
+
+  S3Config bad;
+  bad.endpoint = "not-a-url";
+  bad.bucket = "b";
+  S3Storage broken(bad);
+  EXPECT_FALSE(broken.Put("k", "v").ok());
 }
 
 }  // namespace

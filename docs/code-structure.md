@@ -16,7 +16,7 @@ aster/
 ├── server/         multi-collection catalog + HTTP JSON API
 ├── embedded/       Tiny in-memory Db (Arduino / bare metal)
 ├── rpc/            aster.thrift (server = M4)
-├── platform/       IStorageBackend: memory + POSIX (+ S3 later)
+├── platform/       IStorageBackend: memory + POSIX + S3 skeleton
 ├── metrics/        counters / histograms (Prometheus = M4)
 ├── cli/            local demo binary
 ├── bench/          soak / load binary
@@ -61,7 +61,7 @@ Orthogonal to CPU/OS platforms (`--config=apple_silicon`, `linux_musl_arm64`,
 | --- | --- |
 | `MemoryStorage` | Done |
 | `PosixStorage` | Done (path traversal hardened) |
-| S3 | Planned (M8) |
+| S3 | Skeleton (M3-T04); multipart / Range GET / SigV4 in M8-T01 |
 
 ## Tests
 

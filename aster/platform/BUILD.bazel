@@ -29,12 +29,43 @@ cc_library(
     ],
 )
 
+# S3-compatible object storage skeleton — HTTP Put/Get/List/Remove.
+# Excluded for baremetal; multipart / Range GET / SigV4 deferred to M8-T01.
+cc_library(
+    name = "s3",
+    srcs = ["s3_storage.cc"],
+    hdrs = ["s3_storage.h"],
+    target_compatible_with = select({
+        "//platforms:is_baremetal": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    }),
+    deps = [
+        ":memory",
+        "//aster/core",
+    ],
+)
+
+# In-process FakeS3 for tests (also usable against LocalStack-style clients).
+cc_library(
+    name = "s3_fake",
+    srcs = ["s3_fake.cc"],
+    hdrs = ["s3_fake.h"],
+    target_compatible_with = select({
+        "//platforms:is_baremetal": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    }),
+    deps = ["//aster/core"],
+)
+
 # Umbrella matching historical //aster/platform:platform.
 cc_library(
     name = "platform",
     deps = [":memory"] + select({
         "//platforms:is_baremetal": [],
-        "//conditions:default": [":posix"],
+        "//conditions:default": [
+            ":posix",
+            ":s3",
+        ],
     }),
 )
 
@@ -48,6 +79,7 @@ cc_test(
     }),
     deps = [
         ":platform",
+        ":s3_fake",
         "@googletest//:gtest_main",
     ],
 )
