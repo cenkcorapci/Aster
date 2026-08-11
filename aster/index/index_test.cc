@@ -432,6 +432,43 @@ TEST(HnswSearch, EfSearchDefaultWhenZero) {
     EXPECT_FLOAT_EQ(with_default[i].second, with_explicit[i].second);
   }
 }
+
+// M2-T05: rebuild-from-rows indexes only live vectors (skips tombstones).
+TEST(HnswSearch, RebuildFromLiveRowsSkipsTombstones) {
+  HnswParams params;
+  params.m = 4;
+  params.ef_construction = 16;
+  params.ef_search_default = 8;
+  params.max_layers = 4;
+
+  Row live_a;
+  live_a.id = "live-a";
+  live_a.vector = {1.0f, 0.0f};
+  live_a.timestamp = 10;
+  Row dead;
+  dead.id = "dead";
+  dead.vector = {0.0f, 1.0f};
+  dead.timestamp = 11;
+  dead.tombstone = true;
+  Row live_b;
+  live_b.id = "live-b";
+  live_b.vector = {0.9f, 0.1f};
+  live_b.timestamp = 12;
+
+  std::vector<Row> rows = {live_a, dead, live_b};
+  auto index =
+      RebuildHnswFromLiveRows(Metric::kL2, params, rows, /*rng_seed=*/3);
+  ASSERT_NE(index, nullptr);
+  EXPECT_EQ(index->size(), 2u);
+
+  const std::vector<float> query = {1.0f, 0.0f};
+  auto hits = index->Search(query, 10, /*ef_search=*/32);
+  ASSERT_EQ(hits.size(), 2u);
+  EXPECT_EQ(hits[0].id, "live-a");
+  for (const auto& h : hits) {
+    EXPECT_NE(h.id, "dead");
+  }
+}
 #else
 TEST(HnswParams, TypeOmittedUnderTiny) {
   static_assert(ASTER_ENABLE_HNSW == 0);

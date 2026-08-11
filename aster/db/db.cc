@@ -789,7 +789,12 @@ Status Db::CompactSelectedLocked(const std::vector<size_t>& indices) {
   // Tombstones may only be dropped on full-overlap compaction
   // (tla/AsterLsmIndex.tla NoResurrection / M1-T11).
   auto compacted = CompactSegments(id, options_.metric, inputs,
-                                   /*drop_tombstones=*/full_overlap);
+                                   /*drop_tombstones=*/full_overlap
+#if ASTER_ENABLE_HNSW
+                                   ,
+                                   options_.hnsw_params, options_.hnsw_rng_seed
+#endif
+  );
   const bool omit_empty = full_overlap && compacted->row_count() == 0;
 
   if (!options_.data_dir.empty() && !omit_empty) {
@@ -798,6 +803,24 @@ Status Db::CompactSelectedLocked(const std::vector<size_t>& indices) {
         !st.ok()) {
       return st;
     }
+#if ASTER_ENABLE_HNSW
+    // Persist the rebuilt READY graph before publishing the manifest so
+    // reopen sees hnsw_path (docs/indexing.md §6.2 atomic swap).
+    if (compacted->search_uses_hnsw()) {
+      if (auto st = EnsureDir(JoinPath(options_.data_dir, "index")); !st.ok()) {
+        ::remove(SegmentPath(id).c_str());
+        return st;
+      }
+      if (auto st = WriteHnswAtomic(HnswPath(id), options_.metric,
+                                    options_.hnsw_params,
+                                    options_.hnsw_rng_seed, id,
+                                    compacted->rows());
+          !st.ok()) {
+        ::remove(SegmentPath(id).c_str());
+        return st;
+      }
+    }
+#endif
   }
 
   std::vector<bool> drop(segments_.size(), false);
@@ -817,6 +840,8 @@ Status Db::CompactSelectedLocked(const std::vector<size_t>& indices) {
   if (!inserted && !omit_empty) next.push_back(compacted);
 
   segments_ = std::move(next);
+  // Compacted output is already READY (rebuild-from-rows). Wake the index
+  // thread only for any remaining PENDING flush segments.
   RequestIndexBuildLocked();
 
   if (!options_.data_dir.empty()) {

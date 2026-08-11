@@ -6,6 +6,7 @@
 #include <queue>
 #include <utility>
 
+#include "aster/core/features.h"
 #include "aster/index/distance.h"
 
 namespace aster {
@@ -120,7 +121,12 @@ std::vector<SearchHit> Segment::Search(
 std::shared_ptr<const Segment> CompactSegments(
     uint64_t new_id, Metric metric,
     const std::vector<std::shared_ptr<const Segment>>& inputs,
-    bool drop_tombstones) {
+    bool drop_tombstones
+#if ASTER_ENABLE_HNSW
+    ,
+    HnswParams hnsw_params, uint64_t hnsw_rng_seed
+#endif
+) {
   // LWW merge: for each id keep the newest version across all inputs.
   std::map<RowId, Row> merged;
   for (const auto& segment : inputs) {
@@ -140,7 +146,15 @@ std::shared_ptr<const Segment> CompactSegments(
     if (drop_tombstones && row.tombstone) continue;
     rows->push_back(std::move(row));
   }
-  return Segment::Build(new_id, metric, std::move(rows));
+  auto segment = Segment::Build(new_id, metric, std::move(rows));
+#if ASTER_ENABLE_HNSW
+  // M2-T05: rebuild-from-rows (not merge input graphs) → one READY graph.
+  if (segment->TryBeginIndexBuild()) {
+    segment->CompleteIndexBuild(RebuildHnswFromLiveRows(
+        metric, hnsw_params, segment->rows(), hnsw_rng_seed));
+  }
+#endif
+  return segment;
 }
 
 }  // namespace aster

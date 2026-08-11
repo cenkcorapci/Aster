@@ -739,6 +739,48 @@ TEST(Db, DurableReadyGraphSurvivesReopen) {
   ASSERT_EQ(hits.size(), 1u);
   EXPECT_EQ(hits[0].id, "r");
 }
+
+// M2-T05: Compact rebuilds one READY graph over live rows (no background
+// index thread required). Deleted rows are not searchable after compact.
+TEST(Db, CompactRebuildsSingleReadyGraphOverLiveRows) {
+  Db::Options options = SmallDb();
+  options.background_index_build = false;
+  options.max_segments_before_compact = 0;
+  options.compaction_tier_threshold = 0;
+  Db db(options);
+
+  ASSERT_TRUE(db.Upsert(MakeRow("a", {1.0f, 0.0f}, 1)).ok());
+  ASSERT_TRUE(db.Upsert(MakeRow("b", {0.0f, 1.0f}, 2)).ok());
+  ASSERT_TRUE(db.Flush().ok());
+  ASSERT_TRUE(db.Upsert(MakeRow("c", {0.5f, 0.5f}, 3)).ok());
+  ASSERT_TRUE(db.Flush().ok());
+  ASSERT_EQ(db.segment_count(), 2u);
+  // Flushed segments stay PENDING without background builds.
+  EXPECT_EQ(db.segment_index_states()[0], SegState::kPending);
+  EXPECT_EQ(db.segment_index_states()[1], SegState::kPending);
+
+  ASSERT_TRUE(db.Delete("b", 10).ok());
+  ASSERT_TRUE(db.Flush().ok());
+  ASSERT_TRUE(db.Compact().ok());
+
+  ASSERT_EQ(db.segment_count(), 1u);
+  EXPECT_EQ(db.segment_index_states()[0], SegState::kReady);
+  EXPECT_TRUE(db.segment_uses_hnsw()[0]);
+  EXPECT_FALSE(db.Get("b").has_value());
+  EXPECT_TRUE(db.Get("a").has_value());
+  EXPECT_TRUE(db.Get("c").has_value());
+
+  SearchRequest req;
+  req.vector = {1.0f, 0.0f};
+  req.top_k = 10;
+  req.ef_search = 32;
+  auto hits = db.Search(req);
+  ASSERT_EQ(hits.size(), 2u);
+  EXPECT_EQ(hits[0].id, "a");
+  for (const auto& h : hits) {
+    EXPECT_NE(h.id, "b");
+  }
+}
 #endif  // ASTER_ENABLE_HNSW
 
 }  // namespace

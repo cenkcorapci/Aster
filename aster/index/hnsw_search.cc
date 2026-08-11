@@ -181,6 +181,18 @@ std::unique_ptr<VectorIndex> BuildHnswIndex(Metric metric, HnswParams params,
                                      std::move(vectors), std::move(ids));
 }
 
+std::unique_ptr<VectorIndex> RebuildHnswFromLiveRows(
+    Metric metric, HnswParams params, const std::vector<Row>& rows,
+    uint64_t rng_seed) {
+  std::vector<IndexEntry> entries;
+  entries.reserve(rows.size());
+  for (const Row& row : rows) {
+    if (row.tombstone || row.vector.empty()) continue;
+    entries.push_back({row.id, row.vector});
+  }
+  return BuildHnswIndex(metric, params, std::move(entries), rng_seed);
+}
+
 }  // namespace aster
 
 #else  // !ASTER_ENABLE_HNSW

@@ -100,10 +100,18 @@ class Segment {
 // version of the key (a "full" compaction); otherwise an old value in a
 // non-participating segment would resurrect. This is exactly the invariant
 // checked by tla/AsterLsmIndex.tla's Compact action (NoResurrection).
-// The result starts in PENDING (fresh graph build is M2-T05 / background).
+//
+// When HNSW is enabled, rebuilds one fresh graph over live rows (docs/
+// indexing.md §6.2 Rebuild) and leaves the segment READY — input graphs are
+// never merged. Tiny / no-HNSW builds stay PENDING with exact search only.
 std::shared_ptr<const Segment> CompactSegments(
     uint64_t new_id, Metric metric,
     const std::vector<std::shared_ptr<const Segment>>& inputs,
-    bool drop_tombstones);
+    bool drop_tombstones
+#if ASTER_ENABLE_HNSW
+    ,
+    HnswParams hnsw_params = {}, uint64_t hnsw_rng_seed = 1
+#endif
+);
 
 }  // namespace aster

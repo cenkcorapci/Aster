@@ -338,6 +338,47 @@ TEST(Compaction, SingleInputIsIdentityMerge) {
   EXPECT_EQ(out->Get("a")->id, "a");
 }
 
+#if ASTER_ENABLE_HNSW
+// M2-T05: compaction rebuilds one READY HNSW over live rows (not graph merge).
+TEST(Compaction, RebuildsReadyHnswOverLiveRows) {
+  auto s1 = Segment::Build(
+      1, Metric::kL2,
+      {MakeRow("a", {1.0f, 0.0f}, 10), MakeRow("b", {0.0f, 1.0f}, 10)});
+  auto s2 = Segment::Build(
+      2, Metric::kL2,
+      {MakeRow("b", {}, 20, /*tombstone=*/true),
+       MakeRow("c", {0.5f, 0.5f}, 20)});
+
+  // Inputs may already be READY with their own graphs; compact must not
+  // merge those graphs — rebuild from the LWW live row set instead.
+  ASSERT_TRUE(s1->TryBeginIndexBuild());
+  s1->CompleteIndexBuild(RebuildHnswFromLiveRows(Metric::kL2, HnswParams{},
+                                                 s1->rows(), 1));
+  ASSERT_TRUE(s2->TryBeginIndexBuild());
+  s2->CompleteIndexBuild(RebuildHnswFromLiveRows(Metric::kL2, HnswParams{},
+                                                 s2->rows(), 2));
+  EXPECT_TRUE(s1->search_uses_hnsw());
+  EXPECT_TRUE(s2->search_uses_hnsw());
+
+  auto out = CompactSegments(3, Metric::kL2, {s1, s2},
+                             /*drop_tombstones=*/true);
+  EXPECT_EQ(out->row_count(), 2u);  // a + c; b purged
+  EXPECT_EQ(out->index_state(), SegState::kReady);
+  EXPECT_TRUE(out->search_uses_hnsw());
+  EXPECT_TRUE(out->Get("a").has_value());
+  EXPECT_TRUE(out->Get("c").has_value());
+  EXPECT_FALSE(out->Get("b").has_value());
+
+  const std::vector<float> query = {1.0f, 0.0f};
+  auto hits = out->Search(query, 10, /*ef_search=*/32);
+  ASSERT_EQ(hits.size(), 2u);
+  EXPECT_EQ(hits[0].id, "a");
+  for (const auto& h : hits) {
+    EXPECT_NE(h.id, "b");
+  }
+}
+#endif  // ASTER_ENABLE_HNSW
+
 TEST(Bloom, NegativesAreExcluded) {
   BloomFilter bloom = BloomFilter::Build({"a", "b", "c"});
   EXPECT_TRUE(bloom.MayContain("a"));

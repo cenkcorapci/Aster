@@ -49,6 +49,12 @@ std::unique_ptr<VectorIndex> BuildExactIndex(
 std::unique_ptr<VectorIndex> BuildHnswIndex(Metric metric, HnswParams params,
                                             std::vector<IndexEntry> entries,
                                             uint64_t rng_seed = 1);
+
+// Compaction rebuild strategy (docs/indexing.md §6.2): fresh graph over
+// live (non-tombstone, non-empty) rows only — never merge input graphs.
+std::unique_ptr<VectorIndex> RebuildHnswFromLiveRows(
+    Metric metric, HnswParams params, const std::vector<Row>& rows,
+    uint64_t rng_seed = 1);
 #endif
 
 }  // namespace aster
