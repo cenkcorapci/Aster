@@ -41,8 +41,22 @@ Full docs index: [docs/README.md](docs/README.md).
 ./scripts/build-matrix.sh              # Tiny / Edge / Server / Arduino / musl
 make bench-local                       # kind soak (local disk)
 make bench-minio                       # kind soak + MinIO
+make bench-multitenant-smoke           # multi-tenant Catalog (mixed dims/rows)
+make bench-scale                       # elastic scale 15↔50 (local+minio)
+make sim-grafana                       # 50-node MinIO sim + Grafana dashboards
+make sim-grafana-stop
+make sim-arduino                       # ESP32 Tiny firmware + Espressif QEMU
+make sim-arduino-native                # same harness on host (no MCU)
+make bench-vs-milvus-smoke             # Aster vs Milvus (tiny)
+make bench-vs-milvus                   # Aster vs Milvus (100M×2048 target, auto-scaled)
 bazel build --config=arduino //aster/embedded   # MCU static lib
 ```
+
+Multi-tenant: [deploy/bench-multitenant/README.md](deploy/bench-multitenant/README.md).  
+Scale: [deploy/bench-scale/README.md](deploy/bench-scale/README.md).  
+Live Grafana sim: [deploy/sim-grafana/README.md](deploy/sim-grafana/README.md).  
+Arduino / ESP32 QEMU sim: [deploy/sim-arduino/README.md](deploy/sim-arduino/README.md).  
+Aster vs Milvus: [deploy/compare-milvus/README.md](deploy/compare-milvus/README.md).
 
 CI runs `bazel test //aster/...` on every push/PR to `main`.
 

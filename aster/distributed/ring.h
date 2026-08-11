@@ -27,6 +27,9 @@ class Ring {
   bool HasNode(const NodeId& node) const { return nodes_.count(node) > 0; }
   size_t node_count() const { return nodes_.size(); }
 
+  // Physical nodes currently on the ring, sorted lexicographically.
+  std::vector<NodeId> Nodes() const;
+
   // The RF distinct physical nodes responsible for `key`, in preference
   // order (primary first). Returns fewer than rf nodes if the cluster is
   // smaller than rf.

@@ -27,6 +27,8 @@ struct UsageStats {
   uint64_t gets = 0;
   size_t collections = 0;
   size_t vectors_estimate = 0;
+  size_t segments = 0;
+  size_t memtable_rows = 0;
 };
 
 // Multi-collection facade over aster::Db for the single-node SaaS kernel.

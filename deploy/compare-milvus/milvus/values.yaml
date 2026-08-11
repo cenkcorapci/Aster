@@ -1,0 +1,65 @@
+# Milvus for Aster vs Milvus compare on kind.
+# Standalone + external MinIO (shared with Aster). Chart defaults enable
+# pulsarv3 which will not fit a laptop next to Aster shards + etcd.
+cluster:
+  enabled: false
+
+image:
+  all:
+    repository: milvusdb/milvus
+    tag: v2.4.15
+    pullPolicy: IfNotPresent
+
+standalone:
+  replicas: 1
+  messageQueue: rocksmq
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: "4"
+      memory: 6Gi
+
+minio:
+  enabled: false
+
+externalS3:
+  enabled: true
+  host: aster-minio
+  port: 9000
+  accessKey: asterbench
+  secretKey: asterbench-secret
+  useSSL: false
+  bucketName: milvus-bucket
+  rootPath: files
+  cloudProvider: minio
+  useIAM: false
+
+etcd:
+  replicaCount: 1
+  persistence:
+    enabled: false
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+
+pulsar:
+  enabled: false
+
+pulsarv3:
+  enabled: false
+
+kafka:
+  enabled: false
+
+woodpecker:
+  enabled: false
+
+attu:
+  enabled: false
+
+metrics:
+  serviceMonitor:
+    enabled: false

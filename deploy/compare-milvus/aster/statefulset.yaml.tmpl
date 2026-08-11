@@ -1,0 +1,124 @@
+# Aster shards for vs-Milvus compare. Placeholders: __REPLICAS__ __IMAGE__ __MEMORY_LIMIT__
+apiVersion: v1
+kind: Service
+metadata:
+  name: aster-node
+  namespace: compare-milvus
+  labels:
+    app: aster-compare
+spec:
+  clusterIP: None
+  selector:
+    app: aster-compare
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: aster-node
+  namespace: compare-milvus
+  labels:
+    app: aster-compare
+spec:
+  serviceName: aster-node
+  replicas: __REPLICAS__
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app: aster-compare
+  template:
+    metadata:
+      labels:
+        app: aster-compare
+    spec:
+      serviceAccountName: compare
+      terminationGracePeriodSeconds: 25
+      containers:
+        - name: aster
+          image: __IMAGE__
+          imagePullPolicy: Never
+          env:
+            - name: ASTER_MODE
+              value: serve
+            - name: ASTER_DATA_DIR
+              value: /data
+            - name: ASTER_HOST
+              value: "0.0.0.0"
+            - name: ASTER_PORT
+              value: "8080"
+          ports:
+            - containerPort: 8080
+              name: http
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 2
+            periodSeconds: 3
+            failureThreshold: 10
+          lifecycle:
+            preStop:
+              exec:
+                command:
+                  - /bin/sh
+                  - -c
+                  - |
+                    wget -q -O- --post-data='' http://127.0.0.1:8080/v1/admin/drain 2>/dev/null || true
+                    sleep 1
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "128Mi"
+            limits:
+              cpu: "1"
+              memory: "__MEMORY_LIMIT__"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+        - name: minio-sync
+          image: minio/mc:RELEASE.2024-11-17T19-35-25Z
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: MINIO_ROOT_USER
+              valueFrom:
+                secretKeyRef:
+                  name: minio-creds
+                  key: rootUser
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: minio-creds
+                  key: rootPassword
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              until mc alias set local http://aster-minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"; do
+                sleep 2
+              done
+              while true; do
+                mc mirror --overwrite /data "local/aster-shards/${POD_NAME}/" || true
+                sleep 15
+              done
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          resources:
+            requests:
+              cpu: "10m"
+              memory: "32Mi"
+            limits:
+              cpu: "200m"
+              memory: "128Mi"
+      volumes:
+        - name: data
+          emptyDir:
+            sizeLimit: 2Gi

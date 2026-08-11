@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: compare-milvus
+  labels:
+    app.kubernetes.io/part-of: aster-vs-milvus
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: compare
+  namespace: compare-milvus

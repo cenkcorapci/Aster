@@ -142,6 +142,15 @@ bazel build --config=arduino //aster/embedded
 API: `aster::embedded::Db` — same upsert/search/flush/compact ideas, flush
 triggered by row count (`memtable_flush_rows`), in-memory only.
 
+Firmware-in-emulator (ESP32 Arduino + Espressif QEMU):
+
+```bash
+make sim-arduino            # cross-compile + boot under QEMU, expect ASTER_OK
+make sim-arduino-native     # same harness on the host (no MCU toolchain)
+```
+
+Details: [deploy/sim-arduino/README.md](../../deploy/sim-arduino/README.md).
+
 ## Ops checklist
 
 1. Pick `dimension` and `metric` once; they are fixed for that DB directory.

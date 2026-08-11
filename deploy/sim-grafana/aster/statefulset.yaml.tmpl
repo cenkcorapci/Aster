@@ -1,0 +1,124 @@
+# Placeholders: __REPLICAS__ __IMAGE__ __MEMORY_LIMIT__
+apiVersion: v1
+kind: Service
+metadata:
+  name: aster-node
+  namespace: aster-sim
+  labels:
+    app: aster-sim
+spec:
+  clusterIP: None
+  selector:
+    app: aster-sim
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: aster-node
+  namespace: aster-sim
+  labels:
+    app: aster-sim
+spec:
+  serviceName: aster-node
+  replicas: __REPLICAS__
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app: aster-sim
+  template:
+    metadata:
+      labels:
+        app: aster-sim
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: aster-sim
+      terminationGracePeriodSeconds: 25
+      containers:
+        - name: aster
+          image: __IMAGE__
+          imagePullPolicy: Never
+          env:
+            - name: ASTER_MODE
+              value: serve
+            - name: ASTER_DATA_DIR
+              value: /data
+            - name: ASTER_HOST
+              value: "0.0.0.0"
+            - name: ASTER_PORT
+              value: "8080"
+          ports:
+            - containerPort: 8080
+              name: http
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 2
+            periodSeconds: 3
+          lifecycle:
+            preStop:
+              exec:
+                command:
+                  - /bin/sh
+                  - -c
+                  - |
+                    wget -q -O- --post-data='' http://127.0.0.1:8080/v1/admin/drain || true
+                    sleep 2
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: "__MEMORY_LIMIT__"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+        - name: minio-sync
+          image: minio/mc:RELEASE.2024-11-17T19-35-25Z
+          env:
+            - name: MINIO_ROOT_USER
+              valueFrom:
+                secretKeyRef:
+                  name: minio-creds
+                  key: rootUser
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: minio-creds
+                  key: rootPassword
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              until mc alias set local http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"; do sleep 2; done
+              while true; do
+                mc mirror --overwrite /data "local/aster-shards/${POD_NAME}/" || true
+                sleep 20
+              done
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          emptyDir:
+            sizeLimit: 2Gi

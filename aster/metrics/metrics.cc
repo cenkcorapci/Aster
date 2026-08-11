@@ -127,11 +127,21 @@ void MetricsRegistry::RegisterDefaults() {
   // Key metrics from docs/design.md "Monitoring".
   add_histogram("read_latency_ms", "read latency");
   add_histogram("write_latency_ms", "write latency");
+  add_histogram("delete_latency_ms", "delete latency");
   add_histogram("hnsw_search_latency", "ANN latency");
+  add_histogram("flush_latency_ms", "flush latency");
   add_gauge("segment_count", "LSM segments");
   add_gauge("compaction_backlog", "pending compaction");
+  add_gauge("collection_count", "open collections on this node");
+  add_gauge("vectors_estimate", "approximate live rows on this node");
+  add_gauge("memtable_rows", "rows currently in memtables");
   add_counter("gossip_messages", "cluster traffic");
   add_gauge("replication_lag", "replica delay");
+  add_counter("upserts_total", "successful upserts");
+  add_counter("deletes_total", "successful deletes");
+  add_counter("searches_total", "searches");
+  add_counter("gets_total", "point gets");
+  add_counter("drain_total", "admin drain invocations");
 }
 
 ::aster::Counter& MetricsRegistry::Counter(const std::string& name) {

@@ -1,0 +1,26 @@
+# Live simulation: 50 Aster nodes + MinIO + continuous scale + 50 indexes
+# + Prometheus/Grafana.
+#
+#   make sim-grafana          # build, boot, open Grafana
+#   make sim-grafana-stop     # tear down kind cluster aster-sim
+#
+# Env overrides:
+#   MAX_NODES=50 MIN_NODES=15 START_NODES=25
+#   INDEXES=50 TARGET_TOTAL_ROWS=1000000000
+#   SCALE_EVERY_SEC=45 WORK_RPS=20
+
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+# Never inherit Makefile CLUSTER=
+name: aster-sim
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      - containerPort: 30030
+        hostPort: 3000
+        protocol: TCP
+      - containerPort: 30090
+        hostPort: 9090
+        protocol: TCP
+  - role: worker
+  - role: worker

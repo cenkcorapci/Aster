@@ -282,10 +282,16 @@ UsageStats Catalog::Usage() const {
   UsageStats u = usage_;
   u.collections = infos_.size();
   size_t vectors = 0;
+  size_t segments = 0;
+  size_t mem_rows = 0;
   for (const auto& [_, db] : dbs_) {
     vectors += db->approximate_row_count();
+    segments += db->segment_count();
+    mem_rows += db->memtable_rows();
   }
   u.vectors_estimate = vectors;
+  u.segments = segments;
+  u.memtable_rows = mem_rows;
   return u;
 }
 
