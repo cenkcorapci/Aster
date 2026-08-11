@@ -13,9 +13,11 @@
 #include <thrift/server/TThreadedServer.h>
 #include <thrift/transport/TBufferTransports.h>
 #include <thrift/transport/TServerSocket.h>
+#include <thrift/transport/TSSLSocket.h>
 #include <thrift/transport/TTransportException.h>
 
 #include "Aster.h"
+#include "aster/rpc/tls_maybe_server_socket.h"
 
 namespace aster {
 namespace rpc {
@@ -70,8 +72,33 @@ Status ThriftServer::Listen() {
   }
 
   try {
-    server_socket_ = std::make_shared<att::TServerSocket>(
-        fd, att::SocketType::INET);
+    if (options_.tls) {
+      if (options_.tls_cert_file.empty() || options_.tls_key_file.empty()) {
+        ::close(fd);
+        return Status::InvalidArgument(
+            "thrift listen: --tls requires --tls-cert and --tls-key");
+      }
+
+      auto tls_factory =
+          std::make_shared<att::TSSLSocketFactory>(att::SSLProtocol::LATEST);
+      // Server-side handshake.
+      tls_factory->server(true);
+      tls_factory->loadCertificate(options_.tls_cert_file.c_str(), "PEM");
+      tls_factory->loadPrivateKey(options_.tls_key_file.c_str(), "PEM");
+      if (!options_.tls_ca_file.empty()) {
+        // Client auth / verification trust store.
+        tls_factory->loadTrustedCertificates(options_.tls_ca_file.c_str(),
+                                              nullptr);
+      }
+      // In insecure mode we do not require or verify client certificates.
+      tls_factory->authenticate(!options_.tls_insecure);
+
+      server_socket_ = std::make_shared<MaybeTLSServerSocket>(
+          fd, att::SocketType::INET, tls_factory);
+    } else {
+      server_socket_ = std::make_shared<att::TServerSocket>(
+          fd, att::SocketType::INET);
+    }
     auto transport_factory =
         std::make_shared<att::TFramedTransportFactory>();
     auto protocol_factory = std::make_shared<atp::TBinaryProtocolFactory>();

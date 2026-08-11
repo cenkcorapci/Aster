@@ -28,6 +28,14 @@ class ThriftServer {
   struct Options {
     std::string host = "127.0.0.1";
     uint16_t port = 9090;
+
+    // Optional TLS. When enabled, the server accepts both plaintext and TLS
+    // connections on the same port (TLS record sniffing).
+    bool tls = false;
+    bool tls_insecure = true;  // no client-certificate verification
+    std::string tls_cert_file;
+    std::string tls_key_file;
+    std::string tls_ca_file;  // optional (only relevant when tls_insecure=false)
   };
 
   ThriftServer(Options options, std::shared_ptr<AsterHandler> handler);

@@ -98,6 +98,120 @@ std::string to_string(const TUuid& uuid) noexcept(false) {
 }  // namespace apache
 EOF
 """,
+        # Upstream TSSLSocket.cpp uses boost::shared_array for OpenSSL mutexes.
+        # We avoid pulling full Boost by providing a tiny compatible header
+        # later in patch_cmds. Here we only ensure <unistd.h> is present
+        # because TSSLSocket.cpp calls close().
+        """python3 - <<'PY'
+from pathlib import Path
+
+p = Path('lib/cpp/src/thrift/transport/TSSLSocket.cpp')
+s = p.read_text()
+
+# If a previous patch_cmds run already replaced boost::shared_array with
+# std::unique_ptr, restore the original boost-based logic.
+if 'std::unique_ptr<Mutex[]>' in s or 'static std::unique_ptr<Mutex[]>' in s:
+  s = s.replace('static std::unique_ptr<Mutex[]> mutexes;',
+                'static boost::shared_array<Mutex> mutexes;')
+  if '#include <boost/shared_array.hpp>' not in s:
+    s = s.replace('#include <openssl/opensslv.h>',
+                  '#include <boost/shared_array.hpp>\\n#include <openssl/opensslv.h>')
+
+  s = s.replace('mutexes.reset(new Mutex[CRYPTO_num_locks()]);',
+                'mutexes = boost::shared_array<Mutex>(new Mutex[CRYPTO_num_locks()]);')
+  s = s.replace('mutexes.reset(new Mutex[ ::CRYPTO_num_locks()]);',
+                'mutexes = boost::shared_array<Mutex>(new Mutex[ ::CRYPTO_num_locks()]);')
+
+# Apache Thrift's TSSLSocket.cpp uses `close()` via THRIFT_CLOSESOCKET,
+# but relies on <unistd.h> being included. Ensure it is present.
+if '#include <unistd.h>' not in s:
+  s = s.replace('#define OPENSSL_VERSION_NO_THREAD_ID_BEFORE',
+                '#include <unistd.h>\\n\\n#define OPENSSL_VERSION_NO_THREAD_ID_BEFORE')
+
+p.write_text(s)
+PY
+""",
+        # Provide a tiny self-contained `boost/shared_array.hpp` so Thrift's
+        # SSL runtime can compile without pulling full Boost.
+        """mkdir -p lib/cpp/src/boost && cat > lib/cpp/src/boost/shared_array.hpp << 'EOF'
+#pragma once
+
+#include <cstddef>
+#include <memory>
+
+namespace boost {
+
+template <class T>
+class shared_array {
+ public:
+  shared_array() = default;
+  explicit shared_array(T* p) : ptr_(p, std::default_delete<T[]>()) {}
+
+  T& operator[](std::size_t i) const { return ptr_.get()[i]; }
+
+  void reset() { ptr_.reset(); }
+
+ private:
+  std::shared_ptr<T> ptr_;
+};
+
+}  // namespace boost
+EOF
+""",
+        # Apache Thrift's SSL transport includes <openssl/ssl.h>. In this
+        # environment the OpenSSL headers are not on the default compiler
+        # include search path, so copy them into the extracted thrift
+        # repository and add `-Iopenssl/include` in //third_party:thrift.BUILD.
+        """python3 - <<'PY'
+from __future__ import annotations
+
+import glob
+import shutil
+from pathlib import Path
+
+srcs = glob.glob('/opt/homebrew/Cellar/openssl@3/*/include/openssl')
+if not srcs:
+  raise SystemExit('OpenSSL headers not found under /opt/homebrew/Cellar/openssl@3')
+src = sorted(srcs)[-1]
+
+dst = Path('openssl/include/openssl')
+dst.parent.mkdir(parents=True, exist_ok=True)
+if dst.exists():
+  shutil.rmtree(dst)
+shutil.copytree(src, dst)
+print('Vendored OpenSSL headers:', src, '->', dst)
+PY
+""",
+        # Vendor OpenSSL libs too so the Bazel link step can find -lssl/-lcrypto
+        # without relying on host linker search paths.
+        """python3 - <<'PY'
+from __future__ import annotations
+
+import glob
+import shutil
+from pathlib import Path
+
+lib_candidates = glob.glob('/opt/homebrew/Cellar/openssl@3/*/lib/libssl*')
+if not lib_candidates:
+  raise SystemExit('OpenSSL libs not found under /opt/homebrew/Cellar/openssl@3')
+
+root = sorted(glob.glob('/opt/homebrew/Cellar/openssl@3/*'))[-1]
+src_lib_dir = Path(root) / 'lib'
+
+dst = Path('openssl/lib')
+if dst.exists():
+  shutil.rmtree(dst)
+dst.mkdir(parents=True, exist_ok=True)
+
+for name in ['libssl.a', 'libcrypto.a']:
+  src = src_lib_dir / name
+  if not src.exists():
+    raise SystemExit(f'OpenSSL static lib not found: {src}')
+  shutil.copy2(src, dst / src.name)
+
+print('Vendored OpenSSL libs into:', dst)
+PY
+""",
     ],
     sha256 = "d3a60676b1df3fb9850f6ce1e8a3df9a0efac036ceb4bce8ce46ee3eca735d2d",
     strip_prefix = "thrift-0.24.0",

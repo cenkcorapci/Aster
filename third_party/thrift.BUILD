@@ -2,7 +2,8 @@
 #
 # Builds the subset needed for generated types, service interfaces, and a
 # framed-TCP TThreadedServer (binary protocol, buffer/socket transports).
-# Omits SSL/HTTP/JSON/UUID/Qt and other optional pieces that pull Boost.
+# TLS/SSL is optional in Aster (M4-T03). We include the necessary TSSL*
+# transport pieces so `serve-rpc --tls ...` can run.
 
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 
@@ -39,6 +40,11 @@ cc_library(
         "lib/cpp/src/thrift/transport/TTransportException.cpp",
     ] + glob(
         [
+            "lib/cpp/src/thrift/transport/TSSL*.cpp",
+            "lib/cpp/src/thrift/transport/TNonblockingSSL*.cpp",
+        ],
+    ) + glob(
+        [
             "lib/cpp/src/thrift/*.h",
             "lib/cpp/src/thrift/async/*.h",
             "lib/cpp/src/thrift/concurrency/*.h",
@@ -49,8 +55,6 @@ cc_library(
             "lib/cpp/src/thrift/processor/*.h",
         ],
         exclude = [
-            "lib/cpp/src/thrift/transport/TSSL*.h",
-            "lib/cpp/src/thrift/transport/TNonblockingSSL*.h",
             "lib/cpp/src/thrift/transport/THttp*.h",
             "lib/cpp/src/thrift/transport/THeaderTransport.h",
             "lib/cpp/src/thrift/transport/TZlibTransport.h",
@@ -65,7 +69,14 @@ cc_library(
     hdrs = [
         _CONFIG_H,
         "compiler/cpp/src/thrift/version.h",
-    ],
+        "lib/cpp/src/boost/shared_array.hpp",
+    ] + glob(
+        [
+            "openssl/include/openssl/**/*.h",
+            "openssl/include/openssl/**/*.hpp",
+        ],
+        allow_empty = True,
+    ),
     copts = [
         "-Wno-unused-parameter",
         "-Wno-unused-const-variable",
@@ -75,10 +86,21 @@ cc_library(
     ],
     includes = [
         "lib/cpp/src",
+        "openssl/include",
     ],
     linkopts = select({
         "@platforms//os:windows": [],
-        "//conditions:default": ["-lpthread"],
+        "@platforms//os:macos": [
+            "-lpthread",
+            "-L/opt/homebrew/lib",
+            "-lssl",
+            "-lcrypto",
+        ],
+        "//conditions:default": [
+            "-lpthread",
+            "-lssl",
+            "-lcrypto",
+        ],
     }),
     textual_hdrs = [
         "lib/cpp/src/thrift/protocol/TBinaryProtocol.tcc",

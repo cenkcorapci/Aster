@@ -33,7 +33,8 @@ void PrintUsage(const char* argv0) {
                "  %s serve --data-dir PATH [--host 127.0.0.1] [--port 8080] "
                "[--api-key KEY]\n"
                "  %s serve-rpc --data-dir PATH [--host 127.0.0.1] "
-               "[--port 9090]\n"
+               "[--port 9090] [--tls] [--tls-insecure] "
+               "[--tls-cert PATH] [--tls-key PATH] [--tls-ca PATH]\n"
                "  %s [--data-dir PATH]          # same as demo\n"
                "\n"
                "Environment:\n"
@@ -192,6 +193,11 @@ int RunServeRpc(int argc, char** argv) {
   std::string data_dir = env_dir ? env_dir : "";
   std::string host = "127.0.0.1";
   uint16_t port = 9090;
+  bool tls = false;
+  bool tls_insecure = true;
+  std::string tls_cert_file;
+  std::string tls_key_file;
+  std::string tls_ca_file;
 
   for (int i = 2; i < argc; ++i) {
     if (std::strcmp(argv[i], "--help") == 0 ||
@@ -212,6 +218,16 @@ int RunServeRpc(int argc, char** argv) {
       host = need("--host");
     } else if (std::strcmp(argv[i], "--port") == 0) {
       port = static_cast<uint16_t>(std::atoi(need("--port")));
+    } else if (std::strcmp(argv[i], "--tls") == 0) {
+      tls = true;
+    } else if (std::strcmp(argv[i], "--tls-insecure") == 0) {
+      tls_insecure = true;
+    } else if (std::strcmp(argv[i], "--tls-cert") == 0) {
+      tls_cert_file = need("--tls-cert");
+    } else if (std::strcmp(argv[i], "--tls-key") == 0) {
+      tls_key_file = need("--tls-key");
+    } else if (std::strcmp(argv[i], "--tls-ca") == 0) {
+      tls_ca_file = need("--tls-ca");
     } else {
       std::fprintf(stderr, "error: unknown argument: %s\n", argv[i]);
       PrintUsage(argv[0]);
@@ -240,6 +256,11 @@ int RunServeRpc(int argc, char** argv) {
   aster::rpc::ThriftServer::Options sop;
   sop.host = host;
   sop.port = port;
+  sop.tls = tls;
+  sop.tls_insecure = tls_insecure;
+  sop.tls_cert_file = tls_cert_file;
+  sop.tls_key_file = tls_key_file;
+  sop.tls_ca_file = tls_ca_file;
   aster::rpc::ThriftServer server(sop, handler);
   if (auto st = server.Listen(); !st.ok()) {
     std::fprintf(stderr, "error: thrift listen failed: %s\n",
@@ -247,8 +268,9 @@ int RunServeRpc(int argc, char** argv) {
     return 1;
   }
 
-  std::printf("aster %s serve-rpc  thrift://%s:%u (framed TCP)\n", kVersion,
-              host.c_str(), server.port());
+  std::printf(
+      "aster %s serve-rpc  thrift://%s:%u (framed TCP%s)\n", kVersion,
+      host.c_str(), server.port(), tls ? " + TLS" : "");
   std::printf("data_dir=%s\n", data_dir.c_str());
   std::printf("service: Aster (createCollection/upsert/get/remove/search)\n");
   server.Serve();
