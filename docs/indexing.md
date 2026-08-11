@@ -536,6 +536,26 @@ compaction — neighbors share pages, cutting page faults per hop;
 immutable segment objects, range-GET for adjacency pages, local block
 cache (the same design DiskANN validated for SSD-resident graphs).
 
+#### 10.3.1 S3 upper-layer pin (M8-T02)
+
+For S3-backed `.hnsw` objects, Aster extracts an `HnswUpperLayerPin` at
+segment open: entry point, node table, and all adjacency for **layers ≥ 1**.
+Those byte ranges are stored in a **non-evictable** pin cache on the S3
+backend (`S3Storage::PinRange`); they survive LRU `ClearCache` and are never
+re-fetched for upper-layer descent. Layer-0 adjacency stays on S3 and is
+read via Range GET + the ordinary block cache.
+
+**Cold-search latency bound:** with the upper-layer pin resident, a search
+MUST NOT re-fetch the full `.hnsw` object. Upper-layer traversal performs
+**zero** S3 reads. Layer-0 traffic is limited to Range GETs covering
+neighbor lists of visited layer-0 nodes (worst case on the order of
+`ef_search · M0` degree fields; typically far fewer once blocks warm).
+Under FakeS3 (loopback), cold search with the pin held and the LRU cleared
+MUST complete in **≤ 100 ms** for the M8-T02 fixture (`kHnswS3ColdSearchBoundMs`
+in `aster/index/hnsw_pin.h`), verified by `//aster/index:hnsw_pin_test`.
+Pinned upper-layer `ReadRange`s MUST be served from the pin cache (zero
+additional Range GETs) after `ClearCache`.
+
 ### 10.4 Concurrency
 
 Immutability does the heavy lifting: search takes no locks (refcounted

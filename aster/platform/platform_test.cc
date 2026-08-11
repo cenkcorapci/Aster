@@ -236,6 +236,52 @@ TEST(S3Storage, RangeGetBlockCacheHitMiss) {
   fake.Stop();
 }
 
+TEST(S3Storage, PinRangeSurvivesClearCache) {
+  FakeS3Server::Options opt;
+  opt.bucket = "aster-pin";
+  FakeS3Server fake(opt);
+  ASSERT_TRUE(fake.Start().ok());
+
+  S3Config cfg;
+  cfg.endpoint = fake.endpoint();
+  cfg.bucket = fake.bucket();
+  cfg.path_style = true;
+  cfg.block_cache_block_size = 8;
+  cfg.block_cache_max_blocks = 2;
+  cfg.multipart_threshold = 1024 * 1024;
+  S3Storage store(cfg);
+
+  const std::string payload = "ABCDEFGHIJKLMNOPQRST";  // 20 bytes
+  ASSERT_TRUE(store.Put("obj", payload).ok());
+
+  ASSERT_TRUE(store.PinRange("obj", 0, 4, payload.substr(0, 4)).ok());
+  ASSERT_TRUE(store.PinRange("obj", 10, 14, payload.substr(10, 4)).ok());
+  EXPECT_EQ(store.pinned_bytes(), 8u);
+  EXPECT_TRUE(store.HasPinned("obj", 0, 4));
+
+  store.ClearCache();
+  EXPECT_TRUE(store.HasPinned("obj", 0, 4));
+  EXPECT_TRUE(store.HasPinned("obj", 10, 14));
+
+  const uint64_t gets_before = store.range_gets();
+  auto a = store.ReadRange("obj", 0, 4);
+  ASSERT_TRUE(a.ok());
+  EXPECT_EQ(a.value(), "ABCD");
+  EXPECT_EQ(store.range_gets(), gets_before);  // served from pin
+  EXPECT_GE(store.pin_hits(), 1u);
+
+  auto mid = store.ReadRange("obj", 4, 10);
+  ASSERT_TRUE(mid.ok());
+  EXPECT_EQ(mid.value(), "EFGHIJ");
+  EXPECT_GT(store.range_gets(), gets_before);
+
+  store.Unpin("obj");
+  EXPECT_FALSE(store.HasPinned("obj", 0, 4));
+  EXPECT_EQ(store.pinned_bytes(), 0u);
+
+  fake.Stop();
+}
+
 // Spot-kill recovery: durable truth lives only in S3. Simulate a disposable
 // worker by destroying the client after Put, then opening a fresh S3Storage
 // against the same bucket with an empty local cache and recovering objects.

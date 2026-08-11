@@ -276,12 +276,94 @@ void S3Storage::ClearCache() {
   cache_misses_ = 0;
 }
 
+Status S3Storage::PinRange(const std::string& path, size_t start,
+                           size_t end_exclusive, std::string data) {
+  if (path.empty()) return Status::InvalidArgument("empty object key");
+  if (end_exclusive < start) {
+    return Status::InvalidArgument("pin range end < start");
+  }
+  const size_t len = end_exclusive - start;
+  if (data.size() != len) {
+    return Status::InvalidArgument("pin data size mismatch");
+  }
+  std::lock_guard<std::mutex> lock(cache_mu_);
+  pins_[PinKey{path, start, end_exclusive}] = std::move(data);
+  return Status::Ok();
+}
+
+Status S3Storage::PinRangeFromStore(const std::string& path, size_t start,
+                                    size_t end_exclusive) {
+  if (path.empty()) return Status::InvalidArgument("empty object key");
+  if (end_exclusive <= start) {
+    return Status::InvalidArgument("empty pin range");
+  }
+  auto got = ReadRange(path, start, end_exclusive);
+  if (!got.ok()) return got.status();
+  return PinRange(path, start, end_exclusive, std::move(got).value());
+}
+
+void S3Storage::ClearPins() {
+  std::lock_guard<std::mutex> lock(cache_mu_);
+  pins_.clear();
+  pin_hits_ = 0;
+}
+
+void S3Storage::Unpin(const std::string& path) {
+  std::lock_guard<std::mutex> lock(cache_mu_);
+  for (auto it = pins_.begin(); it != pins_.end();) {
+    if (it->first.object_key == path) {
+      it = pins_.erase(it);
+    } else {
+      ++it;
+    }
+  }
+}
+
+bool S3Storage::HasPinned(const std::string& path, size_t start,
+                          size_t end_exclusive) const {
+  std::lock_guard<std::mutex> lock(cache_mu_);
+  return pins_.find(PinKey{path, start, end_exclusive}) != pins_.end();
+}
+
+size_t S3Storage::pinned_bytes() const {
+  std::lock_guard<std::mutex> lock(cache_mu_);
+  size_t n = 0;
+  for (const auto& kv : pins_) n += kv.second.size();
+  return n;
+}
+
+uint64_t S3Storage::pin_hits() const {
+  std::lock_guard<std::mutex> lock(cache_mu_);
+  return pin_hits_;
+}
+
+uint64_t S3Storage::range_gets() const {
+  std::lock_guard<std::mutex> lock(cache_mu_);
+  return range_gets_;
+}
+
+bool S3Storage::PinGet(const std::string& path, size_t start,
+                       size_t end_exclusive, std::string* out) const {
+  // caller holds cache_mu_
+  auto it = pins_.find(PinKey{path, start, end_exclusive});
+  if (it == pins_.end()) return false;
+  *out = it->second;
+  return true;
+}
+
 void S3Storage::InvalidateCache(const std::string& path) {
   std::lock_guard<std::mutex> lock(cache_mu_);
   for (auto it = cache_.begin(); it != cache_.end();) {
     if (it->first.object_key == path) {
       lru_.erase(it->second.second);
       it = cache_.erase(it);
+    } else {
+      ++it;
+    }
+  }
+  for (auto it = pins_.begin(); it != pins_.end();) {
+    if (it->first.object_key == path) {
+      it = pins_.erase(it);
     } else {
       ++it;
     }
@@ -440,7 +522,57 @@ Result<std::string> S3Storage::RangeGet(const std::string& path, size_t start,
     return Status::IoError("s3 GetObject Range HTTP " +
                            std::to_string(resp.value().status));
   }
+  {
+    std::lock_guard<std::mutex> lock(cache_mu_);
+    ++range_gets_;
+  }
   return resp.value().body;
+}
+
+Result<std::string> S3Storage::ReadRange(const std::string& path, size_t start,
+                                         size_t end_exclusive) {
+  if (path.empty()) return Status::InvalidArgument("empty object key");
+  if (end_exclusive < start) {
+    return Status::InvalidArgument("ReadRange end < start");
+  }
+  if (end_exclusive == start) return std::string();
+
+  {
+    std::lock_guard<std::mutex> lock(cache_mu_);
+    std::string pinned;
+    if (PinGet(path, start, end_exclusive, &pinned)) {
+      ++pin_hits_;
+      return pinned;
+    }
+  }
+
+  auto size_r = HeadSize(path);
+  if (!size_r.ok()) return size_r.status();
+  const size_t object_size = size_r.value();
+  if (start >= object_size) return std::string();
+  size_t end = end_exclusive;
+  if (end > object_size) end = object_size;
+
+  const size_t bs = config_.block_cache_block_size;
+  const size_t first_block = start / bs;
+  const size_t last_block = (end - 1) / bs;
+  std::string out;
+  out.reserve(end - start);
+  for (size_t bi = first_block; bi <= last_block; ++bi) {
+    auto block = ReadBlock(path, bi, object_size);
+    if (!block.ok()) return block.status();
+    const size_t block_start = bi * bs;
+    const size_t copy_from =
+        start > block_start ? start - block_start : 0;
+    const size_t block_end = block_start + block.value().size();
+    const size_t copy_to_exclusive = end < block_end ? end - block_start
+                                                     : block.value().size();
+    if (copy_from < copy_to_exclusive) {
+      out.append(block.value().data() + copy_from,
+                 copy_to_exclusive - copy_from);
+    }
+  }
+  return out;
 }
 
 Result<std::string> S3Storage::ReadBlock(const std::string& path,

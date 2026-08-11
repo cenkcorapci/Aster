@@ -55,6 +55,27 @@ class S3Storage final : public StorageBackend {
   uint64_t cache_misses() const;
   void ClearCache();
 
+  // Non-evictable pin cache for HNSW upper layers (and similar hot metadata).
+  // Pinned bytes survive ClearCache() / LRU eviction and are consulted before
+  // the block cache on Read/ReadRange. See docs/indexing.md §10.3.1.
+  Status PinRange(const std::string& path, size_t start, size_t end_exclusive,
+                  std::string data);
+  // Fetch [start, end) via Range GET (or pin hit) and pin it.
+  Status PinRangeFromStore(const std::string& path, size_t start,
+                           size_t end_exclusive);
+  void ClearPins();
+  void Unpin(const std::string& path);
+  bool HasPinned(const std::string& path, size_t start,
+                 size_t end_exclusive) const;
+  size_t pinned_bytes() const;
+  uint64_t pin_hits() const;
+  uint64_t range_gets() const;
+
+  // Byte-range read: returns file[start, end). Uses pin cache, then block
+  // cache / Range GET. end_exclusive may be past EOF (truncated).
+  Result<std::string> ReadRange(const std::string& path, size_t start,
+                                size_t end_exclusive);
+
  private:
   struct HttpResult {
     int status = 0;
@@ -96,6 +117,27 @@ class S3Storage final : public StorageBackend {
   void CachePut(const CacheKey& key, std::string data);
   bool CacheGet(const CacheKey& key, std::string* out);
 
+  struct PinKey {
+    std::string object_key;
+    size_t start = 0;
+    size_t end = 0;  // exclusive
+
+    bool operator==(const PinKey& o) const {
+      return start == o.start && end == o.end && object_key == o.object_key;
+    }
+  };
+
+  struct PinKeyHash {
+    size_t operator()(const PinKey& k) const {
+      return std::hash<std::string>{}(k.object_key) ^
+             (std::hash<size_t>{}(k.start) << 1) ^
+             (std::hash<size_t>{}(k.end) << 2);
+    }
+  };
+
+  bool PinGet(const std::string& path, size_t start, size_t end_exclusive,
+              std::string* out) const;
+
   S3Config config_;
   std::string host_;
   uint16_t port_ = 80;
@@ -108,6 +150,10 @@ class S3Storage final : public StorageBackend {
       cache_;
   uint64_t cache_hits_ = 0;
   uint64_t cache_misses_ = 0;
+
+  std::unordered_map<PinKey, std::string, PinKeyHash> pins_;
+  uint64_t pin_hits_ = 0;
+  uint64_t range_gets_ = 0;
 };
 
 }  // namespace aster

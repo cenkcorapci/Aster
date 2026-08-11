@@ -11,6 +11,7 @@ cc_library(
         "exact_index.cc",
         "hnsw_build.cc",
         "hnsw_graph.cc",
+        "hnsw_pin.cc",
         "hnsw_search.cc",
         "tags.cc",
     ],
@@ -19,6 +20,7 @@ cc_library(
         "distance.h",
         "hnsw_build.h",
         "hnsw_graph.h",
+        "hnsw_pin.h",
         "hnsw_search.h",
         "tags.h",
         "vector_index.h",
@@ -32,6 +34,22 @@ cc_test(
     srcs = ["index_test.cc"],
     deps = [
         ":index",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cc_test(
+    name = "hnsw_pin_test",
+    size = "small",
+    srcs = ["hnsw_pin_test.cc"],
+    target_compatible_with = select({
+        "//platforms:is_baremetal": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    }),
+    deps = [
+        ":index",
+        "//aster/platform:s3",
+        "//aster/platform:s3_fake",
         "@googletest//:gtest_main",
     ],
 )

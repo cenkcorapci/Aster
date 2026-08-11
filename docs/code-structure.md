@@ -9,7 +9,7 @@ platform backends plug in storage, clocks, and (later) networking.
 aster/
 ├── core/           types, Status/Result, hashing, feature profiles
 ├── storage/        WAL, memtable, SSTable, manifest, segment
-├── index/          distance kernels, bloom, exact index (HNSW = M2)
+├── index/          distance kernels, bloom, exact index, HNSW (+ S3 upper-layer pin)
 ├── query/          top-k merge across segments / replicas
 ├── distributed/    consistent-hash ring + vnodes
 ├── db/             hosted single-node Db (POSIX durable path)
@@ -64,7 +64,7 @@ other hosts use `--config=raspberry_pi_cross` or `./scripts/build-matrix.sh --fu
 | --- | --- |
 | `MemoryStorage` | Done |
 | `PosixStorage` | Done (path traversal hardened) |
-| S3 | Done (M8-T01): multipart Put, Range GET, LRU block cache; SigV4 deferred |
+| S3 | Done (M8-T01/T02): multipart Put, Range GET, LRU block cache + non-evictable upper-layer pin; SigV4 deferred |
 
 ## Depending on the embedded library
 
