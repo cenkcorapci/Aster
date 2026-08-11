@@ -117,7 +117,7 @@ Status updates happen in this file (see start-the-tasks.md § Claiming).
 | M3-T04 | done | platform | M3-T03 | S3 storage backend skeleton (Put/Get/List/Remove) | `aster/platform/s3*` | Integration test against LocalStack or mock; not production-complete |
 | M3-T05 | done | platform | — | Compile-time profiles: Tiny / Edge / Server | `aster/`, `.bazelrc` | Feature flags compile; Tiny excludes HNSW |
 | M3-T05a | done | platform | M3-T05 | Arduino / bare-metal `//aster/embedded` + BusyBox musl image | `aster/embedded/`, `deploy/docker/`, `scripts/` | `libembedded.a` builds; `aster:local` image runs demo |
-| M3-T06 | open | platform | M2-T09, M3-T05 | ARM (NEON) CI build for Edge profile | CI | Green arm64 job; local: `--config=raspberry_pi` / `build-matrix.sh --full` |
+| M3-T06 | done | platform | M2-T09, M3-T05 | ARM (NEON) CI build for Edge profile | CI | Green arm64 job; local: `--config=raspberry_pi` / `build-matrix.sh --full` |
 | M3-T07 | open | platform | M1-T09 | Arena / slab allocators on write path + memory budget | `aster/core/memory*`, `aster/db/` | Budget exceeded → clear Status; no unbounded growth in soak |
 | M3-T08 | open | qa | M3-T05, M3-T03, M2-T04 | Pi/edge validation runbook + results | `docs/` | Documented RSS <128 MB with 1M vectors |
 

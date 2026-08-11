@@ -53,7 +53,9 @@ replication sit above `db` in M7.
 | `--config=server` | Full feature set (default) |
 
 Orthogonal to CPU/OS platforms (`--config=apple_silicon`, `linux_musl_arm64`,
-`arduino`, zig cross configs — see `.bazelrc`).
+`arduino`, zig cross configs — see `.bazelrc`). Edge on Pi-class aarch64:
+`--config=raspberry_pi` (native Linux arm64 / CI `ubuntu-24.04-arm`); from
+other hosts use `--config=raspberry_pi_cross` or `./scripts/build-matrix.sh --full`.
 
 ## Storage backends
 

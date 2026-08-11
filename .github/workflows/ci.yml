@@ -69,3 +69,61 @@ jobs:
           reporter: java-junit
           fail-on-error: false
           fail-on-empty: false
+
+  # Native aarch64 + Edge profile (ARM NEON distance kernels). M3-T06.
+  # Local equivalents: bazel test --config=raspberry_pi //aster/...
+  #   or ./scripts/build-matrix.sh --full (zig cross from non-Pi hosts).
+  edge-arm64:
+    name: Edge profile (arm64 / NEON)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Bazel
+        uses: bazel-contrib/setup-bazel@0.19.0
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}-edge-arm64
+          repository-cache: true
+          cache-save: ${{ github.event_name != 'pull_request' }}
+
+      - name: Build Edge on arm64 (--config=raspberry_pi)
+        run: bazel build --config=raspberry_pi //aster/...
+
+      - name: Test Edge on arm64 (--config=raspberry_pi)
+        run: bazel test --config=raspberry_pi //aster/... --test_output=errors
+
+      - name: Collect test results
+        if: always()
+        run: |
+          mkdir -p /tmp/test-results
+          find "$(bazel info output_path)" \
+               bazel-testlogs \
+               -name "test.xml" 2>/dev/null | while IFS= read -r f; do
+            target=$(dirname "$f" | sed 's|.*/testlogs/||;s|/|__|g')
+            cp "$f" "/tmp/test-results/${target}.xml"
+          done || true
+          if [ -z "$(ls /tmp/test-results/*.xml 2>/dev/null)" ]; then
+            echo '<testsuites/>' > /tmp/test-results/empty.xml
+          fi
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-edge-arm64
+          path: /tmp/test-results/*.xml
+          if-no-files-found: ignore
+
+      - name: Publish test results
+        if: always() && (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork)
+        uses: dorny/test-reporter@v1
+        with:
+          name: Bazel Edge arm64 Tests
+          path: /tmp/test-results/*.xml
+          reporter: java-junit
+          fail-on-error: false
+          fail-on-empty: false

@@ -47,7 +47,10 @@ build:windows_amd64 --platforms=//platforms:windows_amd64
 build:apple_silicon --config=macos_arm64
 build:apple_intel --config=macos_amd64
 build:intel --config=linux_amd64
+# Edge on Linux aarch64 (Pi-class). Native on ubuntu-24.04-arm CI / real Pi.
+# From other hosts, cross-build with raspberry_pi_cross (zig; build only).
 build:raspberry_pi --config=linux_arm64 --config=edge
+build:raspberry_pi_cross --config=zig_linux_arm64 --config=edge
 
 # ---------------------------------------------------------------------------
 # Cross-compile with hermetic zig-cc (no global register — opt-in only).

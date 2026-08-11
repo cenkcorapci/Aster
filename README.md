@@ -60,6 +60,8 @@ Live Grafana sim: [deploy/sim-grafana/README.md](deploy/sim-grafana/README.md).
 Arduino / ESP32 QEMU sim: [deploy/sim-arduino/README.md](deploy/sim-arduino/README.md).  
 Aster vs Milvus: [deploy/compare-milvus/README.md](deploy/compare-milvus/README.md).
 
-CI runs `bazel test //aster/...` on every push/PR to `main`.
+CI runs `bazel test //aster/...` on every push/PR to `main`, plus an
+`ubuntu-24.04-arm` Edge job (`--config=raspberry_pi`). Local matrix:
+`./scripts/build-matrix.sh --full`.
 
 License: [AGPL-3.0](LICENSE).

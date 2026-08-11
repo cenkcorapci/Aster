@@ -3,7 +3,7 @@
 #
 # Usage:
 #   ./scripts/build-matrix.sh           # host + arduino + musl (this arch)
-#   ./scripts/build-matrix.sh --full    # also zig cross linux amd64+arm64
+#   ./scripts/build-matrix.sh --full    # also zig cross + Edge arm64 (Pi)
 #   ./scripts/build-matrix.sh --quick   # host default + arduino only
 set -euo pipefail
 
@@ -102,6 +102,16 @@ esac
 if [[ "$MODE" == "--full" ]]; then
   run "zig linux amd64" bazel build --config=zig_linux_amd64 //aster/cli:aster
   run "zig linux arm64" bazel build --config=zig_linux_arm64 //aster/cli:aster
+  # M3-T06: Edge + linux/arm64 (NEON). Native Pi / CI: raspberry_pi; else zig cross.
+  if [[ "$OS" == "linux" && "$ARCH" == "arm64" ]]; then
+    run "raspberry_pi (Edge + linux_arm64)" \
+      bazel build --config=raspberry_pi //aster/...
+    run "raspberry_pi tests" \
+      bazel test --config=raspberry_pi //aster/...
+  else
+    run "raspberry_pi_cross (Edge + zig linux arm64)" \
+      bazel build --config=raspberry_pi_cross //aster/cli:aster
+  fi
   # Optional: cross Darwin / Windows (may need extra SDKs).
   if [[ "$OS" == "macos" && "$ARCH" == "arm64" ]]; then
     run "zig macos amd64 (Intel from Apple Silicon)" \
