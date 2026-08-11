@@ -55,6 +55,12 @@ class Catalog {
   static std::string MetricToString(Metric m);
   static Result<Metric> MetricFromString(const std::string& s);
 
+  // Lifecycle phase 1: durable placeholder (not searchable/writeable yet).
+  Status CreateCollectionCreated(const std::string& name);
+  // Lifecycle phase 2: provides vector config and opens the underlying Db.
+  Status ConfigureCollection(const CollectionInfo& info);
+
+  // Backwards compatible: single-call create+configure (used by HTTP API).
   Status CreateCollection(const CollectionInfo& info);
   // Removes the collection from the catalog and deletes data_dir/<name>/.
   Status DropCollection(const std::string& name);

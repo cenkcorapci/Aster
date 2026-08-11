@@ -64,7 +64,11 @@ Timestamp NowMicros() {
 
 AsterHandler::AsterHandler(Catalog* catalog) : catalog_(catalog) {}
 
-void AsterHandler::createCollection(const CollectionConfig& config) {
+void AsterHandler::createCollection(const std::string& name) {
+  ThrowIfNotOk(catalog_->CreateCollectionCreated(name));
+}
+
+void AsterHandler::configureCollection(const CollectionConfig& config) {
   CollectionInfo info;
   info.name = config.name;
   if (config.vector.dimension <= 0) {
@@ -72,7 +76,7 @@ void AsterHandler::createCollection(const CollectionConfig& config) {
   }
   info.dimension = static_cast<uint32_t>(config.vector.dimension);
   info.metric = ToMetric(config.vector.metric);
-  ThrowIfNotOk(catalog_->CreateCollection(info));
+  ThrowIfNotOk(catalog_->ConfigureCollection(info));
 }
 
 void AsterHandler::dropCollection(const std::string& name) {

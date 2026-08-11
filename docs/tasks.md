@@ -132,7 +132,7 @@ Status updates happen in this file (see start-the-tasks.md § Claiming).
 | M4-T01 | done | rpc | M3-T01, M0-T06 | Thrift codegen in Bazel for C++ server stubs | `aster/rpc/`, `MODULE.bazel` | Generated types build; service interface compiles |
 | M4-T02 | done | rpc | M4-T01, M2-T04 | Framed-TCP Thrift server implementing Aster service | `aster/rpc/`, `aster/cli/` | Integration: upsert/get/search over localhost |
 | M4-T03 | open | rpc | M4-T02 | Optional TLS transport | `aster/rpc/` | TLS accept + insecure still works |
-| M4-T04 | open | rpc | M4-T02 | Collection create/drop/configure API | `aster/db/`, `aster/rpc/` | Matches `client-api.md` lifecycle states |
+| M4-T04 | done | rpc | M4-T02 | Collection create/drop/configure API | `aster/db/`, `aster/rpc/` | Matches `client-api.md` lifecycle states |
 | M4-T05 | open | rpc | M4-T02 | TOML config loader for server | `aster/cli/`, config schema | Documented knobs load; bad config → clear error |
 | M4-T06 | done | obs | M0 | Prometheus `/metrics` endpoint (real counters/histograms) | `aster/metrics/` | scrapeable; key latency metrics present |
 | M4-T07 | done | obs | M4-T06 | Grafana dashboard JSON shipped in repo | `deploy/sim-grafana/` | Import works against local Prometheus (`grafana/dashboards/aster-sim.json`) |

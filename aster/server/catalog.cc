@@ -116,8 +116,15 @@ Status Catalog::Load() {
     info.metric = metric.value();
 
     if (auto st = ValidateName(info.name); !st.ok()) return st;
-    if (info.dimension == 0 || info.dimension > kMaxDimension) {
+    if (info.dimension > kMaxDimension) {
       return Status::Corruption("catalog dimension out of range");
+    }
+
+    // Lifecycle phase 1: created-but-not-configured placeholders are durable,
+    // but their underlying Db is opened only during ConfigureCollection().
+    if (info.dimension == 0) {
+      infos_[info.name] = info;
+      continue;
     }
 
     Db::Options db_opt;
@@ -153,7 +160,33 @@ Status Catalog::PersistCatalog() const {
   return Status::Ok();
 }
 
-Status Catalog::CreateCollection(const CollectionInfo& info) {
+Status Catalog::CreateCollectionCreated(const std::string& name) {
+  if (auto st = ValidateName(name); !st.ok()) return st;
+
+  std::lock_guard lock(mu_);
+  if (infos_.count(name)) {
+    return Status::InvalidArgument("collection already exists");
+  }
+  if (!EnsureDir(CollectionDir(name))) {
+    return Status::IoError("cannot create collection directory");
+  }
+
+  // Default metric is persisted so Load() can validate/parse the catalog
+  // format. Dimension==0 is the authoritative lifecycle marker.
+  CollectionInfo info;
+  info.name = name;
+  info.dimension = 0;
+  info.metric = Metric::kCosine;
+  infos_[name] = info;
+
+  if (auto st = PersistCatalog(); !st.ok()) {
+    infos_.erase(name);
+    return st;
+  }
+  return Status::Ok();
+}
+
+Status Catalog::ConfigureCollection(const CollectionInfo& info) {
   if (auto st = ValidateName(info.name); !st.ok()) return st;
   if (info.dimension == 0) {
     return Status::InvalidArgument("dimension must be > 0");
@@ -163,11 +196,26 @@ Status Catalog::CreateCollection(const CollectionInfo& info) {
   }
 
   std::lock_guard lock(mu_);
-  if (infos_.count(info.name)) {
-    return Status::InvalidArgument("collection already exists");
+  auto it = infos_.find(info.name);
+  if (it == infos_.end()) {
+    return Status::NotFound("collection not found");
   }
+  if (it->second.dimension != 0) {
+    return Status::InvalidArgument("collection already configured");
+  }
+
+  const CollectionInfo prev = it->second;
+
   if (!EnsureDir(CollectionDir(info.name))) {
     return Status::IoError("cannot create collection directory");
+  }
+
+  // Persist first so recovery after a crash sees the configured dimension
+  // and opens the Db during Catalog::Load().
+  infos_[info.name] = info;
+  if (auto st = PersistCatalog(); !st.ok()) {
+    infos_[info.name] = prev;
+    return st;
   }
 
   Db::Options db_opt;
@@ -179,16 +227,29 @@ Status Catalog::CreateCollection(const CollectionInfo& info) {
   db_opt.compaction_tier_threshold = options_.compaction_tier_threshold;
   db_opt.max_segments_before_compact = options_.max_segments_before_compact;
   auto db = Db::Open(db_opt);
-  if (!db.ok()) return db.status();
-
-  infos_[info.name] = info;
-  dbs_[info.name] = std::shared_ptr<Db>(std::move(db.value()));
-  if (auto st = PersistCatalog(); !st.ok()) {
-    infos_.erase(info.name);
-    dbs_.erase(info.name);
-    return st;
+  if (!db.ok()) {
+    // Best-effort rollback to the previous lifecycle phase.
+    infos_[info.name] = prev;
+    PersistCatalog();
+    return db.status();
   }
+
+  dbs_[info.name] = std::shared_ptr<Db>(std::move(db.value()));
   return Status::Ok();
+}
+
+Status Catalog::CreateCollection(const CollectionInfo& info) {
+  // HTTP API historically used CreateCollection(info) as a single call.
+  // Keep that contract by implementing it as create+configure.
+  auto st = CreateCollectionCreated(info.name);
+  if (!st.ok()) {
+    // If the collection already exists, it may be in phase 1 (dimension=0),
+    // in which case ConfigureCollection() should succeed.
+    if (st.message().find("already exists") == std::string::npos) return st;
+  } else {
+    // created successfully, now configure
+  }
+  return ConfigureCollection(info);
 }
 
 Status Catalog::DropCollection(const std::string& name) {
@@ -226,7 +287,14 @@ std::optional<CollectionInfo> Catalog::GetCollection(
 
 Result<std::shared_ptr<Db>> Catalog::LookupDb(const std::string& name) const {
   auto it = dbs_.find(name);
-  if (it == dbs_.end()) return Status::NotFound("collection not found");
+  if (it == dbs_.end()) {
+    auto info_it = infos_.find(name);
+    if (info_it == infos_.end()) return Status::NotFound("collection not found");
+    if (info_it->second.dimension == 0) {
+      return Status(StatusCode::kUnavailable, "collection not configured");
+    }
+    return Status::NotFound("collection not found");
+  }
   return it->second;
 }
 

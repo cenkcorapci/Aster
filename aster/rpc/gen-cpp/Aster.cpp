@@ -12,7 +12,8 @@ namespace aster { namespace rpc {
 Aster_createCollection_args::~Aster_createCollection_args() noexcept {
 }
 
-Aster_createCollection_args::Aster_createCollection_args() noexcept {
+Aster_createCollection_args::Aster_createCollection_args() noexcept
+   : name() {
 }
 
 uint32_t Aster_createCollection_args::read(::apache::thrift::protocol::TProtocol* iprot) {
@@ -37,9 +38,9 @@ uint32_t Aster_createCollection_args::read(::apache::thrift::protocol::TProtocol
     switch (fid)
     {
       case 1:
-        if (ftype == ::apache::thrift::protocol::T_STRUCT) {
-          xfer += this->config.read(iprot);
-          this->__isset.config = true;
+        if (ftype == ::apache::thrift::protocol::T_STRING) {
+          xfer += iprot->readString(this->name);
+          this->__isset.name = true;
         } else {
           xfer += iprot->skip(ftype);
         }
@@ -61,8 +62,8 @@ uint32_t Aster_createCollection_args::write(::apache::thrift::protocol::TProtoco
   ::apache::thrift::protocol::TOutputRecursionTracker tracker(*oprot);
   xfer += oprot->writeStructBegin("Aster_createCollection_args");
 
-  xfer += oprot->writeFieldBegin("config", ::apache::thrift::protocol::T_STRUCT, 1);
-  xfer += this->config.write(oprot);
+  xfer += oprot->writeFieldBegin("name", ::apache::thrift::protocol::T_STRING, 1);
+  xfer += oprot->writeString(this->name);
   xfer += oprot->writeFieldEnd();
 
   xfer += oprot->writeFieldStop();
@@ -80,8 +81,8 @@ uint32_t Aster_createCollection_pargs::write(::apache::thrift::protocol::TProtoc
   ::apache::thrift::protocol::TOutputRecursionTracker tracker(*oprot);
   xfer += oprot->writeStructBegin("Aster_createCollection_pargs");
 
-  xfer += oprot->writeFieldBegin("config", ::apache::thrift::protocol::T_STRUCT, 1);
-  xfer += (*(this->config)).write(oprot);
+  xfer += oprot->writeFieldBegin("name", ::apache::thrift::protocol::T_STRING, 1);
+  xfer += oprot->writeString((*(this->name)));
   xfer += oprot->writeFieldEnd();
 
   xfer += oprot->writeFieldStop();
@@ -159,6 +160,197 @@ Aster_createCollection_presult::~Aster_createCollection_presult() noexcept {
 
 
 uint32_t Aster_createCollection_presult::read(::apache::thrift::protocol::TProtocol* iprot) {
+
+  ::apache::thrift::protocol::TInputRecursionTracker tracker(*iprot);
+  uint32_t xfer = 0;
+  std::string fname;
+  ::apache::thrift::protocol::TType ftype;
+  int16_t fid;
+
+  xfer += iprot->readStructBegin(fname);
+
+  using ::apache::thrift::protocol::TProtocolException;
+
+
+  while (true)
+  {
+    xfer += iprot->readFieldBegin(fname, ftype, fid);
+    if (ftype == ::apache::thrift::protocol::T_STOP) {
+      break;
+    }
+    switch (fid)
+    {
+      case 1:
+        if (ftype == ::apache::thrift::protocol::T_STRUCT) {
+          xfer += this->e.read(iprot);
+          this->__isset.e = true;
+        } else {
+          xfer += iprot->skip(ftype);
+        }
+        break;
+      default:
+        xfer += iprot->skip(ftype);
+        break;
+    }
+    xfer += iprot->readFieldEnd();
+  }
+
+  xfer += iprot->readStructEnd();
+
+  return xfer;
+}
+
+
+Aster_configureCollection_args::~Aster_configureCollection_args() noexcept {
+}
+
+Aster_configureCollection_args::Aster_configureCollection_args() noexcept {
+}
+
+uint32_t Aster_configureCollection_args::read(::apache::thrift::protocol::TProtocol* iprot) {
+
+  ::apache::thrift::protocol::TInputRecursionTracker tracker(*iprot);
+  uint32_t xfer = 0;
+  std::string fname;
+  ::apache::thrift::protocol::TType ftype;
+  int16_t fid;
+
+  xfer += iprot->readStructBegin(fname);
+
+  using ::apache::thrift::protocol::TProtocolException;
+
+
+  while (true)
+  {
+    xfer += iprot->readFieldBegin(fname, ftype, fid);
+    if (ftype == ::apache::thrift::protocol::T_STOP) {
+      break;
+    }
+    switch (fid)
+    {
+      case 1:
+        if (ftype == ::apache::thrift::protocol::T_STRUCT) {
+          xfer += this->config.read(iprot);
+          this->__isset.config = true;
+        } else {
+          xfer += iprot->skip(ftype);
+        }
+        break;
+      default:
+        xfer += iprot->skip(ftype);
+        break;
+    }
+    xfer += iprot->readFieldEnd();
+  }
+
+  xfer += iprot->readStructEnd();
+
+  return xfer;
+}
+
+uint32_t Aster_configureCollection_args::write(::apache::thrift::protocol::TProtocol* oprot) const {
+  uint32_t xfer = 0;
+  ::apache::thrift::protocol::TOutputRecursionTracker tracker(*oprot);
+  xfer += oprot->writeStructBegin("Aster_configureCollection_args");
+
+  xfer += oprot->writeFieldBegin("config", ::apache::thrift::protocol::T_STRUCT, 1);
+  xfer += this->config.write(oprot);
+  xfer += oprot->writeFieldEnd();
+
+  xfer += oprot->writeFieldStop();
+  xfer += oprot->writeStructEnd();
+  return xfer;
+}
+
+
+Aster_configureCollection_pargs::~Aster_configureCollection_pargs() noexcept {
+}
+
+
+uint32_t Aster_configureCollection_pargs::write(::apache::thrift::protocol::TProtocol* oprot) const {
+  uint32_t xfer = 0;
+  ::apache::thrift::protocol::TOutputRecursionTracker tracker(*oprot);
+  xfer += oprot->writeStructBegin("Aster_configureCollection_pargs");
+
+  xfer += oprot->writeFieldBegin("config", ::apache::thrift::protocol::T_STRUCT, 1);
+  xfer += (*(this->config)).write(oprot);
+  xfer += oprot->writeFieldEnd();
+
+  xfer += oprot->writeFieldStop();
+  xfer += oprot->writeStructEnd();
+  return xfer;
+}
+
+
+Aster_configureCollection_result::~Aster_configureCollection_result() noexcept {
+}
+
+Aster_configureCollection_result::Aster_configureCollection_result() noexcept {
+}
+
+uint32_t Aster_configureCollection_result::read(::apache::thrift::protocol::TProtocol* iprot) {
+
+  ::apache::thrift::protocol::TInputRecursionTracker tracker(*iprot);
+  uint32_t xfer = 0;
+  std::string fname;
+  ::apache::thrift::protocol::TType ftype;
+  int16_t fid;
+
+  xfer += iprot->readStructBegin(fname);
+
+  using ::apache::thrift::protocol::TProtocolException;
+
+
+  while (true)
+  {
+    xfer += iprot->readFieldBegin(fname, ftype, fid);
+    if (ftype == ::apache::thrift::protocol::T_STOP) {
+      break;
+    }
+    switch (fid)
+    {
+      case 1:
+        if (ftype == ::apache::thrift::protocol::T_STRUCT) {
+          xfer += this->e.read(iprot);
+          this->__isset.e = true;
+        } else {
+          xfer += iprot->skip(ftype);
+        }
+        break;
+      default:
+        xfer += iprot->skip(ftype);
+        break;
+    }
+    xfer += iprot->readFieldEnd();
+  }
+
+  xfer += iprot->readStructEnd();
+
+  return xfer;
+}
+
+uint32_t Aster_configureCollection_result::write(::apache::thrift::protocol::TProtocol* oprot) const {
+
+  uint32_t xfer = 0;
+
+  xfer += oprot->writeStructBegin("Aster_configureCollection_result");
+
+  if (this->__isset.e) {
+    xfer += oprot->writeFieldBegin("e", ::apache::thrift::protocol::T_STRUCT, 1);
+    xfer += this->e.write(oprot);
+    xfer += oprot->writeFieldEnd();
+  }
+  xfer += oprot->writeFieldStop();
+  xfer += oprot->writeStructEnd();
+  return xfer;
+}
+
+
+Aster_configureCollection_presult::~Aster_configureCollection_presult() noexcept {
+}
+
+
+uint32_t Aster_configureCollection_presult::read(::apache::thrift::protocol::TProtocol* iprot) {
 
   ::apache::thrift::protocol::TInputRecursionTracker tracker(*iprot);
   uint32_t xfer = 0;
@@ -1305,19 +1497,19 @@ uint32_t Aster_search_presult::read(::apache::thrift::protocol::TProtocol* iprot
   return xfer;
 }
 
-void AsterClient::createCollection(const CollectionConfig& config)
+void AsterClient::createCollection(const std::string& name)
 {
-  send_createCollection(config);
+  send_createCollection(name);
   recv_createCollection();
 }
 
-void AsterClient::send_createCollection(const CollectionConfig& config)
+void AsterClient::send_createCollection(const std::string& name)
 {
   int32_t cseqid = 0;
   oprot_->writeMessageBegin("createCollection", ::apache::thrift::protocol::T_CALL, cseqid);
 
   Aster_createCollection_pargs args;
-  args.config = &config;
+  args.name = &name;
   args.write(oprot_);
 
   oprot_->writeMessageEnd();
@@ -1351,6 +1543,62 @@ void AsterClient::recv_createCollection()
     iprot_->getTransport()->readEnd();
   }
   Aster_createCollection_presult result;
+  result.read(iprot_);
+  iprot_->readMessageEnd();
+  iprot_->getTransport()->readEnd();
+
+  if (result.__isset.e) {
+    throw result.e;
+  }
+  return;
+}
+
+void AsterClient::configureCollection(const CollectionConfig& config)
+{
+  send_configureCollection(config);
+  recv_configureCollection();
+}
+
+void AsterClient::send_configureCollection(const CollectionConfig& config)
+{
+  int32_t cseqid = 0;
+  oprot_->writeMessageBegin("configureCollection", ::apache::thrift::protocol::T_CALL, cseqid);
+
+  Aster_configureCollection_pargs args;
+  args.config = &config;
+  args.write(oprot_);
+
+  oprot_->writeMessageEnd();
+  oprot_->getTransport()->writeEnd();
+  oprot_->getTransport()->flush();
+}
+
+void AsterClient::recv_configureCollection()
+{
+
+  int32_t rseqid = 0;
+  std::string fname;
+  ::apache::thrift::protocol::TMessageType mtype;
+
+  iprot_->readMessageBegin(fname, mtype, rseqid);
+  if (mtype == ::apache::thrift::protocol::T_EXCEPTION) {
+    ::apache::thrift::TApplicationException x;
+    x.read(iprot_);
+    iprot_->readMessageEnd();
+    iprot_->getTransport()->readEnd();
+    throw x;
+  }
+  if (mtype != ::apache::thrift::protocol::T_REPLY) {
+    iprot_->skip(::apache::thrift::protocol::T_STRUCT);
+    iprot_->readMessageEnd();
+    iprot_->getTransport()->readEnd();
+  }
+  if (fname.compare("configureCollection") != 0) {
+    iprot_->skip(::apache::thrift::protocol::T_STRUCT);
+    iprot_->readMessageEnd();
+    iprot_->getTransport()->readEnd();
+  }
+  Aster_configureCollection_presult result;
   result.read(iprot_);
   iprot_->readMessageEnd();
   iprot_->getTransport()->readEnd();
@@ -1699,7 +1947,7 @@ void AsterProcessor::process_createCollection(int32_t seqid, ::apache::thrift::p
 
   Aster_createCollection_result result;
   try {
-    iface_->createCollection(args.config);
+    iface_->createCollection(args.name);
   } catch (AsterError &e) {
     result.e = std::move(e);
     result.__isset.e = true;
@@ -1729,6 +1977,62 @@ void AsterProcessor::process_createCollection(int32_t seqid, ::apache::thrift::p
 
   if (this->eventHandler_.get() != nullptr) {
     this->eventHandler_->postWrite(ctx, "Aster.createCollection", bytes);
+  }
+}
+
+void AsterProcessor::process_configureCollection(int32_t seqid, ::apache::thrift::protocol::TProtocol* iprot, ::apache::thrift::protocol::TProtocol* oprot, void* callContext)
+{
+  void* ctx = nullptr;
+  if (this->eventHandler_.get() != nullptr) {
+    ctx = this->eventHandler_->getContext("Aster.configureCollection", callContext);
+  }
+  ::apache::thrift::TProcessorContextFreer freer(this->eventHandler_.get(), ctx, "Aster.configureCollection");
+
+  if (this->eventHandler_.get() != nullptr) {
+    this->eventHandler_->preRead(ctx, "Aster.configureCollection");
+  }
+
+  Aster_configureCollection_args args;
+  args.read(iprot);
+  iprot->readMessageEnd();
+  uint32_t bytes = iprot->getTransport()->readEnd();
+
+  if (this->eventHandler_.get() != nullptr) {
+    this->eventHandler_->postRead(ctx, "Aster.configureCollection", bytes);
+  }
+
+  Aster_configureCollection_result result;
+  try {
+    iface_->configureCollection(args.config);
+  } catch (AsterError &e) {
+    result.e = std::move(e);
+    result.__isset.e = true;
+  } catch (const std::exception& e) {
+    if (this->eventHandler_.get() != nullptr) {
+      this->eventHandler_->handlerError(ctx, "Aster.configureCollection");
+    }
+
+    ::apache::thrift::TApplicationException x(e.what());
+    oprot->writeMessageBegin("configureCollection", ::apache::thrift::protocol::T_EXCEPTION, seqid);
+    x.write(oprot);
+    oprot->writeMessageEnd();
+    oprot->getTransport()->writeEnd();
+    oprot->getTransport()->flush();
+    return;
+  }
+
+  if (this->eventHandler_.get() != nullptr) {
+    this->eventHandler_->preWrite(ctx, "Aster.configureCollection");
+  }
+
+  oprot->writeMessageBegin("configureCollection", ::apache::thrift::protocol::T_REPLY, seqid);
+  result.write(oprot);
+  oprot->writeMessageEnd();
+  bytes = oprot->getTransport()->writeEnd();
+  oprot->getTransport()->flush();
+
+  if (this->eventHandler_.get() != nullptr) {
+    this->eventHandler_->postWrite(ctx, "Aster.configureCollection", bytes);
   }
 }
 
@@ -2021,20 +2325,20 @@ void AsterProcessor::process_search(int32_t seqid, ::apache::thrift::protocol::T
   return processor;
 }
 
-void AsterConcurrentClient::createCollection(const CollectionConfig& config)
+void AsterConcurrentClient::createCollection(const std::string& name)
 {
-  int32_t seqid = send_createCollection(config);
+  int32_t seqid = send_createCollection(name);
   recv_createCollection(seqid);
 }
 
-int32_t AsterConcurrentClient::send_createCollection(const CollectionConfig& config)
+int32_t AsterConcurrentClient::send_createCollection(const std::string& name)
 {
   int32_t cseqid = this->sync_->generateSeqId();
   ::apache::thrift::async::TConcurrentSendSentry sentry(this->sync_.get());
   oprot_->writeMessageBegin("createCollection", ::apache::thrift::protocol::T_CALL, cseqid);
 
   Aster_createCollection_pargs args;
-  args.config = &config;
+  args.name = &name;
   args.write(oprot_);
 
   oprot_->writeMessageEnd();
@@ -2084,6 +2388,88 @@ void AsterConcurrentClient::recv_createCollection(const int32_t seqid)
         throw TProtocolException(TProtocolException::INVALID_DATA);
       }
       Aster_createCollection_presult result;
+      result.read(iprot_);
+      iprot_->readMessageEnd();
+      iprot_->getTransport()->readEnd();
+
+      if (result.__isset.e) {
+        sentry.commit();
+        throw result.e;
+      }
+      sentry.commit();
+      return;
+    }
+    // seqid != rseqid
+    this->sync_->updatePending(fname, mtype, rseqid);
+
+    // this will temporarily unlock the readMutex, and let other clients get work done
+    this->sync_->waitForWork(seqid);
+  } // end while(true)
+}
+
+void AsterConcurrentClient::configureCollection(const CollectionConfig& config)
+{
+  int32_t seqid = send_configureCollection(config);
+  recv_configureCollection(seqid);
+}
+
+int32_t AsterConcurrentClient::send_configureCollection(const CollectionConfig& config)
+{
+  int32_t cseqid = this->sync_->generateSeqId();
+  ::apache::thrift::async::TConcurrentSendSentry sentry(this->sync_.get());
+  oprot_->writeMessageBegin("configureCollection", ::apache::thrift::protocol::T_CALL, cseqid);
+
+  Aster_configureCollection_pargs args;
+  args.config = &config;
+  args.write(oprot_);
+
+  oprot_->writeMessageEnd();
+  oprot_->getTransport()->writeEnd();
+  oprot_->getTransport()->flush();
+
+  sentry.commit();
+  return cseqid;
+}
+
+void AsterConcurrentClient::recv_configureCollection(const int32_t seqid)
+{
+
+  int32_t rseqid = 0;
+  std::string fname;
+  ::apache::thrift::protocol::TMessageType mtype;
+
+  // the read mutex gets dropped and reacquired as part of waitForWork()
+  // The destructor of this sentry wakes up other clients
+  ::apache::thrift::async::TConcurrentRecvSentry sentry(this->sync_.get(), seqid);
+
+  while(true) {
+    if(!this->sync_->getPending(fname, mtype, rseqid)) {
+      iprot_->readMessageBegin(fname, mtype, rseqid);
+    }
+    if(seqid == rseqid) {
+      if (mtype == ::apache::thrift::protocol::T_EXCEPTION) {
+        ::apache::thrift::TApplicationException x;
+        x.read(iprot_);
+        iprot_->readMessageEnd();
+        iprot_->getTransport()->readEnd();
+        sentry.commit();
+        throw x;
+      }
+      if (mtype != ::apache::thrift::protocol::T_REPLY) {
+        iprot_->skip(::apache::thrift::protocol::T_STRUCT);
+        iprot_->readMessageEnd();
+        iprot_->getTransport()->readEnd();
+      }
+      if (fname.compare("configureCollection") != 0) {
+        iprot_->skip(::apache::thrift::protocol::T_STRUCT);
+        iprot_->readMessageEnd();
+        iprot_->getTransport()->readEnd();
+
+        // in a bad state, don't commit
+        using ::apache::thrift::protocol::TProtocolException;
+        throw TProtocolException(TProtocolException::INVALID_DATA);
+      }
+      Aster_configureCollection_presult result;
       result.read(iprot_);
       iprot_->readMessageEnd();
       iprot_->getTransport()->readEnd();

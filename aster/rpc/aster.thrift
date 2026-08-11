@@ -78,7 +78,11 @@ exception AsterError {
 }
 
 service Aster {
-  void createCollection(1: CollectionConfig config) throws (1: AsterError e),
+  // Collection lifecycle:
+  //   createCollection: create durable placeholder (dimension/metric unknown yet)
+  //   configureCollection: provide vector config, then collection becomes usable
+  void createCollection(1: string name) throws (1: AsterError e),
+  void configureCollection(1: CollectionConfig config) throws (1: AsterError e),
   void dropCollection(1: string name) throws (1: AsterError e),
 
   void upsert(1: string collection, 2: Document doc,

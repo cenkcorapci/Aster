@@ -24,7 +24,8 @@ TEST(RpcCodegen, TypesAndServiceInterface) {
   req.__set_topK(3);
 
   aster::rpc::AsterNull handler;
-  handler.createCollection(cfg);
+  handler.createCollection(cfg.name);
+  handler.configureCollection(cfg);
   handler.upsert(cfg.name, doc, aster::rpc::ConsistencyLevel::ONE);
 
   aster::rpc::Document got;

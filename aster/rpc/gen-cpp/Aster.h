@@ -22,7 +22,8 @@ namespace aster { namespace rpc {
 class AsterIf {
  public:
   virtual ~AsterIf() {}
-  virtual void createCollection(const CollectionConfig& config) = 0;
+  virtual void createCollection(const std::string& name) = 0;
+  virtual void configureCollection(const CollectionConfig& config) = 0;
   virtual void dropCollection(const std::string& name) = 0;
   virtual void upsert(const std::string& collection, const Document& doc, const ConsistencyLevel::type consistency) = 0;
   virtual void get(Document& _return, const std::string& collection, const std::string& id, const ConsistencyLevel::type consistency) = 0;
@@ -57,7 +58,10 @@ class AsterIfSingletonFactory : virtual public AsterIfFactory {
 class AsterNull : virtual public AsterIf {
  public:
   virtual ~AsterNull() {}
-  void createCollection(const CollectionConfig& /* config */) override {
+  void createCollection(const std::string& /* name */) override {
+    return;
+  }
+  void configureCollection(const CollectionConfig& /* config */) override {
     return;
   }
   void dropCollection(const std::string& /* name */) override {
@@ -78,8 +82,8 @@ class AsterNull : virtual public AsterIf {
 };
 
 typedef struct _Aster_createCollection_args__isset {
-  _Aster_createCollection_args__isset() : config(false) {}
-  bool config :1;
+  _Aster_createCollection_args__isset() : name(false) {}
+  bool name :1;
 } _Aster_createCollection_args__isset;
 
 class Aster_createCollection_args {
@@ -90,11 +94,11 @@ class Aster_createCollection_args {
   Aster_createCollection_args() noexcept;
 
   virtual ~Aster_createCollection_args() noexcept;
-  CollectionConfig config;
+  std::string name;
 
   _Aster_createCollection_args__isset __isset;
 
-  void __set_config(const CollectionConfig& val);
+  void __set_name(const std::string& val);
 
   bool operator == (const Aster_createCollection_args & rhs) const;
   bool operator != (const Aster_createCollection_args &rhs) const {
@@ -114,7 +118,7 @@ class Aster_createCollection_pargs {
 
 
   virtual ~Aster_createCollection_pargs() noexcept;
-  const CollectionConfig* config;
+  const std::string* name;
 
   uint32_t write(::apache::thrift::protocol::TProtocol* oprot) const;
 
@@ -164,6 +168,98 @@ class Aster_createCollection_presult {
   AsterError e;
 
   _Aster_createCollection_presult__isset __isset;
+
+  uint32_t read(::apache::thrift::protocol::TProtocol* iprot);
+
+};
+
+typedef struct _Aster_configureCollection_args__isset {
+  _Aster_configureCollection_args__isset() : config(false) {}
+  bool config :1;
+} _Aster_configureCollection_args__isset;
+
+class Aster_configureCollection_args {
+ public:
+
+  Aster_configureCollection_args(const Aster_configureCollection_args&);
+  Aster_configureCollection_args& operator=(const Aster_configureCollection_args&);
+  Aster_configureCollection_args() noexcept;
+
+  virtual ~Aster_configureCollection_args() noexcept;
+  CollectionConfig config;
+
+  _Aster_configureCollection_args__isset __isset;
+
+  void __set_config(const CollectionConfig& val);
+
+  bool operator == (const Aster_configureCollection_args & rhs) const;
+  bool operator != (const Aster_configureCollection_args &rhs) const {
+    return !(*this == rhs);
+  }
+
+  bool operator < (const Aster_configureCollection_args & ) const;
+
+  uint32_t read(::apache::thrift::protocol::TProtocol* iprot);
+  uint32_t write(::apache::thrift::protocol::TProtocol* oprot) const;
+
+};
+
+
+class Aster_configureCollection_pargs {
+ public:
+
+
+  virtual ~Aster_configureCollection_pargs() noexcept;
+  const CollectionConfig* config;
+
+  uint32_t write(::apache::thrift::protocol::TProtocol* oprot) const;
+
+};
+
+typedef struct _Aster_configureCollection_result__isset {
+  _Aster_configureCollection_result__isset() : e(false) {}
+  bool e :1;
+} _Aster_configureCollection_result__isset;
+
+class Aster_configureCollection_result {
+ public:
+
+  Aster_configureCollection_result(const Aster_configureCollection_result&);
+  Aster_configureCollection_result& operator=(const Aster_configureCollection_result&);
+  Aster_configureCollection_result() noexcept;
+
+  virtual ~Aster_configureCollection_result() noexcept;
+  AsterError e;
+
+  _Aster_configureCollection_result__isset __isset;
+
+  void __set_e(const AsterError& val);
+
+  bool operator == (const Aster_configureCollection_result & rhs) const;
+  bool operator != (const Aster_configureCollection_result &rhs) const {
+    return !(*this == rhs);
+  }
+
+  bool operator < (const Aster_configureCollection_result & ) const;
+
+  uint32_t read(::apache::thrift::protocol::TProtocol* iprot);
+  uint32_t write(::apache::thrift::protocol::TProtocol* oprot) const;
+
+};
+
+typedef struct _Aster_configureCollection_presult__isset {
+  _Aster_configureCollection_presult__isset() : e(false) {}
+  bool e :1;
+} _Aster_configureCollection_presult__isset;
+
+class Aster_configureCollection_presult {
+ public:
+
+
+  virtual ~Aster_configureCollection_presult() noexcept;
+  AsterError e;
+
+  _Aster_configureCollection_presult__isset __isset;
 
   uint32_t read(::apache::thrift::protocol::TProtocol* iprot);
 
@@ -720,9 +816,12 @@ class AsterClient : virtual public AsterIf {
   std::shared_ptr< ::apache::thrift::protocol::TProtocol> getOutputProtocol() {
     return poprot_;
   }
-  void createCollection(const CollectionConfig& config) override;
-  void send_createCollection(const CollectionConfig& config);
+  void createCollection(const std::string& name) override;
+  void send_createCollection(const std::string& name);
   void recv_createCollection();
+  void configureCollection(const CollectionConfig& config) override;
+  void send_configureCollection(const CollectionConfig& config);
+  void recv_configureCollection();
   void dropCollection(const std::string& name) override;
   void send_dropCollection(const std::string& name);
   void recv_dropCollection();
@@ -754,6 +853,7 @@ class AsterProcessor : public ::apache::thrift::TDispatchProcessor {
   typedef std::map<std::string, ProcessFunction> ProcessMap;
   ProcessMap processMap_;
   void process_createCollection(int32_t seqid, ::apache::thrift::protocol::TProtocol* iprot, ::apache::thrift::protocol::TProtocol* oprot, void* callContext);
+  void process_configureCollection(int32_t seqid, ::apache::thrift::protocol::TProtocol* iprot, ::apache::thrift::protocol::TProtocol* oprot, void* callContext);
   void process_dropCollection(int32_t seqid, ::apache::thrift::protocol::TProtocol* iprot, ::apache::thrift::protocol::TProtocol* oprot, void* callContext);
   void process_upsert(int32_t seqid, ::apache::thrift::protocol::TProtocol* iprot, ::apache::thrift::protocol::TProtocol* oprot, void* callContext);
   void process_get(int32_t seqid, ::apache::thrift::protocol::TProtocol* iprot, ::apache::thrift::protocol::TProtocol* oprot, void* callContext);
@@ -763,6 +863,7 @@ class AsterProcessor : public ::apache::thrift::TDispatchProcessor {
   AsterProcessor(::std::shared_ptr<AsterIf> iface) :
     iface_(iface) {
     processMap_["createCollection"] = &AsterProcessor::process_createCollection;
+    processMap_["configureCollection"] = &AsterProcessor::process_configureCollection;
     processMap_["dropCollection"] = &AsterProcessor::process_dropCollection;
     processMap_["upsert"] = &AsterProcessor::process_upsert;
     processMap_["get"] = &AsterProcessor::process_get;
@@ -796,13 +897,22 @@ class AsterMultiface : virtual public AsterIf {
     ifaces_.push_back(iface);
   }
  public:
-  void createCollection(const CollectionConfig& config) override {
+  void createCollection(const std::string& name) override {
     size_t sz = ifaces_.size();
     size_t i = 0;
     for (; i < (sz - 1); ++i) {
-      ifaces_[i]->createCollection(config);
+      ifaces_[i]->createCollection(name);
     }
-    ifaces_[i]->createCollection(config);
+    ifaces_[i]->createCollection(name);
+  }
+
+  void configureCollection(const CollectionConfig& config) override {
+    size_t sz = ifaces_.size();
+    size_t i = 0;
+    for (; i < (sz - 1); ++i) {
+      ifaces_[i]->configureCollection(config);
+    }
+    ifaces_[i]->configureCollection(config);
   }
 
   void dropCollection(const std::string& name) override {
@@ -884,9 +994,12 @@ class AsterConcurrentClient : virtual public AsterIf {
   std::shared_ptr< ::apache::thrift::protocol::TProtocol> getOutputProtocol() {
     return poprot_;
   }
-  void createCollection(const CollectionConfig& config) override;
-  int32_t send_createCollection(const CollectionConfig& config);
+  void createCollection(const std::string& name) override;
+  int32_t send_createCollection(const std::string& name);
   void recv_createCollection(const int32_t seqid);
+  void configureCollection(const CollectionConfig& config) override;
+  int32_t send_configureCollection(const CollectionConfig& config);
+  void recv_configureCollection(const int32_t seqid);
   void dropCollection(const std::string& name) override;
   int32_t send_dropCollection(const std::string& name);
   void recv_dropCollection(const int32_t seqid);

@@ -13,7 +13,8 @@ class AsterHandler : public AsterIf {
  public:
   explicit AsterHandler(Catalog* catalog);
 
-  void createCollection(const CollectionConfig& config) override;
+  void createCollection(const std::string& name) override;
+  void configureCollection(const CollectionConfig& config) override;
   void dropCollection(const std::string& name) override;
   void upsert(const std::string& collection, const Document& doc,
               const ConsistencyLevel::type consistency) override;

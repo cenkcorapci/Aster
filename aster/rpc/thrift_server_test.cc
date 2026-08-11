@@ -104,7 +104,9 @@ TEST(ThriftServer, UpsertGetSearchLocalhost) {
   vc.__set_dimension(4);
   vc.__set_metric(DistanceMetric::COSINE);
   cfg.__set_vector(vc);
-  client->createCollection(cfg);
+  client->createCollection(cfg.name);
+  client->configureCollection(cfg);
+  client->createCollection("pending");
 
   const auto vec = MakeUnitVector(4, 7);
   Document doc;
@@ -112,6 +114,16 @@ TEST(ThriftServer, UpsertGetSearchLocalhost) {
   doc.__set_vector(EncodeVector(vec));
   doc.__set_tags({"even"});
   doc.__set_timestampMicros(1);
+
+  // Lifecycle gating: upsert is rejected until configureCollection() ran.
+  Document pending_doc = doc;
+  pending_doc.__set_id("p1");
+  try {
+    client->upsert("pending", pending_doc, ConsistencyLevel::ONE);
+    FAIL() << "expected upsert to throw for unconfigured collection";
+  } catch (const AsterError&) {
+  }
+
   client->upsert("demo", doc, ConsistencyLevel::ONE);
 
   Document got;
@@ -133,6 +145,97 @@ TEST(ThriftServer, UpsertGetSearchLocalhost) {
 
   server.Stop();
   th.join();
+}
+
+TEST(ThriftServer, CreateConfigurePersistsAfterRestart) {
+  const std::string dir = TempDir("aster_thrift_rpc_restart");
+
+  Catalog::Options opt;
+  opt.data_dir = dir;
+  opt.wal_sync = SyncPolicy::kNever;
+
+  // First boot: create+configure+upsert.
+  {
+    auto cat = Catalog::Open(opt);
+    ASSERT_TRUE(cat.ok()) << cat.status().message();
+    auto handler = std::make_shared<AsterHandler>(cat.value().get());
+    ThriftServer::Options sop;
+    sop.host = "127.0.0.1";
+    sop.port = 0;
+    ThriftServer server(sop, handler);
+    ASSERT_TRUE(server.Listen().ok());
+    const uint16_t port = server.port();
+
+    std::thread th([&] { server.Serve(); });
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    ThriftClient client(port);
+    CollectionConfig cfg;
+    cfg.__set_name("demo");
+    VectorConfig vc;
+    vc.__set_dimension(4);
+    vc.__set_metric(DistanceMetric::COSINE);
+    cfg.__set_vector(vc);
+    client->createCollection(cfg.name);
+    client->configureCollection(cfg);
+
+    const auto vec = MakeUnitVector(4, 7);
+    Document doc;
+    doc.__set_id("d1");
+    doc.__set_vector(EncodeVector(vec));
+    doc.__set_timestampMicros(1);
+    client->upsert("demo", doc, ConsistencyLevel::ONE);
+
+    Document got;
+    client->get(got, "demo", "d1", ConsistencyLevel::ONE);
+    EXPECT_EQ(got.id, "d1");
+
+    SearchRequest req;
+    req.__set_collection("demo");
+    req.__set_vector(EncodeVector(vec));
+    req.__set_topK(3);
+    SearchResponse resp;
+    client->search(resp, req);
+    ASSERT_FALSE(resp.hits.empty());
+    EXPECT_EQ(resp.hits[0].id, "d1");
+
+    server.Stop();
+    th.join();
+  }
+
+  // Second boot: data must still be visible via RPC.
+  {
+    auto cat = Catalog::Open(opt);
+    ASSERT_TRUE(cat.ok()) << cat.status().message();
+    auto handler = std::make_shared<AsterHandler>(cat.value().get());
+    ThriftServer::Options sop;
+    sop.host = "127.0.0.1";
+    sop.port = 0;
+    ThriftServer server(sop, handler);
+    ASSERT_TRUE(server.Listen().ok());
+    const uint16_t port = server.port();
+
+    std::thread th([&] { server.Serve(); });
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    ThriftClient client(port);
+    Document got;
+    client->get(got, "demo", "d1", ConsistencyLevel::ONE);
+    EXPECT_EQ(got.id, "d1");
+
+    SearchRequest req;
+    req.__set_collection("demo");
+    const auto vec = MakeUnitVector(4, 7);
+    req.__set_vector(EncodeVector(vec));
+    req.__set_topK(3);
+    SearchResponse resp;
+    client->search(resp, req);
+    ASSERT_FALSE(resp.hits.empty());
+    EXPECT_EQ(resp.hits[0].id, "d1");
+
+    server.Stop();
+    th.join();
+  }
 }
 
 }  // namespace
