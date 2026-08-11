@@ -136,8 +136,7 @@ Result<Row> DecodeRow(const std::string& b) {
 
   if (!NeedBytes(4)) return Status::Corruption("wal vector dim truncated");
   const uint32_t dim = GetU32(b, o);
-  if (!NeedBytes(static_cast<size_t>(dim) * 4))
-    return Status::Corruption("wal vector truncated");
+  if (dim > (total - o) / 4) return Status::Corruption("wal vector truncated");
   row.vector.resize(dim);
   for (uint32_t i = 0; i < dim; ++i) {
     const uint32_t u = GetU32(b, o);
