@@ -98,6 +98,12 @@ class Db {
     bool background_index_build = true;
     HnswParams hnsw_params{};
     uint64_t hnsw_rng_seed = 1;
+    // Optional graph-merge optimization (docs/indexing.md §6.2).
+    // When enabled, some compactions try to reuse the largest input graph
+    // and insert the other inputs' live rows into it. If too many deleted
+    // ids become "ghost" traversal nodes, we fall back to rebuild-from-rows.
+    bool hnsw_compaction_insert_into_largest = false;
+    double hnsw_compaction_staleness_debt_threshold = 0.3;
 #endif
   };
 
@@ -150,6 +156,10 @@ class Db {
   std::vector<SegState> segment_index_states() const;
   // True when that segment's Search path uses the HNSW graph.
   std::vector<bool> segment_uses_hnsw() const;
+
+  // Number of vectors/nodes in the installed HNSW index for each segment.
+  // Returns 0 when the segment has no installed READY HNSW graph.
+  std::vector<size_t> segment_hnsw_index_sizes() const;
 
   // Synchronously run PENDING→BUILDING→READY for every live segment that is
   // still PENDING (and finish in-flight BUILDING). Used by tests; also safe

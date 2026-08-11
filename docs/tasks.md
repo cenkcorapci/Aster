@@ -96,7 +96,7 @@ Status updates happen in this file (see start-the-tasks.md § Claiming).
 | M2-T03 | done | index | M2-T02 | HNSW search with per-query `ef_search` | `aster/index/hnsw*` | Recall vs exact index on small fixture ≥ 0.9 @ high ef |
 | M2-T04 | done | db | M2-T03, M1-T09 | Wire PENDING→BUILDING→READY build state machine | `aster/db/`, `aster/storage/` | Segment searchable via exact until READY; then graph; matches TLA SegState |
 | M2-T05 | done | index | M2-T02 | Compaction graph merge: rebuild-from-rows | `aster/index/`, `aster/storage/` | Compacted segment has one READY graph over live rows |
-| M2-T06 | open | index | M2-T05 | Compaction graph merge: insert-into-largest (optional opt) | `aster/index/hnsw*` | Benchmark shows win on skewed merges; staleness debt forces rebuild |
+| M2-T06 | done | index | M2-T05 | Compaction graph merge: insert-into-largest (optional opt) | `aster/index/hnsw*`, `aster/storage/segment*`, `aster/db/db*`, `aster/db/db_test.cc` | Staleness debt estimates force rebuild when ghost/deleted nodes accumulate; unit+integration tests pass |
 | M2-T07 | done | index | M1-T03 | Tag roaring bitmaps per segment + post-filter over-fetch | `aster/index/tags*`, `aster/db/` | Filtered search matches exact filter semantics; adaptive fetch_k |
 | M2-T08 | done | index | M0-T02 | SIMD distance: AVX2 + runtime dispatch | `aster/index/distance*` | Correct vs scalar; measurable speedup on supported CPU |
 | M2-T09 | done | index | M2-T08 | SIMD distance: AVX-512 + ARM NEON | `aster/index/distance*` | CI builds for amd64+arm64; dispatch selects best |

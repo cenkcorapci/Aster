@@ -55,6 +55,13 @@ class Segment {
     return index_state_ == SegState::kReady && hnsw_index_ != nullptr;
   }
 
+  // Number of vectors/nodes currently inside the installed HNSW index.
+  // Returns 0 when the segment has no installed HNSW graph (PENDING/BUILDING
+  // or Tiny / HNSW disabled builds).
+  size_t hnsw_index_size() const {
+    return hnsw_index_ ? hnsw_index_->size() : 0u;
+  }
+
   // PENDING → BUILDING. Returns false if not PENDING.
   bool TryBeginIndexBuild() const;
   // BUILDING → READY after installing `hnsw` (may be null on Tiny / empty).
@@ -110,7 +117,9 @@ std::shared_ptr<const Segment> CompactSegments(
     bool drop_tombstones
 #if ASTER_ENABLE_HNSW
     ,
-    HnswParams hnsw_params = {}, uint64_t hnsw_rng_seed = 1
+    HnswParams hnsw_params = {}, uint64_t hnsw_rng_seed = 1,
+    bool enable_insert_into_largest = false,
+    double insert_largest_staleness_debt_threshold = 0.3
 #endif
 );
 

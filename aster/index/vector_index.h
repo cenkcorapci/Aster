@@ -50,6 +50,12 @@ std::unique_ptr<VectorIndex> BuildHnswIndex(Metric metric, HnswParams params,
                                             std::vector<IndexEntry> entries,
                                             uint64_t rng_seed = 1);
 
+// Build an HNSW vector index from a pre-built graph and explicit vectors/ids
+// arrays (used by compaction merge strategies that reuse an in-memory graph).
+std::unique_ptr<VectorIndex> BuildHnswIndexFromGraph(
+    Metric metric, HnswGraph graph,
+    std::vector<std::vector<float>> vectors, std::vector<RowId> ids);
+
 // Compaction rebuild strategy (docs/indexing.md §6.2): fresh graph over
 // live (non-tombstone, non-empty) rows only — never merge input graphs.
 std::unique_ptr<VectorIndex> RebuildHnswFromLiveRows(

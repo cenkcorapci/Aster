@@ -125,6 +125,15 @@ class HnswIndex final : public VectorIndex {
 
 }  // namespace
 
+std::unique_ptr<VectorIndex> BuildHnswIndexFromGraph(
+    Metric metric, HnswGraph graph, std::vector<std::vector<float>> vectors,
+    std::vector<RowId> ids) {
+  // HnswIndex is defined in the anonymous namespace above; this factory
+  // provides an external linkage symbol for compaction merge strategies.
+  return std::make_unique<HnswIndex>(metric, std::move(graph),
+                                       std::move(vectors), std::move(ids));
+}
+
 std::vector<std::pair<uint32_t, float>> HnswSearch(
     Metric metric, const HnswGraph& graph,
     const std::vector<std::vector<float>>& vectors, VectorView query,

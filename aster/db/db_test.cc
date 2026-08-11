@@ -783,6 +783,86 @@ TEST(Db, CompactRebuildsSingleReadyGraphOverLiveRows) {
     EXPECT_NE(h.id, "b");
   }
 }
+
+// M2-T06: insert-into-largest can keep deleted ids as traversal ghosts.
+// With staleness debt threshold = 0, compaction must force rebuild-from-rows.
+TEST(Db, CompactInsertIntoLargestStalenessDebtForcesRebuild) {
+  Db::Options options = SmallDb();
+  options.background_index_build = false;
+  options.max_segments_before_compact = 0;
+  options.compaction_tier_threshold = 0;
+  options.hnsw_compaction_insert_into_largest = true;
+  options.hnsw_compaction_staleness_debt_threshold = 0.0;
+  Db db(options);
+
+  // Segment A: 4 live vectors.
+  ASSERT_TRUE(db.Upsert(MakeRow("a0", {1.0f, 0.0f}, 1)).ok());
+  ASSERT_TRUE(db.Upsert(MakeRow("a1", {0.8f, 0.2f}, 2)).ok());
+  ASSERT_TRUE(db.Upsert(MakeRow("a2", {0.2f, 0.8f}, 3)).ok());
+  ASSERT_TRUE(db.Upsert(MakeRow("a3", {0.0f, 1.0f}, 4)).ok());
+  ASSERT_TRUE(db.Flush().ok());
+
+  // Segment B: tombstones for 2 of them.
+  ASSERT_TRUE(db.Delete("a2", 100).ok());
+  ASSERT_TRUE(db.Delete("a3", 100).ok());
+  ASSERT_TRUE(db.Flush().ok());
+
+  ASSERT_EQ(db.segment_count(), 2u);
+  ASSERT_TRUE(db.Compact().ok());
+  ASSERT_EQ(db.segment_count(), 1u);
+  EXPECT_TRUE(db.segment_uses_hnsw()[0]);
+
+  // Rebuild skips deleted ids → 2 live nodes.
+  EXPECT_EQ(db.segment_hnsw_index_sizes()[0], 2u);
+
+  SearchRequest req;
+  req.vector = {1.0f, 0.0f};
+  req.top_k = 2;
+  req.ef_search = 64;
+  auto hits = db.Search(req);
+  ASSERT_EQ(hits.size(), 2u);
+  EXPECT_EQ(hits[0].id, "a0");
+  EXPECT_EQ(hits[1].id, "a1");
+}
+
+// With a high staleness threshold, insert-into-largest may keep deleted ids
+// as ghost nodes, so the installed HNSW node count can exceed the number of
+// live rows after compaction.
+TEST(Db, CompactInsertIntoLargestKeepsGhostNodesWhenUnderThreshold) {
+  Db::Options options = SmallDb();
+  options.background_index_build = false;
+  options.max_segments_before_compact = 0;
+  options.compaction_tier_threshold = 0;
+  options.hnsw_compaction_insert_into_largest = true;
+  options.hnsw_compaction_staleness_debt_threshold = 1.0;
+  Db db(options);
+
+  ASSERT_TRUE(db.Upsert(MakeRow("a0", {1.0f, 0.0f}, 1)).ok());
+  ASSERT_TRUE(db.Upsert(MakeRow("a1", {0.8f, 0.2f}, 2)).ok());
+  ASSERT_TRUE(db.Upsert(MakeRow("a2", {0.2f, 0.8f}, 3)).ok());
+  ASSERT_TRUE(db.Upsert(MakeRow("a3", {0.0f, 1.0f}, 4)).ok());
+  ASSERT_TRUE(db.Flush().ok());
+
+  ASSERT_TRUE(db.Delete("a2", 100).ok());
+  ASSERT_TRUE(db.Delete("a3", 100).ok());
+  ASSERT_TRUE(db.Flush().ok());
+
+  ASSERT_TRUE(db.Compact().ok());
+  EXPECT_EQ(db.segment_count(), 1u);
+  EXPECT_TRUE(db.segment_uses_hnsw()[0]);
+
+  // Insert path reuses largest input graph → still 4 nodes (2 are ghosts).
+  EXPECT_EQ(db.segment_hnsw_index_sizes()[0], 4u);
+
+  SearchRequest req;
+  req.vector = {1.0f, 0.0f};
+  req.top_k = 2;
+  req.ef_search = 64;
+  auto hits = db.Search(req);
+  ASSERT_EQ(hits.size(), 2u);
+  EXPECT_EQ(hits[0].id, "a0");
+  EXPECT_EQ(hits[1].id, "a1");
+}
 #endif  // ASTER_ENABLE_HNSW
 
 TEST(Db, MemoryBudgetRejectsOversizedWrite) {

@@ -872,7 +872,9 @@ Status Db::CompactSelectedLocked(const std::vector<size_t>& indices) {
                                    /*drop_tombstones=*/full_overlap
 #if ASTER_ENABLE_HNSW
                                    ,
-                                   options_.hnsw_params, options_.hnsw_rng_seed
+                                   options_.hnsw_params, options_.hnsw_rng_seed,
+                                   options_.hnsw_compaction_insert_into_largest,
+                                   options_.hnsw_compaction_staleness_debt_threshold
 #endif
   );
   const bool omit_empty = full_overlap && compacted->row_count() == 0;
@@ -1027,6 +1029,16 @@ std::vector<bool> Db::segment_uses_hnsw() const {
   out.reserve(segments_.size());
   for (const auto& seg : segments_) {
     out.push_back(seg->search_uses_hnsw());
+  }
+  return out;
+}
+
+std::vector<size_t> Db::segment_hnsw_index_sizes() const {
+  std::lock_guard lock(mu_);
+  std::vector<size_t> out;
+  out.reserve(segments_.size());
+  for (const auto& seg : segments_) {
+    out.push_back(seg->hnsw_index_size());
   }
   return out;
 }
