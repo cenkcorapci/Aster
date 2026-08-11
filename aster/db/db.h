@@ -38,12 +38,17 @@
 #include <thread>
 #include <vector>
 
+#include "aster/core/features.h"
 #include "aster/core/status.h"
 #include "aster/core/types.h"
 #include "aster/core/version.h"
 #include "aster/storage/memtable.h"
 #include "aster/storage/segment.h"
 #include "aster/storage/wal.h"
+
+#if ASTER_ENABLE_HNSW
+#include "aster/index/hnsw_graph.h"
+#endif
 
 namespace aster {
 
@@ -81,6 +86,14 @@ class Db {
     // Optional hard cap: full-compact when total segment count reaches this.
     // 0 disables the cap. Kept as a safety net beside size-tiered policy.
     size_t max_segments_before_compact = 8;
+#if ASTER_ENABLE_HNSW
+    // Background PENDING→BUILDING→READY HNSW builds (docs/indexing.md §4.3).
+    // When false, Flush still leaves segments PENDING (exact search) until
+    // BuildPendingIndexes() or the index thread is re-enabled.
+    bool background_index_build = true;
+    HnswParams hnsw_params{};
+    uint64_t hnsw_rng_seed = 1;
+#endif
   };
 
   // In-memory or caller-managed durable setup. Starts the background flush
@@ -126,6 +139,16 @@ class Db {
   // Memtable + all segment rows (includes tombstones until compacted).
   size_t approximate_row_count() const;
 
+  // Per-segment index build states (oldest first). Empty when no segments.
+  std::vector<SegState> segment_index_states() const;
+  // True when that segment's Search path uses the HNSW graph.
+  std::vector<bool> segment_uses_hnsw() const;
+
+  // Synchronously run PENDING→BUILDING→READY for every live segment that is
+  // still PENDING (and finish in-flight BUILDING). Used by tests; also safe
+  // for callers that want READY before returning from Flush-heavy workloads.
+  Status BuildPendingIndexes();
+
   // Immutable after construction; safe to read without calling other methods.
   const std::string& data_dir() const { return options_.data_dir; }
 
@@ -136,6 +159,10 @@ class Db {
   void StartFlushThread();
   void StopFlushThread();
   void BackgroundFlushLoop();
+  void StartIndexThread();
+  void StopIndexThread();
+  void BackgroundIndexLoop();
+  void RequestIndexBuildLocked();
   bool ShouldFlushLocked() const;
   void RequestFlushLocked();
   Status FlushLocked();
@@ -144,13 +171,20 @@ class Db {
   // (all live segments) purge tombstones; partial merges keep them.
   Status CompactSelectedLocked(const std::vector<size_t>& indices);
 
+  // Builds HNSW for `segment` outside mu_. On success installs READY under
+  // mu_ if the segment is still live and BUILDING. Persists .hnsw when
+  // durable. Returns false if the segment was dropped or aborted.
+  bool BuildOneSegmentIndex(std::shared_ptr<const Segment> segment);
+
   Row Reconcile(const RowId& id) const;
   Status AppendWal(const Row& row);
   Status PublishManifest();
   Status MaybeCompact();
-  // Deletes seg_*.ast / *.tmp files not referenced by the live segment set.
+  // Deletes seg_*.ast / *.tmp / orphan .hnsw files not in the live set.
   void GarbageCollectOrphans();
   std::string SegmentPath(uint64_t id) const;
+  std::string HnswPath(uint64_t id) const;
+  std::string HnswRelativePath(uint64_t id) const;
   std::string ManifestPath() const;
   std::string WalPath() const;
 
@@ -166,6 +200,10 @@ class Db {
   std::thread flush_thread_;
   bool stop_flush_thread_ = false;
   bool flush_requested_ = false;
+  std::condition_variable index_cv_;
+  std::thread index_thread_;
+  bool stop_index_thread_ = false;
+  bool index_build_requested_ = false;
   std::chrono::steady_clock::time_point memtable_live_since_{};
 };
 

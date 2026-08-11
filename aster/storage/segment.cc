@@ -74,6 +74,24 @@ std::shared_ptr<const Segment> Segment::Build(uint64_t id, Metric metric,
                std::make_shared<std::vector<Row>>(std::move(rows)));
 }
 
+bool Segment::TryBeginIndexBuild() const {
+  if (index_state_ != SegState::kPending) return false;
+  index_state_ = SegState::kBuilding;
+  return true;
+}
+
+void Segment::CompleteIndexBuild(std::unique_ptr<VectorIndex> hnsw) const {
+  if (index_state_ != SegState::kBuilding) return;
+  hnsw_index_ = std::move(hnsw);
+  index_state_ = SegState::kReady;
+}
+
+void Segment::AbortIndexBuild() const {
+  if (index_state_ != SegState::kBuilding) return;
+  hnsw_index_.reset();
+  index_state_ = SegState::kPending;
+}
+
 std::optional<Row> Segment::Get(const RowId& row_id) const {
   const auto& rows = *rows_;
   auto it = std::lower_bound(
@@ -87,6 +105,10 @@ std::vector<SearchHit> Segment::Search(
     VectorView query, uint32_t top_k, uint32_t ef_search,
     const std::set<std::string>& tags) const {
   if (tags.empty()) {
+    // docs/indexing.md §4.2: READY → HNSW; otherwise exact scan.
+    if (index_state_ == SegState::kReady && hnsw_index_ != nullptr) {
+      return hnsw_index_->Search(query, top_k, ef_search);
+    }
     return index_->Search(query, top_k, ef_search);
   }
   // Tag predicate: score only bitmap-matching ordinals so non-matches never

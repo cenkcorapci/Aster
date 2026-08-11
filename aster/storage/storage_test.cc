@@ -8,12 +8,17 @@
 
 #include "aster/index/bloom.h"
 #include "aster/core/features.h"
+#include "aster/index/vector_index.h"
 #include "aster/storage/compaction.h"
 #include "aster/storage/manifest.h"
 #include "aster/storage/memtable.h"
 #include "aster/storage/segment.h"
 #include "aster/storage/sstable.h"
 #include "aster/storage/wal.h"
+
+#if ASTER_ENABLE_HNSW
+#include "aster/index/hnsw_graph.h"
+#endif
 
 namespace aster {
 namespace {
@@ -229,6 +234,48 @@ TEST(Segment, EmptySegment) {
   auto segment = Segment::Build(7, Metric::kCosine, std::vector<Row>{});
   EXPECT_EQ(segment->row_count(), 0u);
   EXPECT_TRUE(segment->Search(std::vector<float>{1.0f}, 5, 0).empty());
+}
+
+// Pins tla/AsterLsmIndex.tla SegState: PENDING → BUILDING → READY, with
+// BUILDING → PENDING on abort. Search stays exact until READY+HNSW.
+TEST(Segment, IndexBuildStateMachine) {
+  auto segment = Segment::Build(
+      1, Metric::kL2,
+      {MakeRow("a", {1.0f, 0.0f}, 10), MakeRow("b", {0.0f, 1.0f}, 10)});
+  EXPECT_EQ(segment->index_state(), SegState::kPending);
+  EXPECT_FALSE(segment->search_uses_hnsw());
+
+  const std::vector<float> query = {1.0f, 0.0f};
+  auto pending_hits = segment->Search(query, 1, 32);
+  ASSERT_EQ(pending_hits.size(), 1u);
+  EXPECT_EQ(pending_hits[0].id, "a");
+
+  ASSERT_TRUE(segment->TryBeginIndexBuild());
+  EXPECT_EQ(segment->index_state(), SegState::kBuilding);
+  EXPECT_FALSE(segment->TryBeginIndexBuild());  // not PENDING
+  auto building_hits = segment->Search(query, 1, 32);
+  ASSERT_EQ(building_hits.size(), 1u);
+  EXPECT_EQ(building_hits[0].id, "a");
+
+  segment->AbortIndexBuild();
+  EXPECT_EQ(segment->index_state(), SegState::kPending);
+
+  ASSERT_TRUE(segment->TryBeginIndexBuild());
+#if ASTER_ENABLE_HNSW
+  std::vector<IndexEntry> entries = {{"a", segment->rows()[0].vector},
+                                     {"b", segment->rows()[1].vector}};
+  auto hnsw = BuildHnswIndex(Metric::kL2, HnswParams{}, std::move(entries), 1);
+  segment->CompleteIndexBuild(std::move(hnsw));
+  EXPECT_EQ(segment->index_state(), SegState::kReady);
+  EXPECT_TRUE(segment->search_uses_hnsw());
+#else
+  segment->CompleteIndexBuild(nullptr);
+  EXPECT_EQ(segment->index_state(), SegState::kReady);
+  EXPECT_FALSE(segment->search_uses_hnsw());
+#endif
+  auto ready_hits = segment->Search(query, 1, 32);
+  ASSERT_EQ(ready_hits.size(), 1u);
+  EXPECT_EQ(ready_hits[0].id, "a");
 }
 
 TEST(Compaction, LwwMergeAndTombstonePurge) {
@@ -517,7 +564,7 @@ TEST(Manifest, AtomicSwapLeavesPriorGeneration) {
 
   Manifest m1;
   m1.generation = 1;
-  m1.segments.push_back({1, "seg_000001.ast"});
+  m1.segments.push_back({1, "seg_000001.ast", ""});
   ASSERT_TRUE(WriteManifest(path, m1).ok());
 
   {
@@ -530,14 +577,17 @@ TEST(Manifest, AtomicSwapLeavesPriorGeneration) {
   EXPECT_EQ(loaded.value().generation, 1u);
   ASSERT_EQ(loaded.value().segments.size(), 1u);
   EXPECT_EQ(loaded.value().segments[0].segment_id, 1u);
+  EXPECT_TRUE(loaded.value().segments[0].hnsw_path.empty());
 
   Manifest m2;
   m2.generation = 2;
-  m2.segments.push_back({2, "seg_000002.ast"});
+  m2.segments.push_back({2, "seg_000002.ast", "index/seg_000002.hnsw"});
   ASSERT_TRUE(WriteManifest(path, m2).ok());
   loaded = ReadManifest(path);
   ASSERT_TRUE(loaded.ok());
   EXPECT_EQ(loaded.value().generation, 2u);
+  ASSERT_EQ(loaded.value().segments.size(), 1u);
+  EXPECT_EQ(loaded.value().segments[0].hnsw_path, "index/seg_000002.hnsw");
   std::remove(path.c_str());
   std::remove((path + ".tmp").c_str());
 }

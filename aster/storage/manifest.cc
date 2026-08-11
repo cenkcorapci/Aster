@@ -9,7 +9,7 @@ namespace {
 // Simple line-oriented format (not JSON) to avoid dependencies:
 //   ASTMANIFEST1
 //   generation=<u64>
-//   segment=<id>\t<path>
+//   segment=<id>\t<path>[\t<hnsw_path>]
 //   ...
 constexpr const char* kMagic = "ASTMANIFEST1";
 
@@ -23,7 +23,11 @@ Status WriteManifest(const std::string& path, const Manifest& manifest) {
     out << kMagic << "\n";
     out << "generation=" << manifest.generation << "\n";
     for (const auto& e : manifest.segments) {
-      out << "segment=" << e.segment_id << "\t" << e.path << "\n";
+      out << "segment=" << e.segment_id << "\t" << e.path;
+      if (!e.hnsw_path.empty()) {
+        out << "\t" << e.hnsw_path;
+      }
+      out << "\n";
     }
     if (!out) return Status::IoError("write failed: " + tmp);
   }
@@ -51,7 +55,13 @@ Result<Manifest> ReadManifest(const std::string& path) {
       }
       ManifestEntry e;
       e.segment_id = std::stoull(line.substr(8, tab - 8));
-      e.path = line.substr(tab + 1);
+      const auto tab2 = line.find('\t', tab + 1);
+      if (tab2 == std::string::npos) {
+        e.path = line.substr(tab + 1);
+      } else {
+        e.path = line.substr(tab + 1, tab2 - tab - 1);
+        e.hnsw_path = line.substr(tab2 + 1);
+      }
       m.segments.push_back(std::move(e));
     }
   }

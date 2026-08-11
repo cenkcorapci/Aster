@@ -16,10 +16,16 @@
 
 #include "aster/index/distance.h"
 #include "aster/index/tags.h"
+#include "aster/index/vector_index.h"
 #include "aster/query/topk.h"
 #include "aster/storage/compaction.h"
 #include "aster/storage/manifest.h"
 #include "aster/storage/sstable.h"
+
+#if ASTER_ENABLE_HNSW
+#include "aster/index/hnsw_build.h"
+#include "aster/index/hnsw_graph.h"
+#endif
 
 namespace aster {
 namespace {
@@ -226,15 +232,70 @@ bool IsSegmentFileName(const std::string& name) {
   return name.find(".ast") != std::string::npos;
 }
 
+bool IsHnswFileName(const std::string& name) {
+  // seg_NNNNNN.hnsw or leftover .hnsw.tmp
+  if (name.rfind("seg_", 0) != 0) return false;
+  return name.find(".hnsw") != std::string::npos;
+}
+
+#if ASTER_ENABLE_HNSW
+std::unique_ptr<VectorIndex> BuildSegmentHnsw(Metric metric,
+                                              const HnswParams& params,
+                                              uint64_t rng_seed,
+                                              const std::vector<Row>& rows) {
+  std::vector<IndexEntry> entries;
+  entries.reserve(rows.size());
+  for (const Row& row : rows) {
+    if (row.tombstone || row.vector.empty()) continue;
+    entries.push_back({row.id, row.vector});
+  }
+  return BuildHnswIndex(metric, params, std::move(entries), rng_seed);
+}
+
+Status WriteHnswAtomic(const std::string& path, Metric metric,
+                       const HnswParams& params, uint64_t rng_seed,
+                       uint64_t segment_id, const std::vector<Row>& rows) {
+  std::vector<std::vector<float>> vectors;
+  std::vector<uint32_t> ordinals;
+  vectors.reserve(rows.size());
+  ordinals.reserve(rows.size());
+  for (uint32_t i = 0; i < rows.size(); ++i) {
+    const Row& row = rows[i];
+    if (row.tombstone || row.vector.empty()) continue;
+    ordinals.push_back(i);
+    vectors.emplace_back(row.vector.begin(), row.vector.end());
+  }
+  HnswBuilder builder(metric, params, rng_seed);
+  auto built = builder.Build(vectors, ordinals);
+  if (!built.ok()) return built.status();
+  built.value().set_segment_id(segment_id);
+
+  const std::string tmp = path + ".tmp";
+  if (auto st = built.value().WriteToFile(tmp); !st.ok()) {
+    ::remove(tmp.c_str());
+    return st;
+  }
+  if (std::rename(tmp.c_str(), path.c_str()) != 0) {
+    ::remove(tmp.c_str());
+    return Status::IoError("hnsw rename failed: " + path);
+  }
+  return Status::Ok();
+}
+#endif  // ASTER_ENABLE_HNSW
+
 }  // namespace
 
 Db::Db(Options options) : Db(std::move(options), DeferFlushThread{}) {
   StartFlushThread();
+  StartIndexThread();
 }
 
 Db::Db(Options options, DeferFlushThread) : options_(std::move(options)) {}
 
-Db::~Db() { StopFlushThread(); }
+Db::~Db() {
+  StopIndexThread();
+  StopFlushThread();
+}
 
 void Db::StartFlushThread() {
   stop_flush_thread_ = false;
@@ -248,6 +309,65 @@ void Db::StopFlushThread() {
   }
   flush_cv_.notify_all();
   if (flush_thread_.joinable()) flush_thread_.join();
+}
+
+void Db::StartIndexThread() {
+#if ASTER_ENABLE_HNSW
+  if (!options_.background_index_build) return;
+  stop_index_thread_ = false;
+  index_thread_ = std::thread([this] { BackgroundIndexLoop(); });
+#else
+  (void)0;
+#endif
+}
+
+void Db::StopIndexThread() {
+  {
+    std::lock_guard lock(mu_);
+    stop_index_thread_ = true;
+  }
+  index_cv_.notify_all();
+  if (index_thread_.joinable()) index_thread_.join();
+}
+
+void Db::RequestIndexBuildLocked() {
+#if ASTER_ENABLE_HNSW
+  if (!options_.background_index_build) return;
+  index_build_requested_ = true;
+  index_cv_.notify_one();
+#else
+  (void)0;
+#endif
+}
+
+void Db::BackgroundIndexLoop() {
+#if ASTER_ENABLE_HNSW
+  std::unique_lock lock(mu_);
+  while (!stop_index_thread_) {
+    index_cv_.wait(lock, [this] {
+      return stop_index_thread_ || index_build_requested_;
+    });
+    if (stop_index_thread_) break;
+    index_build_requested_ = false;
+
+    while (!stop_index_thread_) {
+      std::shared_ptr<const Segment> target;
+      for (const auto& seg : segments_) {
+        if (seg->index_state() == SegState::kPending &&
+            seg->TryBeginIndexBuild()) {
+          target = seg;
+          break;
+        }
+      }
+      if (!target) break;
+      lock.unlock();
+      (void)BuildOneSegmentIndex(std::move(target));
+      lock.lock();
+    }
+  }
+#else
+  (void)0;
+#endif
 }
 
 bool Db::ShouldFlushLocked() const {
@@ -296,6 +416,17 @@ std::string Db::SegmentPath(uint64_t id) const {
   return JoinPath(options_.data_dir, buf);
 }
 
+std::string Db::HnswRelativePath(uint64_t id) const {
+  char buf[80];
+  std::snprintf(buf, sizeof(buf), "index/seg_%06llu.hnsw",
+                static_cast<unsigned long long>(id));
+  return buf;
+}
+
+std::string Db::HnswPath(uint64_t id) const {
+  return JoinPath(options_.data_dir, HnswRelativePath(id));
+}
+
 std::string Db::ManifestPath() const {
   return JoinPath(options_.data_dir, "MANIFEST");
 }
@@ -307,12 +438,16 @@ std::string Db::WalPath() const {
 void Db::GarbageCollectOrphans() {
   if (options_.data_dir.empty()) return;
 
-  std::set<std::string> live;
+  std::set<std::string> live_ast;
+  std::set<std::string> live_hnsw;
   for (const auto& seg : segments_) {
     char name[64];
     std::snprintf(name, sizeof(name), "seg_%06llu.ast",
                   static_cast<unsigned long long>(seg->id()));
-    live.insert(name);
+    live_ast.insert(name);
+    if (seg->index_state() == SegState::kReady) {
+      live_hnsw.insert(HnswRelativePath(seg->id()));
+    }
   }
 
   DIR* dir = ::opendir(options_.data_dir.c_str());
@@ -325,16 +460,37 @@ void Db::GarbageCollectOrphans() {
       continue;
     }
     // seg_*.ast not in the manifest, or any seg_*.ast.tmp from a crashed write.
-    if (!IsSegmentFileName(name)) continue;
-    if (name.size() >= 4 && name.compare(name.size() - 4, 4, ".tmp") == 0) {
-      ::remove(JoinPath(options_.data_dir, name).c_str());
+    if (IsSegmentFileName(name)) {
+      if (name.size() >= 4 && name.compare(name.size() - 4, 4, ".tmp") == 0) {
+        ::remove(JoinPath(options_.data_dir, name).c_str());
+        continue;
+      }
+      if (live_ast.count(name) == 0) {
+        ::remove(JoinPath(options_.data_dir, name).c_str());
+      }
       continue;
-    }
-    if (live.count(name) == 0) {
-      ::remove(JoinPath(options_.data_dir, name).c_str());
     }
   }
   ::closedir(dir);
+
+  // GC index/ orphans (READY graphs for dropped segments).
+  const std::string index_dir = JoinPath(options_.data_dir, "index");
+  DIR* idir = ::opendir(index_dir.c_str());
+  if (!idir) return;
+  while (dirent* ent = ::readdir(idir)) {
+    const std::string name = ent->d_name;
+    if (name == "." || name == "..") continue;
+    if (!IsHnswFileName(name)) continue;
+    const std::string rel = std::string("index/") + name;
+    if (name.size() >= 4 && name.compare(name.size() - 4, 4, ".tmp") == 0) {
+      ::remove(JoinPath(index_dir, name).c_str());
+      continue;
+    }
+    if (live_hnsw.count(rel) == 0) {
+      ::remove(JoinPath(index_dir, name).c_str());
+    }
+  }
+  ::closedir(idir);
 }
 
 Result<std::unique_ptr<Db>> Db::Open(Options options) {
@@ -358,8 +514,26 @@ Result<std::unique_ptr<Db>> Db::Open(Options options) {
       auto reader = SstableReader::Open(path);
       if (!reader.ok()) return reader.status();
       auto rows = reader.value()->TakeAll();
-      db->segments_.push_back(Segment::Build(
-          entry.segment_id, db->options_.metric, std::move(rows)));
+      auto segment = Segment::Build(entry.segment_id, db->options_.metric,
+                                    std::move(rows));
+#if ASTER_ENABLE_HNSW
+      // READY graphs are derived data: if the manifest names a .hnsw and the
+      // file exists, rebuild the in-memory graph and mark READY. Missing or
+      // partial graphs stay PENDING (TLA: crash during BUILDING → PENDING).
+      const std::string hnsw_path =
+          entry.hnsw_path.empty()
+              ? db->HnswPath(entry.segment_id)
+              : JoinPath(db->options_.data_dir, entry.hnsw_path);
+      if (!entry.hnsw_path.empty() && FileExists(hnsw_path)) {
+        if (segment->TryBeginIndexBuild()) {
+          auto hnsw =
+              BuildSegmentHnsw(db->options_.metric, db->options_.hnsw_params,
+                               db->options_.hnsw_rng_seed, segment->rows());
+          segment->CompleteIndexBuild(std::move(hnsw));
+        }
+      }
+#endif
+      db->segments_.push_back(std::move(segment));
       db->next_segment_id_ =
           std::max(db->next_segment_id_, entry.segment_id + 1);
     }
@@ -386,6 +560,11 @@ Result<std::unique_ptr<Db>> Db::Open(Options options) {
   db->GarbageCollectOrphans();
   if (db->ShouldFlushLocked()) db->flush_requested_ = true;
   db->StartFlushThread();
+  db->StartIndexThread();
+  {
+    std::lock_guard lock(db->mu_);
+    db->RequestIndexBuildLocked();
+  }
   return db;
 }
 
@@ -401,7 +580,13 @@ Status Db::PublishManifest() {
     char name[64];
     std::snprintf(name, sizeof(name), "seg_%06llu.ast",
                   static_cast<unsigned long long>(seg->id()));
-    m.segments.push_back({seg->id(), name});
+    ManifestEntry entry;
+    entry.segment_id = seg->id();
+    entry.path = name;
+    if (seg->index_state() == SegState::kReady) {
+      entry.hnsw_path = HnswRelativePath(seg->id());
+    }
+    m.segments.push_back(std::move(entry));
   }
   return WriteManifest(ManifestPath(), m);
 }
@@ -518,6 +703,7 @@ Status Db::FlushLocked() {
   }
 
   segments_.push_back(std::move(segment));
+  RequestIndexBuildLocked();
 
   if (!options_.data_dir.empty()) {
     if (auto st = PublishManifest(); !st.ok()) return st;
@@ -631,6 +817,7 @@ Status Db::CompactSelectedLocked(const std::vector<size_t>& indices) {
   if (!inserted && !omit_empty) next.push_back(compacted);
 
   segments_ = std::move(next);
+  RequestIndexBuildLocked();
 
   if (!options_.data_dir.empty()) {
     if (auto st = PublishManifest(); !st.ok()) return st;
@@ -640,6 +827,103 @@ Status Db::CompactSelectedLocked(const std::vector<size_t>& indices) {
     GarbageCollectOrphans();
   }
   return Status::Ok();
+}
+
+bool Db::BuildOneSegmentIndex(std::shared_ptr<const Segment> segment) {
+#if ASTER_ENABLE_HNSW
+  if (!segment) return false;
+  if (segment->index_state() != SegState::kBuilding) return false;
+
+  std::unique_ptr<VectorIndex> hnsw =
+      BuildSegmentHnsw(options_.metric, options_.hnsw_params,
+                       options_.hnsw_rng_seed, segment->rows());
+
+  if (!options_.data_dir.empty()) {
+    if (auto st = EnsureDir(JoinPath(options_.data_dir, "index")); !st.ok()) {
+      std::lock_guard lock(mu_);
+      if (segment->index_state() == SegState::kBuilding) {
+        segment->AbortIndexBuild();
+      }
+      return false;
+    }
+    if (auto st = WriteHnswAtomic(HnswPath(segment->id()), options_.metric,
+                                  options_.hnsw_params, options_.hnsw_rng_seed,
+                                  segment->id(), segment->rows());
+        !st.ok()) {
+      std::lock_guard lock(mu_);
+      if (segment->index_state() == SegState::kBuilding) {
+        segment->AbortIndexBuild();
+      }
+      return false;
+    }
+  }
+
+  std::lock_guard lock(mu_);
+  bool live = false;
+  for (const auto& seg : segments_) {
+    if (seg.get() == segment.get()) {
+      live = true;
+      break;
+    }
+  }
+  if (!live || segment->index_state() != SegState::kBuilding) {
+    // Compacted away or aborted; leave any on-disk .hnsw for GC.
+    return false;
+  }
+  segment->CompleteIndexBuild(std::move(hnsw));
+  if (!options_.data_dir.empty()) {
+    (void)PublishManifest();
+  }
+  return true;
+#else
+  (void)segment;
+  return false;
+#endif
+}
+
+Status Db::BuildPendingIndexes() {
+#if ASTER_ENABLE_HNSW
+  for (;;) {
+    std::shared_ptr<const Segment> target;
+    {
+      std::lock_guard lock(mu_);
+      for (const auto& seg : segments_) {
+        if (seg->index_state() == SegState::kPending &&
+            seg->TryBeginIndexBuild()) {
+          target = seg;
+          break;
+        }
+      }
+    }
+    if (!target) return Status::Ok();
+    if (!BuildOneSegmentIndex(std::move(target))) {
+      // Aborted or compacted; continue draining remaining PENDING.
+      continue;
+    }
+  }
+#else
+  return Status::Ok();
+#endif
+}
+
+std::vector<SegState> Db::segment_index_states() const {
+  std::lock_guard lock(mu_);
+  std::vector<SegState> out;
+  out.reserve(segments_.size());
+  for (const auto& seg : segments_) {
+    out.push_back(seg->index_state());
+  }
+  return out;
+}
+
+std::vector<bool> Db::segment_uses_hnsw() const {
+  std::lock_guard lock(mu_);
+  std::vector<bool> out;
+  out.reserve(segments_.size());
+  for (const auto& seg : segments_) {
+    out.push_back(seg->search_uses_hnsw());
+  }
+  return out;
 }
 
 size_t Db::segment_count() const {

@@ -94,7 +94,7 @@ Status updates happen in this file (see start-the-tasks.md § Claiming).
 | M2-T01 | done | index | M1-T03 | HNSW graph data structures + on-disk graph file format | `aster/index/hnsw*`, `docs/` | Graph serialize/load round-trip; format note linked from indexing.md |
 | M2-T02 | done | index | M2-T01 | HNSW insert/build (`M`, `ef_construction`, `max_layers`) | `aster/index/hnsw*` | Build on fixture; neighbors within degree bounds; heuristic selection tested |
 | M2-T03 | done | index | M2-T02 | HNSW search with per-query `ef_search` | `aster/index/hnsw*` | Recall vs exact index on small fixture ≥ 0.9 @ high ef |
-| M2-T04 | open | db | M2-T03, M1-T09 | Wire PENDING→BUILDING→READY build state machine | `aster/db/`, `aster/storage/` | Segment searchable via exact until READY; then graph; matches TLA SegState |
+| M2-T04 | done | db | M2-T03, M1-T09 | Wire PENDING→BUILDING→READY build state machine | `aster/db/`, `aster/storage/` | Segment searchable via exact until READY; then graph; matches TLA SegState |
 | M2-T05 | open | index | M2-T02 | Compaction graph merge: rebuild-from-rows | `aster/index/`, `aster/storage/` | Compacted segment has one READY graph over live rows |
 | M2-T06 | open | index | M2-T05 | Compaction graph merge: insert-into-largest (optional opt) | `aster/index/hnsw*` | Benchmark shows win on skewed merges; staleness debt forces rebuild |
 | M2-T07 | done | index | M1-T03 | Tag roaring bitmaps per segment + post-filter over-fetch | `aster/index/tags*`, `aster/db/` | Filtered search matches exact filter semantics; adaptive fetch_k |

@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "aster/db/db.h"
+#include "aster/core/features.h"
 #include "aster/index/tags.h"
 #include "aster/storage/segment.h"
 
@@ -635,6 +636,110 @@ TEST(Db, SizeTieredPartialMergeKeepsTombstonesFullCompactPurges) {
   // Full-overlap purge dropped victim's tombstone (and shadowed big rows).
   EXPECT_EQ(db.approximate_row_count(), 6u);
 }
+
+#if ASTER_ENABLE_HNSW
+// M2-T04: flushed segments start PENDING (exact search); BuildPendingIndexes
+// advances PENDING→BUILDING→READY and switches Search onto the HNSW graph.
+TEST(Db, SegStatePendingThenReadySwitchesSearchPath) {
+  Db::Options options = SmallDb();
+  options.background_index_build = false;
+  options.max_segments_before_compact = 0;
+  Db db(options);
+
+  ASSERT_TRUE(db.Upsert(MakeRow("a", {1.0f, 0.0f}, 1)).ok());
+  ASSERT_TRUE(db.Upsert(MakeRow("b", {0.0f, 1.0f}, 2)).ok());
+  ASSERT_TRUE(db.Flush().ok());
+  ASSERT_EQ(db.segment_count(), 1u);
+
+  auto states = db.segment_index_states();
+  ASSERT_EQ(states.size(), 1u);
+  EXPECT_EQ(states[0], SegState::kPending);
+  EXPECT_FALSE(db.segment_uses_hnsw()[0]);
+
+  SearchRequest req;
+  req.vector = {1.0f, 0.0f};
+  req.top_k = 1;
+  req.ef_search = 64;
+  auto pending_hits = db.Search(req);
+  ASSERT_EQ(pending_hits.size(), 1u);
+  EXPECT_EQ(pending_hits[0].id, "a");
+
+  ASSERT_TRUE(db.BuildPendingIndexes().ok());
+  states = db.segment_index_states();
+  ASSERT_EQ(states.size(), 1u);
+  EXPECT_EQ(states[0], SegState::kReady);
+  EXPECT_TRUE(db.segment_uses_hnsw()[0]);
+
+  auto ready_hits = db.Search(req);
+  ASSERT_EQ(ready_hits.size(), 1u);
+  EXPECT_EQ(ready_hits[0].id, "a");
+}
+
+TEST(Db, BackgroundIndexBuildReachesReady) {
+  Db::Options options = SmallDb();
+  options.background_index_build = true;
+  options.max_segments_before_compact = 0;
+  Db db(options);
+
+  ASSERT_TRUE(db.Upsert(MakeRow("x", {1.0f, 0.0f}, 1)).ok());
+  ASSERT_TRUE(db.Flush().ok());
+
+  bool ready = false;
+  for (int i = 0; i < 200; ++i) {
+    auto states = db.segment_index_states();
+    if (!states.empty() && states[0] == SegState::kReady) {
+      ready = true;
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  EXPECT_TRUE(ready);
+  EXPECT_TRUE(db.segment_uses_hnsw()[0]);
+
+  SearchRequest req;
+  req.vector = {1.0f, 0.0f};
+  req.top_k = 1;
+  req.ef_search = 32;
+  auto hits = db.Search(req);
+  ASSERT_EQ(hits.size(), 1u);
+  EXPECT_EQ(hits[0].id, "x");
+}
+
+TEST(Db, DurableReadyGraphSurvivesReopen) {
+  const std::string dir = ::testing::TempDir() + "/aster_m2t04_hnsw";
+
+  {
+    Db::Options options = SmallDb();
+    options.data_dir = dir;
+    options.background_index_build = false;
+    options.max_segments_before_compact = 0;
+    options.wal_sync = SyncPolicy::kNever;
+    auto db = Db::Open(options);
+    ASSERT_TRUE(db.ok()) << db.status().message();
+    ASSERT_TRUE(db.value()->Upsert(MakeRow("r", {1.0f, 0.0f}, 1)).ok());
+    ASSERT_TRUE(db.value()->Flush().ok());
+    ASSERT_TRUE(db.value()->BuildPendingIndexes().ok());
+    EXPECT_EQ(db.value()->segment_index_states()[0], SegState::kReady);
+  }
+
+  Db::Options reopen = SmallDb();
+  reopen.data_dir = dir;
+  reopen.background_index_build = false;
+  reopen.wal_sync = SyncPolicy::kNever;
+  auto db = Db::Open(reopen);
+  ASSERT_TRUE(db.ok()) << db.status().message();
+  ASSERT_EQ(db.value()->segment_count(), 1u);
+  EXPECT_EQ(db.value()->segment_index_states()[0], SegState::kReady);
+  EXPECT_TRUE(db.value()->segment_uses_hnsw()[0]);
+
+  SearchRequest req;
+  req.vector = {1.0f, 0.0f};
+  req.top_k = 1;
+  auto hits = db.value()->Search(req);
+  ASSERT_EQ(hits.size(), 1u);
+  EXPECT_EQ(hits[0].id, "r");
+}
+#endif  // ASTER_ENABLE_HNSW
 
 }  // namespace
 }  // namespace aster
