@@ -56,7 +56,9 @@ struct SearchHit {
 struct SearchRequest {
   std::vector<float> vector;
   uint32_t top_k = 10;
-  uint32_t ef_search = 64;             // per-query recall/latency knob
+  // Per-query recall/latency knob.
+  // 0 means "collection/index default" (HNSW uses HnswParams::ef_search_default).
+  uint32_t ef_search = 0;
   std::set<std::string> tags;          // post-filter; empty = no filter
 };
 

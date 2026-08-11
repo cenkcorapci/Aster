@@ -32,3 +32,17 @@ cc_test(
         "@googletest//:gtest_main",
     ],
 )
+
+cc_test(
+    name = "accuracy_profile_test",
+    size = "small",
+    srcs = ["accuracy_profile_test.cc"],
+    target_compatible_with = select({
+        "//platforms:is_baremetal": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    }),
+    deps = [
+        ":db",
+        "@googletest//:gtest_main",
+    ],
+)

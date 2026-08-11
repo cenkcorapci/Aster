@@ -317,7 +317,15 @@ Db::Db(Options options) : Db(std::move(options), DeferFlushThread{}) {
   StartIndexThread();
 }
 
-Db::Db(Options options, DeferFlushThread) : options_(std::move(options)) {}
+Db::Db(Options options, DeferFlushThread) : options_(std::move(options)) {
+#if ASTER_ENABLE_HNSW
+  // Accuracy profiles map onto concrete HNSW params deterministically.
+  if (options_.accuracy_profile.has_value()) {
+    options_.hnsw_params =
+        HnswParamsFromAccuracyProfile(*options_.accuracy_profile);
+  }
+#endif
+}
 
 Db::~Db() {
   StopIndexThread();
@@ -726,10 +734,21 @@ std::vector<SearchHit> Db::Search(const SearchRequest& request) const {
   std::lock_guard lock(mu_);
   const double sigma =
       EstimateFilterSelectivity(memtable_, segments_, request.tags);
+  // `SearchRequest::ef_search==0` means "use the index default" (HNSW uses
+  // `HnswParams::ef_search_default`). We need that same effective value for
+  // filtered over-fetch selection so COST_OPTIMIZED..MAX_RECALL affects fetch
+  // deterministically too.
+#if ASTER_ENABLE_HNSW
+  const uint32_t ef_search_effective =
+      request.ef_search == 0 ? options_.hnsw_params.ef_search_default
+                             : request.ef_search;
+#else
+  const uint32_t ef_search_effective = request.ef_search;
+#endif
   const uint32_t fetch_k =
       request.tags.empty()
           ? BaseFetchK(request.top_k)
-          : AdaptiveFetchK(request.top_k, request.ef_search, sigma);
+          : AdaptiveFetchK(request.top_k, ef_search_effective, sigma);
   std::vector<std::vector<SearchHit>> candidates;
   candidates.reserve(1 + segments_.size());
   candidates.push_back(MemtableTopK(memtable_, options_.metric, request.vector,

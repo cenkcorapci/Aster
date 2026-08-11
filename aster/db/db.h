@@ -98,6 +98,10 @@ class Db {
     bool background_index_build = true;
     HnswParams hnsw_params{};
     uint64_t hnsw_rng_seed = 1;
+    // Optional accuracy preset that deterministically maps onto HNSW params
+    // (M8-T04). When set, it overrides `hnsw_params` for newly built READY
+    // graphs. (Already-built durable graphs still use their persisted params.)
+    std::optional<AccuracyProfile> accuracy_profile = std::nullopt;
     // Optional graph-merge optimization (docs/indexing.md §6.2).
     // When enabled, some compactions try to reuse the largest input graph
     // and insert the other inputs' live rows into it. If too many deleted

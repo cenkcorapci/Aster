@@ -588,8 +588,17 @@ query path is the memtable (single-writer, RCU-style snapshot reads in M1).
 | `shadowed_compact_threshold` | 0.3 | — | Shadow/tombstone fraction forcing compaction |
 | `fetch_k` policy | `2k+16` | — | Per-segment over-fetch, adaptive with filters |
 
-Accuracy profiles (`client-api.md`) map onto these: COST_OPTIMIZED
-(M=8, efc=50, efs=32) … MAX_RECALL (M=48, efc=500, efs=768).
+Accuracy profiles (`client-api.md`) map deterministically onto HNSW params:
+
+| Profile | `m` | `ef_construction` | `ef_search_default` | `max_layers` |
+| --- | ---: | ---: | ---: | ---: |
+| `COST_OPTIMIZED` | 8 | 50 | 32 | 16 |
+| `BALANCED` | 16 | 128 | 64 | 16 |
+| `HIGH_RECALL` | 32 | 250 | 256 | 16 |
+| `MAX_RECALL` | 48 | 500 | 768 | 16 |
+
+When a caller leaves `SearchRequest.ef_search=0`, HNSW uses the stored
+`ef_search_default` from the built segment graph.
 
 ## 12. References
 

@@ -22,6 +22,58 @@ struct HnswParams {
   uint32_t max_layers = 16;
 };
 
+// Product-level accuracy presets (docs/client-api.md).
+//
+// M8-T04 requires that picking a profile deterministically maps onto concrete
+// HNSW build/search parameters:
+//   - index build: HnswParams::m, ef_construction, max_layers
+//   - query default: HnswParams::ef_search_default (used when ef_search=0)
+enum class AccuracyProfile : uint8_t {
+  kCostOptimized = 0,
+  kBalanced = 1,
+  kHighRecall = 2,
+  kMaxRecall = 3,
+};
+
+inline constexpr const char* ToString(AccuracyProfile p) {
+  switch (p) {
+    case AccuracyProfile::kCostOptimized:
+      return "COST_OPTIMIZED";
+    case AccuracyProfile::kBalanced:
+      return "BALANCED";
+    case AccuracyProfile::kHighRecall:
+      return "HIGH_RECALL";
+    case AccuracyProfile::kMaxRecall:
+      return "MAX_RECALL";
+  }
+  return "UNKNOWN";
+}
+
+// Documented deterministic presets (docs/indexing.md §11).
+inline constexpr HnswParams HnswParamsFromAccuracyProfile(
+    AccuracyProfile profile) {
+  switch (profile) {
+    case AccuracyProfile::kCostOptimized:
+      // (M=8, efc=50, efs=32)
+      return HnswParams{/*m=*/8, /*ef_construction=*/50,
+                        /*ef_search_default=*/32, /*max_layers=*/16};
+    case AccuracyProfile::kBalanced:
+      // Default HNSW params.
+      return HnswParams{/*m=*/16, /*ef_construction=*/128,
+                        /*ef_search_default=*/64, /*max_layers=*/16};
+    case AccuracyProfile::kHighRecall:
+      // (M=32, efc=250, efs=256)
+      return HnswParams{/*m=*/32, /*ef_construction=*/250,
+                        /*ef_search_default=*/256, /*max_layers=*/16};
+    case AccuracyProfile::kMaxRecall:
+      // (M=48, efc=500, efs=768)
+      return HnswParams{/*m=*/48, /*ef_construction=*/500,
+                        /*ef_search_default=*/768, /*max_layers=*/16};
+  }
+  // Unreachable, keeps compilers happy for enums without a default clause.
+  return HnswParams{};
+}
+
 inline uint32_t HnswLayer0MaxDegree(const HnswParams& p) { return 2u * p.m; }
 
 // Immutable per-segment HNSW adjacency (topology only). Vectors live in the

@@ -209,7 +209,7 @@ Status updates happen in this file (see start-the-tasks.md § Claiming).
 | M8-T01 | done | cloud | M3-T04, M1-T05 | S3 backend complete (multipart, range GET, block cache) | `aster/platform/s3*` | Spot-kill recovery from S3 alone |
 | M8-T02 | done | cloud | M8-T01, M2-T01 | Pin HNSW upper layers locally for S3 segments | `aster/index/`, `aster/platform/` | Cold search latency within documented bound |
 | M8-T03 | open | cloud | M4-T04 | HOT/WARM/COLD storage modes | `aster/db/`, config | Mode switch behaves per client-api.md |
-| M8-T04 | open | cloud | M2-T02 | Accuracy profiles (COST_OPTIMIZED … MAX_RECALL) | `aster/db/`, `aster/index/` | Presets map to HNSW params; documented |
+| M8-T04 | done | cloud | M2-T02 | Accuracy profiles (COST_OPTIMIZED … MAX_RECALL) | `aster/db/`, `aster/index/` | Presets map to HNSW params; documented |
 | M8-T05 | open | cloud | M4-T04 | Per-collection resource limits + isolation levels | `aster/db/`, `aster/rpc/` | Limits enforced; Status on exceed |
 | M8-T06 | open | cloud | M4-T04 | Multi-tenancy: projects, API keys, quotas | `aster/rpc/`, auth | Key auth required; quota exceeded rejected |
 | M8-T07 | open | qa | M8-T01…T06 | Cold-start + cost model benchmark | `docs/`, `aster/qa/` | Numbers published |
