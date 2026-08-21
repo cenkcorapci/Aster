@@ -35,6 +35,7 @@ cc_library(
         "lib/cpp/src/thrift/server/TThreadedServer.cpp",
         "lib/cpp/src/thrift/transport/SocketCommon.cpp",
         "lib/cpp/src/thrift/transport/TBufferTransports.cpp",
+        "lib/cpp/src/thrift/transport/TNonblockingServerSocket.cpp",
         "lib/cpp/src/thrift/transport/TServerSocket.cpp",
         "lib/cpp/src/thrift/transport/TSocket.cpp",
         "lib/cpp/src/thrift/transport/TTransportException.cpp",
