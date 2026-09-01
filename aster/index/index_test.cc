@@ -13,6 +13,7 @@
 #if ASTER_ENABLE_HNSW
 #include "aster/index/hnsw_build.h"
 #include "aster/index/hnsw_search.h"
+#include "aster/index/hnsw_search_layer.h"
 #endif
 
 namespace aster {
@@ -469,6 +470,73 @@ TEST(HnswSearch, RebuildFromLiveRowsSkipsTombstones) {
     EXPECT_NE(h.id, "dead");
   }
 }
+TEST(HnswSearch, BruteForcePathMatchesExactForSmallGraph) {
+  HnswParams params;
+  params.m = 8;
+  params.ef_construction = 32;
+  params.ef_search_default = 16;
+  params.max_layers = 8;
+
+  std::vector<std::vector<float>> data;
+  for (int i = 0; i < 64; ++i) {
+    data.push_back({static_cast<float>(i % 8), static_cast<float>(i / 8)});
+  }
+  std::vector<IndexEntry> entries;
+  entries.reserve(data.size());
+  for (size_t i = 0; i < data.size(); ++i) {
+    entries.push_back({"row-" + std::to_string(i), data[i]});
+  }
+
+  std::vector<IndexEntry> exact_entries = entries;
+  std::vector<IndexEntry> hnsw_entries = entries;
+  auto exact = BuildExactIndex(Metric::kL2, std::move(exact_entries));
+  auto hnsw = BuildHnswIndex(Metric::kL2, params, std::move(hnsw_entries), /*rng_seed=*/11);
+  ASSERT_NE(hnsw, nullptr);
+  ASSERT_EQ(hnsw->size(), 64u);
+  ASSERT_LE(hnsw->size(), hnsw_internal::kBruteForceThreshold);
+
+  const std::vector<float> query = {3.5f, 3.5f};
+  constexpr uint32_t k = 10;
+  auto truth = exact->Search(query, k, 0);
+  auto approx = hnsw->Search(query, k, /*ef_search=*/16);
+  EXPECT_GE(RecallAtK(approx, truth), 0.95f);
+}
+
+TEST(HnswSearch, CosineNormCacheOverloadMatchesBuild) {
+  HnswParams params;
+  params.m = 8;
+  params.ef_construction = 32;
+  params.ef_search_default = 32;
+  params.max_layers = 8;
+
+  std::vector<std::vector<float>> data = {{1.0f, 0.0f}, {0.0f, 1.0f},
+                                          {0.7f, 0.7f}};
+  std::vector<IndexEntry> entries;
+  for (size_t i = 0; i < data.size(); ++i) {
+    entries.push_back({"r" + std::to_string(i), data[i]});
+  }
+  HnswBuilder builder(Metric::kCosine, params, 1);
+  auto built = builder.Build(data);
+  ASSERT_TRUE(built.ok());
+
+  const std::vector<float> query = {1.0f, 0.0f};
+  const auto via_build =
+      HnswSearch(Metric::kCosine, built.value(), data, query, 2, 32);
+  const auto norms = hnsw_internal::BuildNormCache(Metric::kCosine, data);
+  const auto via_cache = HnswSearch(Metric::kCosine, built.value(), data, norms,
+                                    query, 2, 32);
+  ASSERT_EQ(via_build.size(), via_cache.size());
+  for (size_t i = 0; i < via_build.size(); ++i) {
+    EXPECT_EQ(via_build[i].first, via_cache[i].first);
+    EXPECT_FLOAT_EQ(via_build[i].second, via_cache[i].second);
+  }
+
+  const std::vector<float> bad_norms = {1.0f};
+  EXPECT_TRUE(HnswSearch(Metric::kCosine, built.value(), data, bad_norms, query,
+                          2, 32)
+                  .empty());
+}
+
 #else
 TEST(HnswParams, TypeOmittedUnderTiny) {
   static_assert(ASTER_ENABLE_HNSW == 0);

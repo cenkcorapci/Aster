@@ -418,6 +418,7 @@ TEST(Integration, HnswSearchMatchesExactAfterFlush) {
   options.wal_sync = SyncPolicy::kNever;
   options.compaction_tier_threshold = 0;
   options.max_segments_before_compact = 0;
+  options.background_index_build = false;
 
   auto db = Db::Open(options);
   ASSERT_TRUE(db.ok());
@@ -427,25 +428,39 @@ TEST(Integration, HnswSearchMatchesExactAfterFlush) {
     for (int j = 0; j < 8; ++j) {
       v[j] = static_cast<float>((i + j) % 7) / 7.0f;
     }
-  double norm2 = 0.0;
-  for (float x : v) norm2 += x * x;
-  const float inv = norm2 > 0 ? static_cast<float>(1.0 / std::sqrt(norm2)) : 1.0f;
-  for (float& x : v) x *= inv;
+    double norm2 = 0.0;
+    for (float x : v) norm2 += x * x;
+    const float inv = norm2 > 0 ? static_cast<float>(1.0 / std::sqrt(norm2)) : 1.0f;
+    for (float& x : v) x *= inv;
     ASSERT_TRUE(db.value()
                     ->Upsert(MakeRow("d" + std::to_string(i), v,
-                                    static_cast<Timestamp>(i + 1)))
+                                     static_cast<Timestamp>(i + 1)))
                     .ok());
   }
   ASSERT_TRUE(db.value()->Flush().ok());
+  ASSERT_EQ(db.value()->segment_index_states()[0], SegState::kPending);
 
   SearchRequest req;
   req.vector = {1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
   req.top_k = 5;
+  const auto exact_hits = db.value()->Search(req);
+  ASSERT_FALSE(exact_hits.empty());
+
+  ASSERT_TRUE(db.value()->BuildPendingIndexes().ok());
+  ASSERT_TRUE(db.value()->segment_uses_hnsw()[0]);
+
   req.ef_search = 128;
   auto ann = db.value()->TrySearch(req);
   ASSERT_TRUE(ann.ok());
   ASSERT_FALSE(ann.value().empty());
-  EXPECT_GT(ann.value()[0].score, 0.5f);
+
+  std::set<std::string> truth;
+  for (const SearchHit& h : exact_hits) truth.insert(h.id);
+  size_t overlap = 0;
+  for (const SearchHit& h : ann.value()) {
+    if (truth.count(h.id) != 0) ++overlap;
+  }
+  EXPECT_GE(overlap, truth.size() * 4 / 5);
 }
 
 }  // namespace

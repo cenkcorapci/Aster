@@ -108,6 +108,43 @@ TEST(Catalog, CreateUpsertSearchPersist) {
   EXPECT_EQ(got.value()->id, "a");
 }
 
+#if ASTER_ENABLE_HNSW
+TEST(Catalog, FlushBuildsHnswSynchronously) {
+  const std::string dir = TempDir("aster_catalog_hnsw_flush");
+  Catalog::Options opt;
+  opt.data_dir = dir;
+  opt.wal_sync = SyncPolicy::kNever;
+  auto cat = Catalog::Open(opt);
+  ASSERT_TRUE(cat.ok());
+
+  CollectionInfo info;
+  info.name = "bench";
+  info.dimension = 4;
+  info.metric = Metric::kCosine;
+  ASSERT_TRUE(cat.value()->CreateCollection(info).ok());
+
+  for (int i = 0; i < 16; ++i) {
+    Row row;
+    row.id = "d" + std::to_string(i);
+    row.vector = MakeUnitVector(4, static_cast<uint32_t>(i));
+    row.timestamp = static_cast<Timestamp>(i + 1);
+    ASSERT_TRUE(cat.value()->Upsert("bench", row).ok());
+  }
+  ASSERT_TRUE(cat.value()->Flush("bench").ok());
+
+  const std::string hnsw_path = dir + "/bench/index/seg_000001.hnsw";
+  EXPECT_EQ(access(hnsw_path.c_str(), F_OK), 0);
+
+  SearchRequest req;
+  req.vector = MakeUnitVector(4, 99);
+  req.top_k = 3;
+  req.ef_search = 64;
+  auto hits = cat.value()->Search("bench", req);
+  ASSERT_TRUE(hits.ok());
+  ASSERT_FALSE(hits.value().empty());
+}
+#endif
+
 TEST(Catalog, DropCollectionDeletesDataDirectory) {
   const std::string dir = TempDir("aster_catalog_drop");
   Catalog::Options opt;
