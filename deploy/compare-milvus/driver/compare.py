@@ -96,12 +96,14 @@ def main() -> int:
             print(f"    aster upserted {n_loaded}/{args.vectors}", flush=True)
 
     t_flush0 = time.perf_counter()
-    aster.flush_all()
+    flush_stats = aster.flush_all()
     aster_flush = time.perf_counter() - t_flush0
     aster_load = {
         "vectors": n_loaded,
         "load_seconds": t_aster_load,
         "flush_seconds": aster_flush,
+        "memtable_flush_seconds": flush_stats["memtable_flush_seconds"],
+        "index_build_seconds": flush_stats["index_build_seconds"],
         "vectors_per_sec": n_loaded / t_aster_load if t_aster_load > 0 else 0.0,
     }
 

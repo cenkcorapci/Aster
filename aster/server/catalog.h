@@ -35,6 +35,12 @@ struct UsageStats {
   size_t memtable_rows = 0;
 };
 
+// Optional breakdown returned by Catalog::Flush (memtable seal vs HNSW build).
+struct CatalogFlushStats {
+  double memtable_flush_seconds = 0.0;
+  double index_build_seconds = 0.0;
+};
+
 // Multi-collection facade over aster::Db for the single-node SaaS kernel.
 // Layout under data_dir:
 //   CATALOG          — one line per collection:
@@ -84,7 +90,8 @@ class Catalog {
                                  const RowId& id) const;
   Result<std::vector<SearchHit>> Search(const std::string& collection,
                                         const SearchRequest& request) const;
-  Status Flush(const std::string& collection);
+  Status Flush(const std::string& collection,
+               CatalogFlushStats* stats = nullptr);
   Status Compact(const std::string& collection);
 
   UsageStats Usage() const;

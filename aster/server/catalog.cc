@@ -1,6 +1,7 @@
 #include "aster/server/catalog.h"
 
 #include <dirent.h>
+#include <chrono>
 #include <cstdio>
 #include <fstream>
 #include <string>
@@ -421,7 +422,8 @@ Result<std::vector<SearchHit>> Catalog::Search(
   return db->TrySearch(request);
 }
 
-Status Catalog::Flush(const std::string& collection) {
+Status Catalog::Flush(const std::string& collection,
+                      CatalogFlushStats* stats) {
   std::shared_ptr<Db> db;
   {
     std::lock_guard lock(mu_);
@@ -429,13 +431,21 @@ Status Catalog::Flush(const std::string& collection) {
     if (!got.ok()) return got.status();
     db = got.value();
   }
+  const auto t0 = std::chrono::steady_clock::now();
   auto st = db->Flush();
+  const auto t1 = std::chrono::steady_clock::now();
   if (!st.ok()) return st;
 #if ASTER_ENABLE_HNSW
-  return db->BuildPendingIndexes();
-#else
-  return Status::Ok();
+  st = db->BuildPendingIndexes();
 #endif
+  const auto t2 = std::chrono::steady_clock::now();
+  if (stats != nullptr) {
+    stats->memtable_flush_seconds =
+        std::chrono::duration<double>(t1 - t0).count();
+    stats->index_build_seconds =
+        std::chrono::duration<double>(t2 - t1).count();
+  }
+  return st;
 }
 
 Status Catalog::Compact(const std::string& collection) {

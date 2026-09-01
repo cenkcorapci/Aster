@@ -76,13 +76,18 @@ class AsterShardClient:
             for f in as_completed(futs):
                 f.result()
 
-    def flush(self) -> None:
+    def flush(self) -> dict[str, float]:
         r = self.session.post(
             self._url(f"/v1/collections/{self.collection}/flush"),
             timeout=self.timeout,
         )
         if r.status_code != 200:
             raise RuntimeError(f"flush: {r.status_code} {r.text}")
+        body = r.json()
+        return {
+            "memtable_flush_seconds": float(body.get("memtable_flush_seconds", 0.0)),
+            "index_build_seconds": float(body.get("index_build_seconds", 0.0)),
+        }
 
     def search(self, vector: Sequence[float], top_k: int, ef_search: int = 0) -> List[Tuple[str, float]]:
         body: dict[str, Any] = {"vector": list(map(float, vector)), "top_k": top_k}
@@ -141,9 +146,13 @@ class AsterCluster:
             total += len(batch_ids)
         return total
 
-    def flush_all(self) -> None:
+    def flush_all(self) -> dict[str, float]:
+        totals = {"memtable_flush_seconds": 0.0, "index_build_seconds": 0.0}
         for s in self.shards:
-            s.flush()
+            stats = s.flush()
+            totals["memtable_flush_seconds"] += stats["memtable_flush_seconds"]
+            totals["index_build_seconds"] += stats["index_build_seconds"]
+        return totals
 
     def search(self, vector: Sequence[float], top_k: int, ef_search: int = 0) -> Tuple[List[Tuple[str, float]], float]:
         t0 = time.perf_counter()

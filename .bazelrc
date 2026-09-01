@@ -86,12 +86,14 @@ build:linux_musl_amd64 --compilation_mode=opt
 build:linux_musl_amd64 --features=fully_static_link
 build:linux_musl_amd64 --dynamic_mode=off
 build:linux_musl_amd64 --strip=always
+build:linux_musl_amd64 --copt=-DASTER_NO_THRIFT_TLS
 
 build:linux_musl_arm64 --platforms=//platforms:linux_arm64_musl
 build:linux_musl_arm64 --compilation_mode=opt
 build:linux_musl_arm64 --features=fully_static_link
 build:linux_musl_arm64 --dynamic_mode=off
 build:linux_musl_arm64 --strip=always
+build:linux_musl_arm64 --copt=-DASTER_NO_THRIFT_TLS
 
 # ---------------------------------------------------------------------------
 # Arduino / MCU (Tiny profile, no POSIX disk backends).

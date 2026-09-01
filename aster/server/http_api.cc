@@ -271,14 +271,20 @@ HttpResponse ApiHandler::Handle(const HttpRequest& req) const {
     const std::string& action = parts[3];
     if (action == "flush" && req.method == "POST") {
       const auto t0 = std::chrono::steady_clock::now();
-      auto st = catalog_->Flush(name);
+      CatalogFlushStats flush_stats;
+      auto st = catalog_->Flush(name, &flush_stats);
       const auto ms =
           std::chrono::duration<double, std::milli>(
               std::chrono::steady_clock::now() - t0)
               .count();
       MetricsRegistry::Instance().Histogram("flush_latency_ms").Observe(ms);
       if (!st.ok()) return FromStatus(st);
-      return {200, "application/json", "{\"status\":\"flushed\"}"};
+      std::ostringstream os;
+      os << "{\"status\":\"flushed\""
+         << ",\"memtable_flush_seconds\":" << flush_stats.memtable_flush_seconds
+         << ",\"index_build_seconds\":" << flush_stats.index_build_seconds
+         << "}";
+      return {200, "application/json", os.str()};
     }
     if (action == "compact" && req.method == "POST") {
       auto st = catalog_->Compact(name);

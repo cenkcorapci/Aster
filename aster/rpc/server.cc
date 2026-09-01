@@ -13,11 +13,14 @@
 #include <thrift/server/TThreadedServer.h>
 #include <thrift/transport/TBufferTransports.h>
 #include <thrift/transport/TServerSocket.h>
-#include <thrift/transport/TSSLSocket.h>
 #include <thrift/transport/TTransportException.h>
 
-#include "Aster.h"
+#ifndef ASTER_NO_THRIFT_TLS
+#include <thrift/transport/TSSLSocket.h>
 #include "aster/rpc/tls_maybe_server_socket.h"
+#endif
+
+#include "Aster.h"
 
 namespace aster {
 namespace rpc {
@@ -73,6 +76,7 @@ Status ThriftServer::Listen() {
 
   try {
     if (options_.tls) {
+#ifndef ASTER_NO_THRIFT_TLS
       if (options_.tls_cert_file.empty() || options_.tls_key_file.empty()) {
         ::close(fd);
         return Status::InvalidArgument(
@@ -95,6 +99,11 @@ Status ThriftServer::Listen() {
 
       server_socket_ = std::make_shared<MaybeTLSServerSocket>(
           fd, att::SocketType::INET, tls_factory);
+#else
+      ::close(fd);
+      return Status::InvalidArgument(
+          "thrift listen: TLS is not available in static musl builds");
+#endif
     } else {
       server_socket_ = std::make_shared<att::TServerSocket>(
           fd, att::SocketType::INET);

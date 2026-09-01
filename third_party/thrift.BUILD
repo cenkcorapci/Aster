@@ -3,7 +3,8 @@
 # Builds the subset needed for generated types, service interfaces, and a
 # framed-TCP TThreadedServer (binary protocol, buffer/socket transports).
 # TLS/SSL is optional in Aster (M4-T03). We include the necessary TSSL*
-# transport pieces so `serve-rpc --tls ...` can run.
+# transport pieces so `serve-rpc --tls ...` can run on hosted builds.
+# Static musl images omit TLS (no cross-arch OpenSSL on the link line).
 
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 
@@ -15,6 +16,13 @@ exports_files(["LICENSE"])
 
 # Written by patch_cmds in MODULE.bazel (http_archive of apache/thrift).
 _CONFIG_H = "lib/cpp/src/thrift/config.h"
+
+_THRIFT_SSL_SRCS = glob(
+    [
+        "lib/cpp/src/thrift/transport/TSSL*.cpp",
+        "lib/cpp/src/thrift/transport/TNonblockingSSL*.cpp",
+    ],
+)
 
 cc_library(
     name = "thrift",
@@ -38,12 +46,10 @@ cc_library(
         "lib/cpp/src/thrift/transport/TServerSocket.cpp",
         "lib/cpp/src/thrift/transport/TSocket.cpp",
         "lib/cpp/src/thrift/transport/TTransportException.cpp",
-    ] + glob(
-        [
-            "lib/cpp/src/thrift/transport/TSSL*.cpp",
-            "lib/cpp/src/thrift/transport/TNonblockingSSL*.cpp",
-        ],
-    ) + glob(
+    ] + select({
+        "@//platforms:is_musl_static": [],
+        "//conditions:default": _THRIFT_SSL_SRCS,
+    }) + glob(
         [
             "lib/cpp/src/thrift/*.h",
             "lib/cpp/src/thrift/async/*.h",
@@ -89,6 +95,7 @@ cc_library(
         "openssl/include",
     ],
     linkopts = select({
+        "@//platforms:is_musl_static": ["-lpthread"],
         "@platforms//os:windows": [],
         "@platforms//os:macos": [
             "-lpthread",

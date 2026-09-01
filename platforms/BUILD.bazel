@@ -20,6 +20,11 @@ constraint_value(
     constraint_setting = ":libc",
 )
 
+config_setting(
+    name = "is_musl_static",
+    constraint_values = [":musl_static"],
+)
+
 constraint_value(
     name = "host_libc",
     constraint_setting = ":libc",

@@ -38,6 +38,8 @@ def render_text(report: Dict[str, Any]) -> str:
     lines.append(
         f"Aster  load={_fmt(al.get('load_seconds', 0))}s  "
         f"flush={_fmt(al.get('flush_seconds', 0))}s  "
+        f"memtable_flush={_fmt(al.get('memtable_flush_seconds', 0))}s  "
+        f"index_build={_fmt(al.get('index_build_seconds', 0))}s  "
         f"vps={_fmt(al.get('vectors_per_sec', 0))}"
     )
     lines.append(
