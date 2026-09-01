@@ -272,15 +272,25 @@ Result<std::vector<uint32_t>> HnswReadLayer0Neighbors(
 std::vector<std::pair<uint32_t, float>> HnswSearchPinned(
     Metric metric, const HnswUpperLayerPin& pin, HnswLayer0NeighborFn layer0,
     const std::vector<std::vector<float>>& vectors, VectorView query,
-    uint32_t top_k, uint32_t ef_search) {
+    uint32_t top_k, uint32_t ef_search,
+    const std::vector<float>* precomputed_norms) {
   if (pin.node_count() == 0 || top_k == 0 || query.empty()) return {};
   if (vectors.size() != pin.node_count()) return {};
   if (pin.entry_point() == HnswGraph::kNoEntry) return {};
   if (!layer0) return {};
 
-  const std::vector<float> norms = BuildNormCache(metric, vectors);
-  VectorStore store{&vectors, metric == Metric::kCosine ? &norms : nullptr,
-                    metric};
+  std::vector<float> owned_norms;
+  const std::vector<float>* norms_ptr = nullptr;
+  if (metric == Metric::kCosine) {
+    if (precomputed_norms != nullptr &&
+        precomputed_norms->size() == vectors.size()) {
+      norms_ptr = precomputed_norms;
+    } else {
+      owned_norms = BuildNormCache(metric, vectors);
+      norms_ptr = &owned_norms;
+    }
+  }
+  VectorStore store{&vectors, norms_ptr, metric};
   const float qnorm = QueryNorm(metric, query);
 
   const auto neighbors_fn = [&pin, layer0](uint32_t node, uint16_t layer) {

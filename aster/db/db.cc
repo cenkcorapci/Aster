@@ -599,10 +599,19 @@ Result<std::unique_ptr<Db>> Db::Open(Options options) {
               : JoinPath(db->options_.data_dir, entry.hnsw_path);
       if (!entry.hnsw_path.empty() && FileExists(hnsw_path)) {
         if (segment->TryBeginIndexBuild()) {
-          auto hnsw =
-              BuildSegmentHnsw(db->options_.metric, db->options_.hnsw_params,
-                               db->options_.hnsw_rng_seed, segment->rows());
-          segment->CompleteIndexBuild(std::move(hnsw));
+          auto loaded = HnswGraph::LoadFromFile(hnsw_path);
+          if (loaded.ok()) {
+            auto hnsw = LoadHnswIndexFromGraph(
+                db->options_.metric, std::move(loaded).value(),
+                segment->rows());
+            if (hnsw) {
+              segment->CompleteIndexBuild(std::move(hnsw));
+            } else {
+              segment->AbortIndexBuild();
+            }
+          } else {
+            segment->AbortIndexBuild();
+          }
         }
       }
 #endif

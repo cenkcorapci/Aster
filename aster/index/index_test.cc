@@ -537,6 +537,45 @@ TEST(HnswSearch, CosineNormCacheOverloadMatchesBuild) {
                   .empty());
 }
 
+TEST(HnswSearch, LoadHnswIndexFromGraphRoundTrip) {
+  HnswParams params;
+  params.m = 8;
+  params.ef_construction = 32;
+  params.ef_search_default = 32;
+  params.max_layers = 8;
+
+  std::vector<Row> rows;
+  rows.push_back(Row{.id = "a", .vector = {1.0f, 0.0f}, .timestamp = 1});
+  rows.push_back(Row{.id = "b", .vector = {0.0f, 1.0f}, .timestamp = 2});
+  rows.push_back(Row{.id = "c", .vector = {0.7f, 0.7f}, .timestamp = 3});
+
+  auto built = RebuildHnswFromLiveRows(Metric::kCosine, params, rows, 3);
+  ASSERT_NE(built, nullptr);
+  const std::vector<float> query = {1.0f, 0.0f};
+  const auto direct = built->Search(query, 2, 32);
+
+  const std::string path =
+      std::string(::testing::TempDir()) + "/aster_load_hnsw_graph.hnsw";
+  // Serialize via builder path used in production writes.
+  std::vector<std::vector<float>> vectors;
+  for (const Row& row : rows) vectors.push_back(row.vector);
+  HnswBuilder builder(Metric::kCosine, params, 3);
+  auto graph = builder.Build(vectors);
+  ASSERT_TRUE(graph.ok());
+  ASSERT_TRUE(graph.value().WriteToFile(path).ok());
+
+  auto loaded = HnswGraph::LoadFromFile(path);
+  ASSERT_TRUE(loaded.ok());
+  auto rehydrated =
+      LoadHnswIndexFromGraph(Metric::kCosine, std::move(loaded).value(), rows);
+  ASSERT_NE(rehydrated, nullptr);
+  const auto via_file = rehydrated->Search(query, 2, 32);
+  ASSERT_EQ(direct.size(), via_file.size());
+  for (size_t i = 0; i < direct.size(); ++i) {
+    EXPECT_EQ(direct[i].id, via_file[i].id);
+  }
+}
+
 #else
 TEST(HnswParams, TypeOmittedUnderTiny) {
   static_assert(ASTER_ENABLE_HNSW == 0);

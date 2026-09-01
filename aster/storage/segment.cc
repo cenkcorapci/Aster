@@ -15,6 +15,7 @@
 
 #include "aster/index/hnsw_build.h"
 #include "aster/index/hnsw_graph.h"
+#include "aster/index/hnsw_search_layer.h"
 #include "aster/index/vector_index.h"
 #endif
 
@@ -222,80 +223,21 @@ std::shared_ptr<const Segment> CompactSegments(
         return static_cast<uint8_t>(level);
       };
 
-      struct ScoredNode {
-        float score = 0.0f;  // higher is better
-        uint32_t id = 0;
-      };
-      struct BetterFirst {
-        bool operator()(const ScoredNode& a, const ScoredNode& b) const {
-          if (a.score != b.score) return a.score < b.score;
-          return a.id > b.id;
+      using hnsw_internal::BuildNormCache;
+      using hnsw_internal::QueryNorm;
+      using hnsw_internal::ScoredNode;
+      using hnsw_internal::SearchLayer;
+      using hnsw_internal::VectorStore;
+
+      auto AppendVector = [&](std::vector<std::vector<float>>& vectors,
+                              std::vector<float>& norms,
+                              const std::vector<float>& vec) {
+        vectors.push_back(vec);
+        if (metric == Metric::kCosine) {
+          float n2 = 0.0f;
+          for (float x : vec) n2 += x * x;
+          norms.push_back(std::sqrt(n2));
         }
-      };
-      struct WorseFirst {
-        bool operator()(const ScoredNode& a, const ScoredNode& b) const {
-          if (a.score != b.score) return a.score > b.score;
-          return a.id < b.id;
-        }
-      };
-
-      auto NodeScore = [&](VectorView query,
-                           const std::vector<std::vector<float>>& vectors,
-                           uint32_t id) -> float {
-        return Score(metric, query, vectors[id]);
-      };
-
-      auto SearchLayer = [&](VectorView query, const std::vector<uint32_t>& eps,
-                              uint32_t ef, uint16_t layer,
-                              const HnswGraph& graph,
-                              const std::vector<std::vector<float>>& vectors)
-          -> std::vector<ScoredNode> {
-        if (eps.empty() || ef == 0) return {};
-        std::unordered_set<uint32_t> visited;
-        visited.reserve(ef * 4);
-
-        std::priority_queue<ScoredNode, std::vector<ScoredNode>, BetterFirst>
-            candidates;
-        std::priority_queue<ScoredNode, std::vector<ScoredNode>, WorseFirst>
-            w;
-
-        for (uint32_t ep : eps) {
-          if (!visited.insert(ep).second) continue;
-          const float s = NodeScore(query, vectors, ep);
-          candidates.push({s, ep});
-          w.push({s, ep});
-        }
-        if (w.empty()) return {};
-        while (w.size() > ef) w.pop();
-
-        while (!candidates.empty()) {
-          const ScoredNode c = candidates.top();
-          candidates.pop();
-          if (c.score < w.top().score) break;
-
-          for (uint32_t e : graph.Neighbors(c.id, layer)) {
-            if (!visited.insert(e).second) continue;
-            const float s = NodeScore(query, vectors, e);
-            if (w.size() < ef || s > w.top().score) {
-              candidates.push({s, e});
-              w.push({s, e});
-              if (w.size() > ef) w.pop();
-            }
-          }
-        }
-
-        std::vector<ScoredNode> result;
-        result.reserve(w.size());
-        while (!w.empty()) {
-          result.push_back(w.top());
-          w.pop();
-        }
-        std::sort(result.begin(), result.end(),
-                  [](const ScoredNode& a, const ScoredNode& b) {
-                    if (a.score != b.score) return a.score > b.score;
-                    return a.id < b.id;
-                  });
-        return result;
       };
 
       auto MaxDegree = [&](uint16_t layer) -> uint32_t {
@@ -347,8 +289,13 @@ std::shared_ptr<const Segment> CompactSegments(
         std::vector<std::vector<float>> vectors =
             live_inputs[largest_idx].vectors;
         std::vector<RowId> ids = live_inputs[largest_idx].ids;
+        std::vector<float> norms = BuildNormCache(metric, vectors);
 
         std::mt19937_64 rng(hnsw_rng_seed + 1);
+
+        const auto graph_neighbors = [&graph](uint32_t node, uint16_t layer) {
+          return graph.Neighbors(node, layer);
+        };
 
         for (size_t si = 0; si < inputs.size(); ++si) {
           if (si == largest_idx) continue;
@@ -363,20 +310,24 @@ std::shared_ptr<const Segment> CompactSegments(
             const uint32_t row_ordinal = static_cast<uint32_t>(vectors.size());
             auto added = graph.AddNode(row_ordinal, level);
             if (!added.ok()) return Rebuild();
-            vectors.push_back(vec);
+            AppendVector(vectors, norms, vec);
             ids.push_back(id);
 
             const uint32_t node = added.value();
             if (node == 0) continue;
 
+            VectorStore store{&vectors,
+                              metric == Metric::kCosine ? &norms : nullptr,
+                              metric};
             VectorView query{vectors[node]};
+            const float qnorm = QueryNorm(metric, query);
             uint32_t ep = old_entry;
 
             // Greedy descent from previous top down to level+1.
             if (old_max_level > level) {
               for (uint16_t lc = old_max_level; lc > level; --lc) {
-                auto nearest =
-                    SearchLayer(query, {ep}, /*ef=*/1, lc, graph, vectors);
+                auto nearest = SearchLayer(store, query, qnorm, graph_neighbors,
+                                           {ep}, /*ef=*/1, lc);
                 if (!nearest.empty()) ep = nearest.front().id;
               }
             }
@@ -386,8 +337,8 @@ std::shared_ptr<const Segment> CompactSegments(
 
             for (int lc = static_cast<int>(insert_top); lc >= 0; --lc) {
               const uint16_t layer = static_cast<uint16_t>(lc);
-              auto found = SearchLayer(query, {ep}, hnsw_params.ef_construction,
-                                        layer, graph, vectors);
+              auto found = SearchLayer(store, query, qnorm, graph_neighbors,
+                                       {ep}, hnsw_params.ef_construction, layer);
 
               std::vector<std::pair<uint32_t, VectorView>> cands;
               cands.reserve(found.size());

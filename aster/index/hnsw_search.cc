@@ -65,6 +65,28 @@ std::unique_ptr<VectorIndex> BuildHnswIndexFromGraph(
                                       std::move(vectors), std::move(ids));
 }
 
+std::unique_ptr<VectorIndex> LoadHnswIndexFromGraph(
+    Metric metric, HnswGraph graph, const std::vector<Row>& rows) {
+  const uint32_t n = graph.node_count();
+  if (n == 0) {
+    return BuildHnswIndexFromGraph(metric, std::move(graph), {}, {});
+  }
+  std::vector<std::vector<float>> vectors;
+  std::vector<RowId> ids;
+  vectors.reserve(n);
+  ids.reserve(n);
+  for (uint32_t node = 0; node < n; ++node) {
+    const uint32_t ord = graph.RowOrdinal(node);
+    if (ord >= rows.size()) return nullptr;
+    const Row& row = rows[ord];
+    if (row.tombstone || row.vector.empty()) return nullptr;
+    vectors.emplace_back(row.vector.begin(), row.vector.end());
+    ids.push_back(row.id);
+  }
+  return BuildHnswIndexFromGraph(metric, std::move(graph), std::move(vectors),
+                                  std::move(ids));
+}
+
 std::vector<std::pair<uint32_t, float>> HnswSearch(
     Metric metric, const HnswGraph& graph,
     const std::vector<std::vector<float>>& vectors,

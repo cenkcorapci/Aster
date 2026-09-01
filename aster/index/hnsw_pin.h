@@ -103,7 +103,8 @@ using HnswLayer0NeighborFn =
 std::vector<std::pair<uint32_t, float>> HnswSearchPinned(
     Metric metric, const HnswUpperLayerPin& pin, HnswLayer0NeighborFn layer0,
     const std::vector<std::vector<float>>& vectors, VectorView query,
-    uint32_t top_k, uint32_t ef_search);
+    uint32_t top_k, uint32_t ef_search,
+    const std::vector<float>* precomputed_norms = nullptr);
 
 // Documented cold-search wall-clock bound for the M8-T02 FakeS3 fixture
 // (loopback, pin resident, LRU cleared). See docs/indexing.md §10.3.1.
