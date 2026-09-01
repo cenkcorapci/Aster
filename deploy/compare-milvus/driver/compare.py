@@ -164,7 +164,7 @@ def main() -> int:
 
     for qi in range(args.queries):
         q = queries[qi]
-        a_hits, a_ms = aster.search(q, args.top_k)
+        a_hits, a_ms = aster.search(q, args.top_k, ef_search=args.ef)
         m_hits, m_ms = milvus.search(q, args.top_k)
         aster_lat.append(a_ms)
         milvus_lat.append(m_ms)
@@ -198,7 +198,8 @@ def main() -> int:
         "accuracy": accuracy,
         "per_query": detailed,
         "milvus_index": {"type": "HNSW", "metric": "IP", "ef": args.ef, "M": 16},
-        "aster_search_mode": "exact_scatter_gather",
+        "aster_search_mode": "hnsw_scatter_gather",
+        "aster_ef_search": args.ef,
     }
     report["verdict"] = build_verdict(report)
     write_report(report, args.out_dir)

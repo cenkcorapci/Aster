@@ -429,7 +429,13 @@ Status Catalog::Flush(const std::string& collection) {
     if (!got.ok()) return got.status();
     db = got.value();
   }
-  return db->Flush();
+  auto st = db->Flush();
+  if (!st.ok()) return st;
+#if ASTER_ENABLE_HNSW
+  return db->BuildPendingIndexes();
+#else
+  return Status::Ok();
+#endif
 }
 
 Status Catalog::Compact(const std::string& collection) {

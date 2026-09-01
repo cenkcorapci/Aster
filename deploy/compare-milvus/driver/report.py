@@ -57,7 +57,7 @@ def render_text(report: Dict[str, Any]) -> str:
             f"p99={_fmt(s.get('p99_ms', 0))}  max={_fmt(s.get('max_ms', 0))}"
         )
     lines.append("")
-    lines.append("--- Result agreement (Aster exact = ground truth) ---")
+    lines.append("--- Result agreement (both HNSW ANN; Jaccard / overlap) ---")
     acc = report.get("accuracy", {})
     lines.append(
         f"mean Jaccard@{a.get('top_k')}: {_fmt(acc.get('mean_jaccard_at_k', 0))}  "
@@ -110,8 +110,8 @@ def build_verdict(report: Dict[str, Any]) -> Dict[str, Any]:
     top1 = float(acc.get("top1_agreement_rate", 0))
     notes = []
     notes.append(
-        "Aster search is exact (scatter-gather); Milvus uses HNSW ANN — "
-        "differences are expected unless ef is very high / corpus tiny."
+        "Aster search uses per-segment HNSW (scatter-gather across shards); "
+        "Milvus uses HNSW ANN — compare ef and corpus scale when interpreting recall."
     )
     al = report.get("aster_search", {}).get("avg_ms", 0)
     ml = report.get("milvus_search", {}).get("avg_ms", 0)
@@ -125,7 +125,7 @@ def build_verdict(report: Dict[str, Any]) -> Dict[str, Any]:
                 f"Aster search avg latency lower ({al:.2f}ms vs Milvus {ml:.2f}ms)."
             )
     if recall >= 0.99 and jaccard >= 0.99:
-        summary = "Results essentially match (Milvus recall≥0.99 vs Aster exact)."
+        summary = "Results essentially match (both HNSW ANN; overlap≥0.99)."
     elif recall >= 0.90:
         summary = (
             f"Close but not identical: mean Milvus recall@k={recall:.4f}, "

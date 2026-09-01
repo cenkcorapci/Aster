@@ -84,8 +84,10 @@ class AsterShardClient:
         if r.status_code != 200:
             raise RuntimeError(f"flush: {r.status_code} {r.text}")
 
-    def search(self, vector: Sequence[float], top_k: int) -> List[Tuple[str, float]]:
-        body = {"vector": list(map(float, vector)), "top_k": top_k}
+    def search(self, vector: Sequence[float], top_k: int, ef_search: int = 0) -> List[Tuple[str, float]]:
+        body: dict[str, Any] = {"vector": list(map(float, vector)), "top_k": top_k}
+        if ef_search > 0:
+            body["ef_search"] = ef_search
         t0 = time.perf_counter()
         r = self.session.post(
             self._url(f"/v1/collections/{self.collection}/search"),
@@ -104,7 +106,7 @@ class AsterShardClient:
 
 
 class AsterCluster:
-    """Client-side scatter-gather over Aster shards (distributed exact search)."""
+    """Client-side scatter-gather over Aster shards (HNSW per segment)."""
 
     def __init__(self, shard_urls: List[str], collection: str = "bench"):
         self.shards = [AsterShardClient(u, collection=collection) for u in shard_urls]
@@ -143,13 +145,13 @@ class AsterCluster:
         for s in self.shards:
             s.flush()
 
-    def search(self, vector: Sequence[float], top_k: int) -> Tuple[List[Tuple[str, float]], float]:
+    def search(self, vector: Sequence[float], top_k: int, ef_search: int = 0) -> Tuple[List[Tuple[str, float]], float]:
         t0 = time.perf_counter()
         # Over-fetch per shard so merge can reconstruct global top-k.
         per = top_k
         shard_hits = []
         for s in self.shards:
-            shard_hits.append(s.search(vector, per))
+            shard_hits.append(s.search(vector, per, ef_search=ef_search))
         merged = merge_topk(shard_hits, top_k)
         ms = (time.perf_counter() - t0) * 1000.0
         return merged, ms
