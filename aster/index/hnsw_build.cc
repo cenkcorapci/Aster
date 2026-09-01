@@ -6,94 +6,19 @@
 #include <cmath>
 #include <limits>
 #include <queue>
-#include <unordered_set>
 #include <utility>
 
 #include "aster/index/distance.h"
+#include "aster/index/hnsw_search_layer.h"
 
 namespace aster {
 namespace {
 
-struct ScoredNode {
-  float score = 0.0f;  // higher is better
-  uint32_t id = 0;
-};
-
-// Max-heap by score (best candidate first).
-struct BetterFirst {
-  bool operator()(const ScoredNode& a, const ScoredNode& b) const {
-    if (a.score != b.score) return a.score < b.score;
-    return a.id > b.id;
-  }
-};
-
-// Min-heap by score (worst of the current best at top).
-struct WorseFirst {
-  bool operator()(const ScoredNode& a, const ScoredNode& b) const {
-    if (a.score != b.score) return a.score > b.score;
-    return a.id < b.id;
-  }
-};
-
-float NodeScore(Metric metric, VectorView query,
-                const std::vector<std::vector<float>>& vectors, uint32_t id) {
-  return Score(metric, query, vectors[id]);
-}
-
-// Beam search on one layer. Returns up to `ef` nodes, best-first by score.
-std::vector<ScoredNode> SearchLayer(
-    Metric metric, VectorView query,
-    const std::vector<std::vector<float>>& vectors, const HnswGraph& graph,
-    const std::vector<uint32_t>& entry_points, uint32_t ef, uint16_t layer) {
-  if (entry_points.empty() || ef == 0) return {};
-
-  std::unordered_set<uint32_t> visited;
-  visited.reserve(ef * 4);
-
-  std::priority_queue<ScoredNode, std::vector<ScoredNode>, BetterFirst>
-      candidates;
-  std::priority_queue<ScoredNode, std::vector<ScoredNode>, WorseFirst> w;
-
-  for (uint32_t ep : entry_points) {
-    if (!visited.insert(ep).second) continue;
-    const float s = NodeScore(metric, query, vectors, ep);
-    candidates.push({s, ep});
-    w.push({s, ep});
-  }
-  if (w.empty()) return {};
-
-  while (w.size() > ef) w.pop();
-
-  while (!candidates.empty()) {
-    const ScoredNode c = candidates.top();
-    candidates.pop();
-    if (c.score < w.top().score) break;
-
-    for (uint32_t e : graph.Neighbors(c.id, layer)) {
-      if (!visited.insert(e).second) continue;
-      const float s = NodeScore(metric, query, vectors, e);
-      if (w.size() < ef || s > w.top().score) {
-        candidates.push({s, e});
-        w.push({s, e});
-        if (w.size() > ef) w.pop();
-      }
-    }
-  }
-
-  std::vector<ScoredNode> result;
-  result.reserve(w.size());
-  while (!w.empty()) {
-    result.push_back(w.top());
-    w.pop();
-  }
-  // Best first.
-  std::sort(result.begin(), result.end(),
-            [](const ScoredNode& a, const ScoredNode& b) {
-              if (a.score != b.score) return a.score > b.score;
-              return a.id < b.id;
-            });
-  return result;
-}
+using hnsw_internal::BuildNormCache;
+using hnsw_internal::QueryNorm;
+using hnsw_internal::ScoredNode;
+using hnsw_internal::SearchLayer;
+using hnsw_internal::VectorStore;
 
 uint32_t MaxDegree(const HnswParams& params, uint16_t layer) {
   return layer == 0 ? HnswLayer0MaxDegree(params) : params.m;
@@ -227,6 +152,13 @@ Result<HnswGraph> HnswBuilder::Build(
   HnswGraph graph(params_);
   if (vectors.empty()) return graph;
 
+  const std::vector<float> norms = BuildNormCache(metric_, vectors);
+  VectorStore store{&vectors, metric_ == Metric::kCosine ? &norms : nullptr,
+                    metric_};
+  const auto graph_neighbors = [&graph](uint32_t node, uint16_t layer) {
+    return graph.Neighbors(node, layer);
+  };
+
   for (uint32_t i = 0; i < static_cast<uint32_t>(vectors.size()); ++i) {
     const uint8_t level = SampleLevel();
     const uint16_t old_max_level = graph.max_level();
@@ -242,13 +174,15 @@ Result<HnswGraph> HnswBuilder::Build(
     }
 
     VectorView query{vectors[i]};
+    const float qnorm = QueryNorm(metric_, query);
     uint32_t ep = old_entry;
 
     // Greedy descent from the previous top down to level+1.
     if (old_max_level > level) {
       for (uint16_t lc = old_max_level; lc > level; --lc) {
         auto nearest =
-            SearchLayer(metric_, query, vectors, graph, {ep}, /*ef=*/1, lc);
+            SearchLayer(store, query, qnorm, graph_neighbors, {ep}, /*ef=*/1,
+                        lc);
         if (!nearest.empty()) ep = nearest.front().id;
       }
     }
@@ -257,7 +191,7 @@ Result<HnswGraph> HnswBuilder::Build(
         static_cast<uint16_t>(std::min<uint32_t>(old_max_level, level));
     for (int lc = static_cast<int>(insert_top); lc >= 0; --lc) {
       const auto layer = static_cast<uint16_t>(lc);
-      auto found = SearchLayer(metric_, query, vectors, graph, {ep},
+      auto found = SearchLayer(store, query, qnorm, graph_neighbors, {ep},
                                params_.ef_construction, layer);
       std::vector<std::pair<uint32_t, VectorView>> cands;
       cands.reserve(found.size());

@@ -22,6 +22,7 @@ cc_library(
         "hnsw_graph.h",
         "hnsw_pin.h",
         "hnsw_search.h",
+        "hnsw_search_layer.h",
         "tags.h",
         "vector_index.h",
     ],

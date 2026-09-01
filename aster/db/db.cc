@@ -1114,6 +1114,13 @@ bool Db::BuildOneSegmentIndex(std::shared_ptr<const Segment> segment) {
   std::unique_ptr<VectorIndex> hnsw =
       BuildSegmentHnsw(options_.metric, options_.hnsw_params,
                        options_.hnsw_rng_seed, segment->rows());
+  if (!hnsw) {
+    std::lock_guard lock(mu_);
+    if (segment->index_state() == SegState::kBuilding) {
+      segment->AbortIndexBuild();
+    }
+    return false;
+  }
 
   if (!options_.data_dir.empty()) {
     if (auto st = EnsureDir(JoinPath(options_.data_dir, "index")); !st.ok()) {
@@ -1176,21 +1183,40 @@ bool Db::BuildOneSegmentIndex(std::shared_ptr<const Segment> segment) {
 
 Status Db::BuildPendingIndexes() {
 #if ASTER_ENABLE_HNSW
+  std::unordered_map<uint64_t, int> failures;
+  constexpr int kMaxAttempts = 3;
+  Status last_error = Status::Ok();
+
   for (;;) {
     std::shared_ptr<const Segment> target;
+    uint64_t seg_id = 0;
     {
       std::lock_guard lock(mu_);
       for (const auto& seg : segments_) {
-        if (seg->index_state() == SegState::kPending &&
-            seg->TryBeginIndexBuild()) {
+        if (seg->index_state() != SegState::kPending) continue;
+        if (failures[seg->id()] >= kMaxAttempts) continue;
+        if (seg->TryBeginIndexBuild()) {
           target = seg;
+          seg_id = seg->id();
           break;
         }
       }
+      if (!target) {
+        for (const auto& seg : segments_) {
+          if (seg->index_state() == SegState::kPending) {
+            if (!last_error.ok()) return last_error;
+            return Status::IoError("index build incomplete: pending segments remain");
+          }
+        }
+        return last_error;
+      }
     }
-    if (!target) return Status::Ok();
     if (!BuildOneSegmentIndex(std::move(target))) {
-      // Aborted or compacted; continue draining remaining PENDING.
+      ++failures[seg_id];
+      if (failures[seg_id] >= kMaxAttempts) {
+        last_error = Status::IoError("index build failed for segment " +
+                                     std::to_string(seg_id));
+      }
       continue;
     }
   }

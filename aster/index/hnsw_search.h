@@ -24,6 +24,13 @@ std::vector<std::pair<uint32_t, float>> HnswSearch(
     const std::vector<std::vector<float>>& vectors, VectorView query,
     uint32_t top_k, uint32_t ef_search);
 
+// Fast path when cosine norms are precomputed (HnswIndex / compaction).
+std::vector<std::pair<uint32_t, float>> HnswSearch(
+    Metric metric, const HnswGraph& graph,
+    const std::vector<std::vector<float>>& vectors,
+    const std::vector<float>& norms, VectorView query, uint32_t top_k,
+    uint32_t ef_search);
+
 }  // namespace aster
 
 #endif  // ASTER_ENABLE_HNSW
