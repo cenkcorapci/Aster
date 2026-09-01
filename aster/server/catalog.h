@@ -8,6 +8,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "aster/core/features.h"
 #include "aster/core/status.h"
 #include "aster/core/types.h"
 #include "aster/db/db.h"
@@ -22,6 +23,12 @@ struct CollectionInfo {
   Metric metric = Metric::kCosine;
   StorageMode storage_mode = StorageMode::kHot;
   ResourceLimits resource_limits{};
+#if ASTER_ENABLE_HNSW
+  // 0 = Db default (m=16, ef_construction=128, ef_search_default=128).
+  uint32_t hnsw_m = 0;
+  uint32_t hnsw_ef_construction = 0;
+  uint32_t hnsw_ef_search_default = 0;
+#endif
 };
 
 struct UsageStats {

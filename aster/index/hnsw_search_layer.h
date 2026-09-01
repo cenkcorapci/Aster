@@ -153,13 +153,24 @@ std::vector<ScoredNode> SearchLayer(
 
   while (w.size() > ef) w.pop();
 
+  std::vector<uint32_t> pending;
+  pending.reserve(32);
+
   while (!candidates.empty()) {
     const ScoredNode c = candidates.top();
     candidates.pop();
     if (c.score < w.top().score) break;
 
+    pending.clear();
     for (uint32_t e : neighbors(c.id, layer)) {
       if (!visited.TestAndSet(e)) continue;
+      pending.push_back(e);
+    }
+    for (size_t pi = 0; pi < pending.size(); ++pi) {
+      const uint32_t e = pending[pi];
+      if (store.vectors != nullptr && pi + 1 < pending.size()) {
+        __builtin_prefetch(store.vectors->at(pending[pi + 1]).data(), 0, 1);
+      }
       const float s = NodeScore(store, query, qnorm, e);
       if (w.size() < ef || s > w.top().score) {
         candidates.push({s, e});

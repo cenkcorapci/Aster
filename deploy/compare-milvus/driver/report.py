@@ -50,6 +50,13 @@ def render_text(report: Dict[str, Any]) -> str:
         f"vps={_fmt(ml.get('vectors_per_sec', 0))}"
     )
     lines.append("")
+    hnsw = report.get("aster_index") or report.get("milvus_index") or {}
+    if hnsw:
+        lines.append(
+            f"HNSW  M={hnsw.get('M')}  efConstruction={hnsw.get('efConstruction')}  "
+            f"ef={hnsw.get('ef')}  metric={hnsw.get('metric', 'IP')}"
+        )
+        lines.append("")
     lines.append("--- Search latency (ms) ---")
     for name in ("aster_search", "milvus_search"):
         s = report.get(name, {})

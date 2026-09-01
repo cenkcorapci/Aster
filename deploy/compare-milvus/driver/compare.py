@@ -30,7 +30,14 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--queries", type=int, default=50)
     p.add_argument("--top-k", type=int, default=10)
     p.add_argument("--seed", type=int, default=42)
-    p.add_argument("--ef", type=int, default=128, help="Milvus HNSW ef search")
+    p.add_argument("--ef", type=int, default=128, help="HNSW ef search (both sides)")
+    p.add_argument("--hnsw-m", type=int, default=16, help="HNSW M (both sides)")
+    p.add_argument(
+        "--hnsw-ef-construction",
+        type=int,
+        default=200,
+        help="HNSW efConstruction (both sides)",
+    )
     p.add_argument("--target-vectors", type=int, default=0)
     p.add_argument("--host-ram-gb", type=float, default=0)
     p.add_argument("--usable-gb", type=float, default=0)
@@ -47,6 +54,14 @@ def main() -> int:
         print("no aster shard urls", file=sys.stderr)
         return 2
 
+    hnsw_index = {
+        "type": "HNSW",
+        "metric": "IP",
+        "M": args.hnsw_m,
+        "efConstruction": args.hnsw_ef_construction,
+        "ef": args.ef,
+    }
+
     scale = {
         "target_vectors": args.target_vectors or args.vectors,
         "actual_vectors": args.vectors,
@@ -60,6 +75,7 @@ def main() -> int:
         "scaled": bool(args.scaled),
         "bytes_per_vector": args.dimension * 4,
         "raw_corpus_gb": (args.vectors * args.dimension * 4) / (1024**3),
+        "hnsw": hnsw_index,
     }
     with open(os.path.join(args.out_dir, "scale.json"), "w", encoding="utf-8") as f:
         json.dump(scale, f, indent=2)
@@ -67,12 +83,19 @@ def main() -> int:
     print(f"==> connecting Aster shards ({len(shard_urls)})", flush=True)
     aster = AsterCluster(shard_urls)
     aster.wait_all()
-    aster.ensure_collections(args.dimension)
+    aster.ensure_collections(
+        args.dimension,
+        hnsw_m=args.hnsw_m,
+        hnsw_ef_construction=args.hnsw_ef_construction,
+        hnsw_ef_search=args.ef,
+    )
 
     print(f"==> connecting Milvus at {args.milvus_uri}", flush=True)
     milvus = MilvusCluster(
         uri=args.milvus_uri,
         dim=args.dimension,
+        m=args.hnsw_m,
+        ef_construction=args.hnsw_ef_construction,
         ef=args.ef,
     )
     milvus.connect()
@@ -115,42 +138,7 @@ def main() -> int:
     )
     print("==> Milvus insert + index", flush=True)
     chunk = max(args.batch_size, 256)
-    col = milvus._col
-    assert col is not None
-    t_ins = 0.0
-    for i in range(0, len(milvus_ids), chunk):
-        sl_ids = milvus_ids[i : i + chunk]
-        sl_vecs = all_mat[i : i + chunk]
-        t0 = time.perf_counter()
-        col.insert([list(sl_ids), sl_vecs.tolist()])
-        t_ins += time.perf_counter() - t0
-        if (i // chunk) % 10 == 0:
-            print(
-                f"    milvus inserted {min(i + chunk, len(milvus_ids))}/{len(milvus_ids)}",
-                flush=True,
-            )
-    t0 = time.perf_counter()
-    col.flush()
-    flush_s = time.perf_counter() - t0
-    index_params = {
-        "index_type": "HNSW",
-        "metric_type": "IP",
-        "params": {"M": 16, "efConstruction": 200},
-    }
-    t0 = time.perf_counter()
-    col.create_index(field_name="vector", index_params=index_params)
-    index_s = time.perf_counter() - t0
-    t0 = time.perf_counter()
-    col.load()
-    load_s = time.perf_counter() - t0
-    milvus_stats = {
-        "vectors": len(milvus_ids),
-        "insert_seconds": t_ins,
-        "flush_seconds": flush_s,
-        "index_seconds": index_s,
-        "load_seconds": load_s,
-        "vectors_per_sec": len(milvus_ids) / t_ins if t_ins > 0 else 0.0,
-    }
+    milvus_stats = milvus.load(milvus_ids, all_mat, batch_size=chunk)
 
     with open(os.path.join(args.out_dir, "aster_load.json"), "w", encoding="utf-8") as f:
         json.dump(aster_load, f, indent=2)
@@ -199,7 +187,8 @@ def main() -> int:
         "milvus_search": latency_stats(milvus_lat),
         "accuracy": accuracy,
         "per_query": detailed,
-        "milvus_index": {"type": "HNSW", "metric": "IP", "ef": args.ef, "M": 16},
+        "milvus_index": hnsw_index,
+        "aster_index": hnsw_index,
         "aster_search_mode": "hnsw_scatter_gather",
         "aster_ef_search": args.ef,
     }

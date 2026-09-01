@@ -11,6 +11,18 @@
 namespace aster {
 namespace {
 
+#if ASTER_ENABLE_HNSW
+void ApplyHnswParams(const CollectionInfo& info, Db::Options& db_opt) {
+  if (info.hnsw_m > 0) db_opt.hnsw_params.m = info.hnsw_m;
+  if (info.hnsw_ef_construction > 0) {
+    db_opt.hnsw_params.ef_construction = info.hnsw_ef_construction;
+  }
+  if (info.hnsw_ef_search_default > 0) {
+    db_opt.hnsw_params.ef_search_default = info.hnsw_ef_search_default;
+  }
+}
+#endif
+
 bool EnsureDir(const std::string& path) {
   if (path.empty()) return false;
   struct stat st {};
@@ -137,13 +149,16 @@ Status Catalog::Load() {
         std::string fields[5];
         size_t start = 0;
         for (int i = 0; i < 5; ++i) {
-          const size_t tab =
-              (i == 4) ? std::string::npos : lim.find('\t', start);
+          const size_t tab = lim.find('\t', start);
           fields[i] = (tab == std::string::npos)
                           ? lim.substr(start)
                           : lim.substr(start, tab - start);
-          if (tab == std::string::npos && i < 4) {
-            return Status::Corruption("bad CATALOG resource limits");
+          if (tab == std::string::npos) {
+            start = lim.size();
+            if (i < 4) {
+              return Status::Corruption("bad CATALOG resource limits");
+            }
+            break;
           }
           start = tab + 1;
         }
@@ -164,6 +179,37 @@ Status Catalog::Load() {
           return Status::Corruption("bad CATALOG isolation level");
         }
         info.resource_limits.isolation = *iso;
+#if ASTER_ENABLE_HNSW
+        if (start < lim.size()) {
+          std::string hnsw_rest = lim.substr(start);
+          std::string hnsw_fields[3];
+          size_t hs = 0;
+          for (int i = 0; i < 3; ++i) {
+            const size_t tab =
+                (i == 2) ? std::string::npos : hnsw_rest.find('\t', hs);
+            hnsw_fields[i] = (tab == std::string::npos)
+                                 ? hnsw_rest.substr(hs)
+                                 : hnsw_rest.substr(hs, tab - hs);
+            if (tab == std::string::npos && i < 2) break;
+            hs = tab + 1;
+          }
+          try {
+            if (!hnsw_fields[0].empty()) {
+              info.hnsw_m = static_cast<uint32_t>(std::stoul(hnsw_fields[0]));
+            }
+            if (!hnsw_fields[1].empty()) {
+              info.hnsw_ef_construction =
+                  static_cast<uint32_t>(std::stoul(hnsw_fields[1]));
+            }
+            if (!hnsw_fields[2].empty()) {
+              info.hnsw_ef_search_default =
+                  static_cast<uint32_t>(std::stoul(hnsw_fields[2]));
+            }
+          } catch (...) {
+            return Status::Corruption("bad CATALOG hnsw params");
+          }
+        }
+#endif
       }
     }
 
@@ -191,6 +237,9 @@ Status Catalog::Load() {
     db_opt.object_store = options_.object_store;
     db_opt.resource_limits = info.resource_limits;
     db_opt.memory_budget_bytes = info.resource_limits.memory_budget_bytes;
+#if ASTER_ENABLE_HNSW
+    ApplyHnswParams(info, db_opt);
+#endif
     auto db = Db::Open(db_opt);
     if (!db.ok()) return db.status();
     infos_[info.name] = info;
@@ -212,7 +261,12 @@ Status Catalog::PersistCatalog() const {
           << info.resource_limits.memory_budget_bytes << '\t'
           << info.resource_limits.max_qps << '\t'
           << info.resource_limits.storage_quota_bytes << '\t'
-          << ToString(info.resource_limits.isolation) << '\n';
+          << ToString(info.resource_limits.isolation)
+#if ASTER_ENABLE_HNSW
+          << '\t' << info.hnsw_m << '\t' << info.hnsw_ef_construction << '\t'
+          << info.hnsw_ef_search_default
+#endif
+          << '\n';
     }
   }
   if (std::rename(tmp.c_str(), path.c_str()) != 0) {
@@ -291,6 +345,9 @@ Status Catalog::ConfigureCollection(const CollectionInfo& info) {
   db_opt.object_store = options_.object_store;
   db_opt.resource_limits = info.resource_limits;
   db_opt.memory_budget_bytes = info.resource_limits.memory_budget_bytes;
+#if ASTER_ENABLE_HNSW
+  ApplyHnswParams(info, db_opt);
+#endif
   auto db = Db::Open(db_opt);
   if (!db.ok()) {
     // Best-effort rollback to the previous lifecycle phase.

@@ -11,12 +11,17 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <unordered_set>
 #include <unistd.h>
 #include <vector>
 
 #include "aster/server/catalog.h"
 #include "aster/server/http_api.h"
 #include "aster/server/json.h"
+
+#if ASTER_ENABLE_HNSW
+#include "aster/index/vector_index.h"
+#endif
 
 namespace aster {
 namespace {
@@ -142,6 +147,105 @@ TEST(Catalog, FlushBuildsHnswSynchronously) {
   auto hits = cat.value()->Search("bench", req);
   ASSERT_TRUE(hits.ok());
   ASSERT_FALSE(hits.value().empty());
+}
+
+TEST(Catalog, HnswParamsPersistAndApply) {
+  const std::string dir = TempDir("aster_catalog_hnsw_params");
+  Catalog::Options opt;
+  opt.data_dir = dir;
+  opt.wal_sync = SyncPolicy::kNever;
+  auto cat = Catalog::Open(opt);
+  ASSERT_TRUE(cat.ok());
+
+  CollectionInfo info;
+  info.name = "bench";
+  info.dimension = 4;
+  info.metric = Metric::kCosine;
+  info.hnsw_m = 16;
+  info.hnsw_ef_construction = 200;
+  info.hnsw_ef_search_default = 128;
+  ASSERT_TRUE(cat.value()->CreateCollection(info).ok());
+
+  auto got = cat.value()->GetCollection("bench");
+  ASSERT_TRUE(got.has_value());
+  EXPECT_EQ(got->hnsw_m, 16u);
+  EXPECT_EQ(got->hnsw_ef_construction, 200u);
+  EXPECT_EQ(got->hnsw_ef_search_default, 128u);
+
+  cat.value().reset();
+  auto reopened = Catalog::Open(opt);
+  ASSERT_TRUE(reopened.ok());
+  got = reopened.value()->GetCollection("bench");
+  ASSERT_TRUE(got.has_value());
+  EXPECT_EQ(got->hnsw_m, 16u);
+  EXPECT_EQ(got->hnsw_ef_construction, 200u);
+  EXPECT_EQ(got->hnsw_ef_search_default, 128u);
+}
+
+TEST(Catalog, RecallGateThroughDbPath) {
+  const std::string dir = TempDir("aster_catalog_recall_gate");
+  Catalog::Options opt;
+  opt.data_dir = dir;
+  opt.wal_sync = SyncPolicy::kNever;
+  opt.memtable_flush_bytes = 1 << 20;
+  auto cat = Catalog::Open(opt);
+  ASSERT_TRUE(cat.ok());
+
+  constexpr uint32_t kDim = 32;
+  constexpr uint32_t kBase = 512;
+  constexpr uint32_t kQuery = 32;
+  constexpr uint32_t kTopK = 10;
+  constexpr uint32_t kEfSearch = 128;
+  constexpr float kRecallFloor = 0.95f;
+
+  CollectionInfo info;
+  info.name = "recall";
+  info.dimension = kDim;
+  info.metric = Metric::kCosine;
+  info.hnsw_m = 16;
+  info.hnsw_ef_construction = 128;
+  info.hnsw_ef_search_default = kEfSearch;
+  ASSERT_TRUE(cat.value()->CreateCollection(info).ok());
+
+  std::vector<std::vector<float>> corpus;
+  corpus.reserve(kBase);
+  std::vector<IndexEntry> exact_entries;
+  exact_entries.reserve(kBase);
+  for (uint32_t i = 0; i < kBase; ++i) {
+    corpus.push_back(MakeUnitVector(kDim, i));
+    Row row;
+    row.id = "b" + std::to_string(i);
+    row.vector = corpus.back();
+    row.timestamp = static_cast<Timestamp>(i + 1);
+    exact_entries.push_back({row.id, corpus.back()});
+    ASSERT_TRUE(cat.value()->Upsert("recall", row).ok());
+  }
+  ASSERT_TRUE(cat.value()->Flush("recall").ok());
+
+  auto exact = BuildExactIndex(Metric::kCosine, std::move(exact_entries));
+
+  float sum_recall = 0.0f;
+  for (uint32_t q = 0; q < kQuery; ++q) {
+    const auto query = MakeUnitVector(kDim, 1000u + q);
+    SearchRequest req;
+    req.vector = query;
+    req.top_k = kTopK;
+    req.ef_search = kEfSearch;
+    auto approx = cat.value()->Search("recall", req);
+    ASSERT_TRUE(approx.ok());
+    auto truth = exact->Search(query, kTopK, /*ef_search=*/0);
+
+    std::unordered_set<std::string> truth_ids;
+    for (const auto& h : truth) truth_ids.insert(h.id);
+    size_t hits = 0;
+    for (const auto& h : approx.value()) {
+      if (truth_ids.count(h.id) != 0) ++hits;
+    }
+    sum_recall +=
+        static_cast<float>(hits) / static_cast<float>(truth_ids.size());
+  }
+  const float mean_recall = sum_recall / static_cast<float>(kQuery);
+  EXPECT_GE(mean_recall, kRecallFloor) << "mean recall@10=" << mean_recall;
 }
 #endif
 

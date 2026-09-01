@@ -191,7 +191,17 @@ HttpResponse ApiHandler::Handle(const HttpRequest& req) const {
       std::ostringstream os;
       os << "{\"name\":\"" << json::Escape(info->name)
          << "\",\"dimension\":" << info->dimension << ",\"metric\":\""
-         << Catalog::MetricToString(info->metric) << "\"}";
+         << Catalog::MetricToString(info->metric) << "\"";
+#if ASTER_ENABLE_HNSW
+      if (info->hnsw_m > 0) os << ",\"hnsw_m\":" << info->hnsw_m;
+      if (info->hnsw_ef_construction > 0) {
+        os << ",\"hnsw_ef_construction\":" << info->hnsw_ef_construction;
+      }
+      if (info->hnsw_ef_search_default > 0) {
+        os << ",\"hnsw_ef_search_default\":" << info->hnsw_ef_search_default;
+      }
+#endif
+      os << "}";
       return {200, "application/json", os.str()};
     }
     if (req.method == "PUT") {
@@ -242,6 +252,26 @@ HttpResponse ApiHandler::Handle(const HttpRequest& req) const {
         if (!level) return JsonStatus(400, "unknown isolation");
         info.resource_limits.isolation = *level;
       }
+#if ASTER_ENABLE_HNSW
+      if (auto hm = json::GetInt(req.body, "hnsw_m")) {
+        if (*hm <= 0) return JsonStatus(400, "hnsw_m invalid");
+        info.hnsw_m = static_cast<uint32_t>(*hm);
+      }
+      if (auto hefc = json::GetInt(req.body, "hnsw_ef_construction")) {
+        if (*hefc <= 0) return JsonStatus(400, "hnsw_ef_construction invalid");
+        info.hnsw_ef_construction = static_cast<uint32_t>(*hefc);
+      }
+      if (auto hefs = json::GetInt(req.body, "hnsw_ef_search")) {
+        if (*hefs <= 0) return JsonStatus(400, "hnsw_ef_search invalid");
+        info.hnsw_ef_search_default = static_cast<uint32_t>(*hefs);
+      }
+      if (auto hefs = json::GetInt(req.body, "hnsw_ef_search_default")) {
+        if (*hefs <= 0) {
+          return JsonStatus(400, "hnsw_ef_search_default invalid");
+        }
+        info.hnsw_ef_search_default = static_cast<uint32_t>(*hefs);
+      }
+#endif
       auto st = catalog_->CreateCollection(info);
       if (!st.ok()) {
         const std::string& msg = st.message();

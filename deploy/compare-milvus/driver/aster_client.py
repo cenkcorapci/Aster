@@ -33,11 +33,26 @@ class AsterShardClient:
             time.sleep(2)
         raise RuntimeError(f"aster not healthy at {self.base_url}: {last}")
 
-    def ensure_collection(self, dimension: int, metric: str = "cosine") -> None:
+    def ensure_collection(
+        self,
+        dimension: int,
+        metric: str = "cosine",
+        *,
+        hnsw_m: int = 0,
+        hnsw_ef_construction: int = 0,
+        hnsw_ef_search: int = 0,
+    ) -> None:
+        body: dict[str, object] = {"dimension": dimension, "metric": metric}
+        if hnsw_m > 0:
+            body["hnsw_m"] = hnsw_m
+        if hnsw_ef_construction > 0:
+            body["hnsw_ef_construction"] = hnsw_ef_construction
+        if hnsw_ef_search > 0:
+            body["hnsw_ef_search"] = hnsw_ef_search
         r = self.session.put(
             self._url(f"/v1/collections/{self.collection}"),
             headers={"Content-Type": "application/json"},
-            data=json.dumps({"dimension": dimension, "metric": metric}),
+            data=json.dumps(body),
             timeout=self.timeout,
         )
         if r.status_code in (200, 201):
@@ -121,9 +136,21 @@ class AsterCluster:
         for s in self.shards:
             s.wait_healthy()
 
-    def ensure_collections(self, dimension: int) -> None:
+    def ensure_collections(
+        self,
+        dimension: int,
+        *,
+        hnsw_m: int = 0,
+        hnsw_ef_construction: int = 0,
+        hnsw_ef_search: int = 0,
+    ) -> None:
         for s in self.shards:
-            s.ensure_collection(dimension)
+            s.ensure_collection(
+                dimension,
+                hnsw_m=hnsw_m,
+                hnsw_ef_construction=hnsw_ef_construction,
+                hnsw_ef_search=hnsw_ef_search,
+            )
 
     def upsert_routed(
         self,
