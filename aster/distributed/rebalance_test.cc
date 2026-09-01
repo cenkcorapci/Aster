@@ -90,5 +90,30 @@ TEST(Rebalance, NodesSorted) {
   EXPECT_EQ(n[1], "z");
 }
 
+TEST(Rebalance, AddDuplicateNodeIsNoOpPlan) {
+  Ring ring(8);
+  ring.AddNode("a");
+  auto plan = PlanAddNode(ring, "a", /*rf=*/2, {"k"});
+  EXPECT_TRUE(plan.durable_without_source);
+  EXPECT_TRUE(plan.migrations.empty());
+  EXPECT_EQ(plan.nodes_after, plan.nodes_before);
+}
+
+TEST(Rebalance, RemoveUnknownNodeNoOp) {
+  Ring ring(8);
+  ring.AddNode("a");
+  auto plan = PlanRemoveNode(ring, "ghost", /*rf=*/2, {"k"});
+  EXPECT_TRUE(plan.durable_without_source);
+  EXPECT_TRUE(plan.migrations.empty());
+}
+
+TEST(Rebalance, RemoveRfZeroIsNoOp) {
+  Ring ring(8);
+  ring.AddNode("a");
+  auto plan = PlanRemoveNode(ring, "a", /*rf=*/0, {"k"});
+  EXPECT_TRUE(plan.durable_without_source);
+  EXPECT_TRUE(plan.migrations.empty());
+}
+
 }  // namespace
 }  // namespace aster

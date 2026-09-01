@@ -695,5 +695,52 @@ TEST(SizeTiered, PrefersLowerTierWhenBothOverflow) {
   EXPECT_EQ(pick->input_indices.size(), 4u);
 }
 
+#if ASTER_ENABLE_HNSW
+TEST(Compaction, InsertIntoLargestWhenGhostFractionLow) {
+  std::vector<Row> big;
+  for (int i = 0; i < 40; ++i) {
+    big.push_back(MakeRow("id" + std::to_string(i),
+                          {static_cast<float>(i), static_cast<float>(i % 3)},
+                          static_cast<Timestamp>(i)));
+  }
+  std::vector<Row> small;
+  for (int i = 0; i < 5; ++i) {
+    small.push_back(MakeRow("new" + std::to_string(i),
+                            {static_cast<float>(i + 1), 0.5f},
+                            static_cast<Timestamp>(100 + i)));
+  }
+  auto seg_big = Segment::Build(1, Metric::kL2, std::move(big));
+  auto seg_small = Segment::Build(2, Metric::kL2, std::move(small));
+
+  HnswParams params;
+  params.m = 8;
+  params.ef_construction = 32;
+  params.ef_search_default = 32;
+  auto merged = CompactSegments(99, Metric::kL2, {seg_big, seg_small},
+                                /*drop_tombstones=*/true, params, 42,
+                                /*enable_insert_into_largest=*/true,
+                                /*insert_largest_staleness_debt_threshold=*/0.5);
+  EXPECT_EQ(merged->row_count(), 45u);
+  EXPECT_TRUE(merged->search_uses_hnsw());
+  const std::vector<float> query = {1.0f, 0.5f};
+  auto hits = merged->Search(query, 3, 32);
+  EXPECT_FALSE(hits.empty());
+}
+#endif
+
+TEST(Segment, TaggedSearchFiltersNonMatches) {
+  std::vector<Row> rows = {
+      MakeRow("a", {1.0f, 0.0f}, 1, false, {"keep"}),
+      MakeRow("b", {0.0f, 1.0f}, 2, false, {"drop"}),
+      MakeRow("c", {0.9f, 0.1f}, 3, false, {"keep"}),
+  };
+  auto segment = Segment::Build(3, Metric::kCosine, std::move(rows));
+  const std::set<std::string> tags = {"keep"};
+  const std::vector<float> query = {1.0f, 0.0f};
+  auto hits = segment->Search(query, 5, 0, tags);
+  ASSERT_EQ(hits.size(), 2u);
+  EXPECT_EQ(hits[0].id, "a");
+}
+
 }  // namespace
 }  // namespace aster

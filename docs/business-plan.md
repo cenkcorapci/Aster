@@ -82,9 +82,10 @@ Aligns with engineering milestones in the development plan.
 | 3 — SaaS MVP | Signup, keys, billing, usage, docs; private beta | Control plane on M8 |
 | 4 — Production | Backups/DR, enterprise, hybrid search, SLOs | M9+ |
 
-**Status (2026-08):** Phase 1 kernel exists — multi-collection HTTP API,
-usage meters, durable LSM + exact search. Still open: segmented HNSW,
-compression, Thrift RPC, S3/spot workers, billing.
+**Status (2026-09):** Phase 1 kernel is **shippable for single-node** —
+multi-collection HTTP + Thrift APIs, usage meters, per-collection quotas,
+segmented HNSW with recall gates. Still open before cloud MVP: SigV4 S3,
+worker orchestration, signup/billing, and client transports (M5).
 
 Do not spend a year on the perfect distributed system before paying users.
 Path: ship a sharp single-node product → 20–50 paying users → build S3/spot

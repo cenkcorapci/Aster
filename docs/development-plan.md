@@ -19,18 +19,19 @@ Companion docs: [design](design.md), [code structure](code-structure.md),
    engine before gossip and replication.
 4. **The monorepo is the product.** One version tag for server + clients.
 
-## Progress snapshot (2026-08)
+## Progress snapshot (2026-09)
 
 | Area | State |
 | --- | --- |
 | M0 Foundation | **Done** |
-| M1 Durable engine | **Partial** — SSTable, manifest, WAL open/replay, flush/compact, auto-compact; background threads / compression / CBOR still open |
-| M2 Segmented HNSW | Not started (exact index only) |
-| M3 Embedded & profiles | **Partial** — Tiny/Edge/Server, Arduino `embedded`, BusyBox musl image, memory sharing |
-| M4 Server | **Partial** — multi-collection catalog + HTTP JSON API (`aster serve`), Prometheus `/metrics`; Thrift RPC still open |
-| M5+ Clients / cluster | Not started (Thrift IDL + client facades/stubs only) |
-| CI | GitHub Actions: `bazel test //aster/...` on `main` |
-| Business-plan Phase 1 | **Kernel ready** — collections + CRUD/search HTTP + usage meters; HNSW/compression/SaaS control plane still open |
+| M1 Durable engine | **Partial** — SSTable, manifest, WAL, flush/compact, auto-compact; compression on flush still defaults to none; background flush threads open |
+| M2 Segmented HNSW | **Partial** — per-segment build/search, recall CI gates, compaction graph merge; tuning via Thrift `HnswConfig` (HTTP create still minimal) |
+| M3 Embedded & profiles | **Partial** — Tiny/Edge/Server, Arduino `embedded`, BusyBox musl image |
+| M4 Server | **Partial** — catalog + HTTP JSON (`aster serve`) + Thrift RPC (`aster serve-rpc`), Prometheus `/metrics`; HTTP now exposes resource limits / storage mode on create; TLS Thrift optional |
+| M5+ Clients / cluster | Not started (Thrift IDL + client facades/stubs only; transport in M5) |
+| M7 Distribution | **Partial** — in-process gossip + ring/rebalance planners only (no network replication) |
+| CI / quality | `bazel test //aster/...` on `main`; `./scripts/run-coverage.sh` gate ≥90% on core `aster/` libs |
+| Business-plan Phase 1 | **Kernel ready** — collections + CRUD/search HTTP/Thrift + usage meters + per-collection quotas; SaaS control plane / real S3 still open |
 
 ## Milestones
 

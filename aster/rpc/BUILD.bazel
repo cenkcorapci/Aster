@@ -110,3 +110,19 @@ cc_test(
         "@googletest//:gtest_main",
     ],
 )
+
+cc_test(
+    name = "handler_test",
+    size = "small",
+    srcs = ["handler_test.cc"],
+    target_compatible_with = select({
+        "//platforms:is_baremetal": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    }),
+    deps = [
+        ":thrift_server",
+        "//aster/server",
+        "@apache_thrift//:thrift",
+        "@googletest//:gtest_main",
+    ],
+)

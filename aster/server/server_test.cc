@@ -1,5 +1,10 @@
 #include <gtest/gtest.h>
 
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <sstream>
+
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -332,6 +337,330 @@ TEST(HttpApi, RejectsOversizedDimensionAndBadDocId) {
       "POST", "/v1/collections/ok/search", "",
       R"({"vector":[1,0],"top_k":100000})", ""});
   EXPECT_EQ(bad_topk.status, 400);
+}
+
+TEST(Json, GetNumberAndMissingKeys) {
+  EXPECT_FALSE(json::GetString("{}", "missing").has_value());
+  EXPECT_FALSE(json::GetInt("{}", "n").has_value());
+  auto num = json::GetNumber(R"({"x":2.5})", "x");
+  ASSERT_TRUE(num.has_value());
+  EXPECT_DOUBLE_EQ(*num, 2.5);
+}
+
+TEST(Json, EscapeAndStringArray) {
+  EXPECT_EQ(json::Escape("\t"), "\\t");
+  auto arr = json::GetStringArray(R"({"tags":["a","b\\c"]})", "tags");
+  ASSERT_TRUE(arr.has_value());
+  ASSERT_EQ(arr->size(), 2u);
+  EXPECT_EQ(arr->at(1), "b\\c");
+  EXPECT_FALSE(json::GetFloatArray(R"({"v":not_a_number})", "v").has_value());
+  auto empty = json::GetFloatArray(R"({"v":[]})", "v");
+  ASSERT_TRUE(empty.has_value());
+  EXPECT_TRUE(empty->empty());
+}
+
+TEST(Catalog, TwoPhaseCreateConfigureLifecycle) {
+  const std::string dir = TempDir("aster_catalog_2phase");
+  Catalog::Options opt;
+  opt.data_dir = dir;
+  opt.wal_sync = SyncPolicy::kNever;
+  auto cat = Catalog::Open(opt);
+  ASSERT_TRUE(cat.ok());
+
+  ASSERT_TRUE(cat.value()->CreateCollectionCreated("pending").ok());
+  Row row;
+  row.id = "a";
+  row.vector = {1.0f, 0.0f};
+  row.timestamp = 1;
+  EXPECT_FALSE(cat.value()->Upsert("pending", row).ok());
+
+  CollectionInfo info;
+  info.name = "pending";
+  info.dimension = 2;
+  info.metric = Metric::kL2;
+  ASSERT_TRUE(cat.value()->ConfigureCollection(info).ok());
+  ASSERT_TRUE(cat.value()->Upsert("pending", std::move(row)).ok());
+
+  auto got = cat.value()->Get("pending", "a");
+  ASSERT_TRUE(got.ok());
+  ASSERT_TRUE(got.value().has_value());
+}
+
+TEST(HttpApi, FullRouteCoverage) {
+  const std::string dir = TempDir("aster_http_full");
+  Catalog::Options opt;
+  opt.data_dir = dir;
+  opt.wal_sync = SyncPolicy::kNever;
+  auto cat = Catalog::Open(opt);
+  ASSERT_TRUE(cat.ok());
+  ApiHandler handler(cat.value().get());
+
+  auto http = [&](const std::string& method, const std::string& path,
+                  const std::string& body = "", const std::string& query = "") {
+    HttpRequest req;
+    req.method = method;
+    req.path = path;
+    req.query = query;
+    req.body = body;
+    return handler.Handle(req);
+  };
+
+  auto created = http("PUT", "/v1/collections/full",
+                      R"({"dimension":2,"metric":"l2"})");
+  EXPECT_EQ(created.status, 201);
+
+  auto exists = http("PUT", "/v1/collections/full",
+                     R"({"dimension":2,"metric":"l2"})");
+  EXPECT_EQ(exists.status, 200);
+  EXPECT_NE(exists.body.find("exists"), std::string::npos);
+
+  auto listed = http("GET", "/v1/collections");
+  EXPECT_EQ(listed.status, 200);
+  EXPECT_NE(listed.body.find("full"), std::string::npos);
+
+  auto got_col = http("GET", "/v1/collections/full");
+  EXPECT_EQ(got_col.status, 200);
+  EXPECT_NE(got_col.body.find("\"dimension\":2"), std::string::npos);
+
+  auto bad_metric = http("PUT", "/v1/collections/bad",
+                         R"({"dimension":2,"metric":"invalid"})");
+  EXPECT_EQ(bad_metric.status, 400);
+
+  auto upserted = http("PUT", "/v1/collections/full/docs/d1",
+                       R"({"vector":[1.0,0.0],"tags":["t"],"metadata":"cb","timestamp":1})");
+  EXPECT_EQ(upserted.status, 200);
+
+  auto got_doc = http("GET", "/v1/collections/full/docs/d1");
+  EXPECT_EQ(got_doc.status, 200);
+  EXPECT_NE(got_doc.body.find("\"d1\""), std::string::npos);
+  EXPECT_NE(got_doc.body.find("\"t\""), std::string::npos);
+
+  auto searched = http("POST", "/v1/collections/full/search",
+                       R"({"vector":[1.0,0.0],"top_k":2,"ef_search":64,"tags":["t"]})");
+  EXPECT_EQ(searched.status, 200);
+  EXPECT_NE(searched.body.find("d1"), std::string::npos);
+
+  auto flushed = http("POST", "/v1/collections/full/flush");
+  EXPECT_EQ(flushed.status, 200);
+
+  auto compacted = http("POST", "/v1/collections/full/compact");
+  EXPECT_EQ(compacted.status, 200);
+
+  auto deleted = http("DELETE", "/v1/collections/full/docs/d1", "",
+                      "timestamp=99");
+  EXPECT_EQ(deleted.status, 200);
+
+  auto missing_doc = http("GET", "/v1/collections/full/docs/d1");
+  EXPECT_EQ(missing_doc.status, 404);
+
+  auto metrics = http("GET", "/metrics");
+  EXPECT_EQ(metrics.status, 200);
+  EXPECT_NE(metrics.content_type.find("text/plain"), std::string::npos);
+
+  auto not_found = http("GET", "/v1/collections/missing");
+  EXPECT_EQ(not_found.status, 404);
+
+  auto bad_route = http("POST", "/v1/collections/full/unknown");
+  EXPECT_EQ(bad_route.status, 404);
+
+  auto method_bad = http("POST", "/v1/collections");
+  EXPECT_EQ(method_bad.status, 405);
+
+  auto bad_ef = http("POST", "/v1/collections/full/search",
+                     R"({"vector":[1.0,0.0],"ef_search":-1})");
+  EXPECT_EQ(bad_ef.status, 400);
+
+  auto bad_limits = handler.Handle(HttpRequest{
+      "PUT", "/v1/collections/lim", "",
+      R"({"dimension":2,"metric":"l2","max_vectors":-1})", ""});
+  EXPECT_EQ(bad_limits.status, 400);
+
+  auto dropped = http("DELETE", "/v1/collections/full");
+  EXPECT_EQ(dropped.status, 200);
+  EXPECT_FALSE(cat.value()->GetCollection("full").has_value());
+}
+
+TEST(HttpApi, ResourceLimitsReturn429) {
+  const std::string dir = TempDir("aster_http_limits");
+  Catalog::Options opt;
+  opt.data_dir = dir;
+  opt.wal_sync = SyncPolicy::kNever;
+  auto cat = Catalog::Open(opt);
+  ASSERT_TRUE(cat.ok());
+  ApiHandler handler(cat.value().get());
+
+  auto created = handler.Handle(HttpRequest{
+      "PUT", "/v1/collections/limited", "",
+      R"({"dimension":2,"metric":"l2","max_vectors":1,"max_qps":1})", ""});
+  ASSERT_EQ(created.status, 201);
+
+  auto first = handler.Handle(HttpRequest{
+      "PUT", "/v1/collections/limited/docs/d1", "",
+      R"({"vector":[1.0,0.0],"timestamp":1})", ""});
+  EXPECT_EQ(first.status, 200);
+
+  auto second = handler.Handle(HttpRequest{
+      "PUT", "/v1/collections/limited/docs/d2", "",
+      R"({"vector":[0.0,1.0],"timestamp":2})", ""});
+  EXPECT_EQ(second.status, 429);
+
+  auto search = handler.Handle(HttpRequest{
+      "POST", "/v1/collections/limited/search", "",
+      R"({"vector":[1.0,0.0],"top_k":1})", ""});
+  EXPECT_EQ(search.status, 200);
+
+  auto search2 = handler.Handle(HttpRequest{
+      "POST", "/v1/collections/limited/search", "",
+      R"({"vector":[1.0,0.0],"top_k":1})", ""});
+  EXPECT_EQ(search2.status, 429);
+}
+
+TEST(HttpApi, StorageModeAndIsolationOnCreate) {
+  const std::string dir = TempDir("aster_http_storage");
+  Catalog::Options opt;
+  opt.data_dir = dir;
+  opt.wal_sync = SyncPolicy::kNever;
+  auto cat = Catalog::Open(opt);
+  ASSERT_TRUE(cat.ok());
+  ApiHandler handler(cat.value().get());
+
+  auto bad_mode = handler.Handle(HttpRequest{
+      "PUT", "/v1/collections/warm", "",
+      R"({"dimension":2,"metric":"cosine","storage_mode":"icy"})", ""});
+  EXPECT_EQ(bad_mode.status, 400);
+
+  auto warm_without_s3 = handler.Handle(HttpRequest{
+      "PUT", "/v1/collections/warm", "",
+      R"({"dimension":2,"metric":"cosine","storage_mode":"warm"})", ""});
+  EXPECT_EQ(warm_without_s3.status, 400);
+
+  auto created = handler.Handle(HttpRequest{
+      "PUT", "/v1/collections/hot", "",
+      R"({"dimension":2,"metric":"cosine","isolation":"DEDICATED"})", ""});
+  EXPECT_EQ(created.status, 201);
+
+  auto info = cat.value()->GetCollection("hot");
+  ASSERT_TRUE(info.has_value());
+  EXPECT_EQ(info->storage_mode, StorageMode::kHot);
+  EXPECT_EQ(info->resource_limits.isolation, IsolationLevel::kDedicated);
+}
+
+std::string RawHttpRequest(uint16_t port, const std::string& request) {
+  const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0) return {};
+  sockaddr_in addr {};
+  addr.sin_family = AF_INET;
+  addr.sin_port = htons(port);
+  ::inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
+  if (::connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
+    ::close(fd);
+    return {};
+  }
+  ::send(fd, request.data(), request.size(), 0);
+  std::string resp;
+  char buf[4096];
+  for (;;) {
+    const ssize_t n = ::recv(fd, buf, sizeof(buf), 0);
+    if (n <= 0) break;
+    resp.append(buf, static_cast<size_t>(n));
+    if (resp.find("\r\n\r\n") != std::string::npos) break;
+  }
+  ::close(fd);
+  return resp;
+}
+
+TEST(HttpServer, RejectsMalformedHttpRequests) {
+  const std::string dir = TempDir("aster_http_malformed");
+  Catalog::Options opt;
+  opt.data_dir = dir;
+  opt.wal_sync = SyncPolicy::kNever;
+  auto cat = Catalog::Open(opt);
+  ASSERT_TRUE(cat.ok());
+  ApiHandler handler(cat.value().get());
+  HttpServer::Options hop;
+  hop.host = "127.0.0.1";
+  hop.port = 0;
+  HttpServer server(hop, handler);
+  ASSERT_TRUE(server.Listen().ok());
+  const uint16_t port = server.port();
+  std::thread th([&] { server.Serve(); });
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+  const std::string bad_len =
+      "POST /v1/collections/x/search HTTP/1.1\r\nContent-Length: 99999999\r\n\r\n";
+  EXPECT_TRUE(RawHttpRequest(port, bad_len).empty());
+
+  const std::string bad_digits =
+      "POST /v1/collections/x/search HTTP/1.1\r\nContent-Length: 12abc\r\n\r\n";
+  EXPECT_TRUE(RawHttpRequest(port, bad_digits).empty());
+
+  server.Stop();
+  th.join();
+}
+
+TEST(HttpServer, RawSocketHandleClient) {
+  const std::string dir = TempDir("aster_http_socket");
+  Catalog::Options opt;
+  opt.data_dir = dir;
+  opt.wal_sync = SyncPolicy::kNever;
+  auto cat = Catalog::Open(opt);
+  ASSERT_TRUE(cat.ok());
+  ApiHandler handler(cat.value().get());
+  HttpServer::Options hop;
+  hop.host = "127.0.0.1";
+  hop.port = 0;
+  HttpServer server(hop, handler);
+  ASSERT_TRUE(server.Listen().ok());
+  const uint16_t port = server.port();
+
+  std::thread th([&] { server.Serve(); });
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+  const std::string req =
+      "GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+  const std::string resp = RawHttpRequest(port, req);
+  EXPECT_NE(resp.find("200"), std::string::npos);
+  EXPECT_NE(resp.find("ok"), std::string::npos);
+
+  const std::string auth_req =
+      "GET /v1/usage HTTP/1.1\r\nAuthorization: Bearer secret\r\n"
+      "Connection: close\r\n\r\n";
+  ApiHandler keyed(cat.value().get(), "secret");
+  HttpServer keyed_server(hop, keyed);
+  ASSERT_TRUE(keyed_server.Listen().ok());
+  const uint16_t port2 = keyed_server.port();
+  std::thread th2([&] { keyed_server.Serve(); });
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  const std::string auth_resp = RawHttpRequest(port2, auth_req);
+  EXPECT_NE(auth_resp.find("200"), std::string::npos);
+
+  auto created = handler.Handle(HttpRequest{
+      "PUT", "/v1/collections/demo", "",
+      R"({"dimension":2,"metric":"l2"})", ""});
+  ASSERT_EQ(created.status, 201);
+
+  const std::string body = R"({"vector":[1.0,0.0],"timestamp":1})";
+  std::ostringstream post;
+  post << "PUT /v1/collections/demo/docs/socket1 HTTP/1.1\r\n"
+       << "Content-Length: " << body.size() << "\r\n"
+       << "Connection: close\r\n\r\n"
+       << body;
+  const std::string post_resp = RawHttpRequest(port, post.str());
+  EXPECT_NE(post_resp.find("200"), std::string::npos);
+
+  server.Stop();
+  keyed_server.Stop();
+  th.join();
+  th2.join();
+}
+
+TEST(HttpServer, ListenRejectsBadHost) {
+  ApiHandler handler(nullptr);
+  HttpServer::Options hop;
+  hop.host = "not-an-ip";
+  hop.port = 0;
+  HttpServer server(hop, handler);
+  EXPECT_FALSE(server.Listen().ok());
 }
 
 }  // namespace

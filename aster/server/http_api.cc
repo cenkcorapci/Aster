@@ -68,6 +68,9 @@ HttpResponse FromStatus(const Status& st) {
     case StatusCode::kCorruption:
       code = 500;
       break;
+    case StatusCode::kResourceExhausted:
+      code = 429;
+      break;
     default:
       code = 500;
       break;
@@ -206,13 +209,50 @@ HttpResponse ApiHandler::Handle(const HttpRequest& req) const {
       auto metric = Catalog::MetricFromString(metric_name);
       if (!metric.ok()) return FromStatus(metric.status());
       info.metric = metric.value();
-      auto st = catalog_->CreateCollection(info);
-      if (!st.ok() && st.message().find("already exists") != std::string::npos) {
-        return {200, "application/json",
-                std::string("{\"name\":\"") + json::Escape(name) +
-                    "\",\"status\":\"exists\"}"};
+      if (auto sm = json::GetString(req.body, "storage_mode")) {
+        const std::string& mode = *sm;
+        if (mode == "hot" || mode == "HOT") {
+          info.storage_mode = StorageMode::kHot;
+        } else if (mode == "warm" || mode == "WARM") {
+          info.storage_mode = StorageMode::kWarm;
+        } else if (mode == "cold" || mode == "COLD") {
+          info.storage_mode = StorageMode::kCold;
+        } else {
+          return JsonStatus(400, "unknown storage_mode");
+        }
       }
-      if (!st.ok()) return FromStatus(st);
+      if (auto mv = json::GetInt(req.body, "max_vectors")) {
+        if (*mv < 0) return JsonStatus(400, "max_vectors invalid");
+        info.resource_limits.max_vectors = static_cast<uint64_t>(*mv);
+      }
+      if (auto mb = json::GetInt(req.body, "memory_budget_bytes")) {
+        if (*mb < 0) return JsonStatus(400, "memory_budget_bytes invalid");
+        info.resource_limits.memory_budget_bytes = static_cast<size_t>(*mb);
+      }
+      if (auto qps = json::GetInt(req.body, "max_qps")) {
+        if (*qps < 0) return JsonStatus(400, "max_qps invalid");
+        info.resource_limits.max_qps = static_cast<uint32_t>(*qps);
+      }
+      if (auto sq = json::GetInt(req.body, "storage_quota_bytes")) {
+        if (*sq < 0) return JsonStatus(400, "storage_quota_bytes invalid");
+        info.resource_limits.storage_quota_bytes = static_cast<uint64_t>(*sq);
+      }
+      if (auto iso = json::GetString(req.body, "isolation")) {
+        auto level = IsolationLevelFromString(*iso);
+        if (!level) return JsonStatus(400, "unknown isolation");
+        info.resource_limits.isolation = *level;
+      }
+      auto st = catalog_->CreateCollection(info);
+      if (!st.ok()) {
+        const std::string& msg = st.message();
+        if (msg.find("already exists") != std::string::npos ||
+            msg.find("already configured") != std::string::npos) {
+          return {200, "application/json",
+                  std::string("{\"name\":\"") + json::Escape(name) +
+                      "\",\"status\":\"exists\"}"};
+        }
+        return FromStatus(st);
+      }
       return {201, "application/json",
               std::string("{\"name\":\"") + json::Escape(name) +
                   "\",\"status\":\"created\"}"};
@@ -543,6 +583,7 @@ void HttpServer::HandleClient(int fd) {
   else if (resp.status == 401) out << " Unauthorized";
   else if (resp.status == 404) out << " Not Found";
   else if (resp.status == 405) out << " Method Not Allowed";
+  else if (resp.status == 429) out << " Too Many Requests";
   else out << " Error";
   out << "\r\n"
       << "Content-Type: " << resp.content_type << "\r\n"

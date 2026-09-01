@@ -5,7 +5,8 @@
 Peer-to-peer vector database: LSM storage, per-segment indexes, CPU-only
 search. Runs from MCUs to multi-node clusters. C++20, Bazel, AGPL-3.0.
 
-**Status:** pre-alpha — single-node engine works; HNSW/RPC/clustering still WIP.
+**Status:** pre-alpha — single-node engine with segmented HNSW, HTTP + Thrift
+APIs, and catalog quotas. Cluster replication and AWS S3 (SigV4) are WIP.
 See the [development plan](docs/development-plan.md).
 
 ## Quick start
@@ -13,7 +14,8 @@ See the [development plan](docs/development-plan.md).
 Needs [Bazel](https://bazel.build) (`.bazelversion`) and a C++20 compiler.
 
 ```bash
-bazel test //aster/...          # tests
+bazel test //aster/...          # unit + integration tests (30 targets)
+./scripts/run-coverage.sh       # ≥90% line coverage gate on core aster libs
 bazel run //aster/cli:aster -- serve --data-dir /tmp/aster --port 8080
 bazel run //aster/cli:aster     # local demo
 ./scripts/docker-build.sh       # BusyBox image → aster:local
@@ -39,7 +41,8 @@ Full docs index: [docs/README.md](docs/README.md).
 ## More
 
 ```bash
-./scripts/run-coverage.sh              # ≥90% gate
+```bash
+./scripts/run-coverage.sh              # ≥90% gate on core aster libs (excl. cli, gen-cpp, see script)
 ./scripts/build-matrix.sh              # Tiny / Edge / Server / Arduino / musl
 make bench-local                       # kind soak (local disk)
 make bench-minio                       # kind soak + MinIO
