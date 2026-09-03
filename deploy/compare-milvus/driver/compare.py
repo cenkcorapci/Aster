@@ -107,6 +107,10 @@ def main() -> int:
 
     t_aster_load = 0.0
     n_loaded = 0
+    # Periodic flush only on large corpora; small loads finish before memtables dominate.
+    flush_every = 0
+    if args.vectors >= 50000:
+        flush_every = max(args.batch_size * 400, 25000)
     for ids, mat in iter_batches(args.vectors, args.dimension, args.batch_size, args.seed):
         indices = [int(x.split("-", 1)[1]) for x in ids]
         t0 = time.perf_counter()
@@ -117,6 +121,10 @@ def main() -> int:
         n_loaded += len(ids)
         if n_loaded % max(args.batch_size * 10, 1) == 0 or n_loaded == args.vectors:
             print(f"    aster upserted {n_loaded}/{args.vectors}", flush=True)
+        # Periodic flush keeps memtables under pod memory limits on kind.
+        if flush_every and n_loaded % flush_every == 0 and n_loaded < args.vectors:
+            aster.flush_all()
+            print(f"    aster mid-load flush at {n_loaded}", flush=True)
 
     t_flush0 = time.perf_counter()
     flush_stats = aster.flush_all()

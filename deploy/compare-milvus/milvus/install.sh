@@ -38,38 +38,67 @@ kubectl -n "$NS" wait --for=condition=complete job/minio-init --timeout=180s || 
 echo "==> purging previous Milvus release (drops leftover Pulsar stacks)"
 helm uninstall "$RELEASE" -n "$NS" --wait --timeout 5m 2>/dev/null || true
 # Belt-and-suspenders: chart upgrades can leave orphaned Pulsar STS around.
-kubectl -n "$NS" delete sts,deploy,svc,job,pvc,cm,secret \
+# Do NOT delete the standalone PVC here: the chart annotates it with
+# helm.sh/resource-policy: keep, so a reinstall will not recreate it if
+# we wipe it (standalone then stays Pending forever).
+kubectl -n "$NS" delete sts,deploy,svc,job,cm,secret \
   -l "app.kubernetes.io/instance=${RELEASE}" --ignore-not-found --wait=false 2>/dev/null || true
 kubectl -n "$NS" delete sts,deploy,svc,job,pvc \
   -l 'app in (pulsar,pulsarv3)' --ignore-not-found --wait=false 2>/dev/null || true
 # Give the API a moment after mass deletes on a small kind cluster.
 sleep 3
 
+# PVC must be owned by Helm. A kubectl-created orphan causes SSA conflicts
+# on reinstall; a missing PVC (after a bad purge) leaves standalone Pending.
+ensure_milvus_pvc() {
+  if ! kubectl -n "$NS" get pvc milvus >/dev/null 2>&1; then
+    echo "==> creating milvus PVC for Helm"
+    helm template "$RELEASE" milvus/milvus "${HELM_COMMON[@]}" \
+      | awk 'BEGIN{p=0} /^---$/{if(p) exit} /^kind: PersistentVolumeClaim$/{p=1; print "---"; print prev; print; next} {if(p) print; else prev=$0}' \
+      | kubectl -n "$NS" apply --server-side --force-conflicts -f -
+  fi
+  kubectl -n "$NS" annotate pvc milvus \
+    meta.helm.sh/release-name="$RELEASE" \
+    meta.helm.sh/release-namespace="$NS" \
+    helm.sh/resource-policy=keep \
+    --overwrite >/dev/null
+  kubectl -n "$NS" label pvc milvus \
+    app.kubernetes.io/managed-by=Helm \
+    app.kubernetes.io/instance="$RELEASE" \
+    app.kubernetes.io/name=milvus \
+    --overwrite >/dev/null
+}
+
 echo "==> helm upgrade --install ${RELEASE} (standalone + external MinIO) values=$(basename "$VALUES")"
+HELM_COMMON=(
+  --namespace "$NS"
+  --create-namespace
+  -f "$VALUES"
+  --set cluster.enabled=false
+  --set standalone.messageQueue=rocksmq
+  --set pulsar.enabled=false
+  --set pulsarv3.enabled=false
+  --set kafka.enabled=false
+  --set woodpecker.enabled=false
+  --set minio.enabled=false
+  --set externalS3.enabled=true
+  --set externalS3.host=aster-minio
+  --set externalS3.port=9000
+  --set externalS3.accessKey=asterbench
+  --set externalS3.secretKey=asterbench-secret
+  --set externalS3.bucketName=milvus-bucket
+  --set externalS3.rootPath=files
+  --set externalS3.useSSL=false
+  --set externalS3.cloudProvider=minio
+  --set etcd.replicaCount=1
+  --set etcd.persistence.enabled=false
+)
+ensure_milvus_pvc
 helm upgrade --install "$RELEASE" milvus/milvus \
-  --namespace "$NS" \
-  --create-namespace \
-  -f "$VALUES" \
-  --set cluster.enabled=false \
-  --set standalone.messageQueue=rocksmq \
-  --set pulsar.enabled=false \
-  --set pulsarv3.enabled=false \
-  --set kafka.enabled=false \
-  --set woodpecker.enabled=false \
-  --set minio.enabled=false \
-  --set externalS3.enabled=true \
-  --set externalS3.host=aster-minio \
-  --set externalS3.port=9000 \
-  --set externalS3.accessKey=asterbench \
-  --set externalS3.secretKey=asterbench-secret \
-  --set externalS3.bucketName=milvus-bucket \
-  --set externalS3.rootPath=files \
-  --set externalS3.useSSL=false \
-  --set externalS3.cloudProvider=minio \
-  --set etcd.replicaCount=1 \
-  --set etcd.persistence.enabled=false \
+  "${HELM_COMMON[@]}" \
   --timeout 15m \
   --wait=false
+ensure_milvus_pvc
 
 echo "==> waiting for milvus standalone"
 for i in $(seq 1 90); do

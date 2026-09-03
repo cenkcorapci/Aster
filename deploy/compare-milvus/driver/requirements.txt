@@ -2,7 +2,9 @@
 # numpy>=1.26
 # requests>=2.31
 # urllib3>=2.0
+# setuptools 82+ removed pkg_resources; pymilvus 2.4 still imports it.
 pymilvus>=2.4.0,<2.5
+setuptools>=70,<82
 numpy>=1.26
 requests>=2.31
 urllib3>=2.0

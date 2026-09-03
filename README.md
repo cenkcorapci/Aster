@@ -41,7 +41,6 @@ Full docs index: [docs/README.md](docs/README.md).
 ## More
 
 ```bash
-```bash
 ./scripts/run-coverage.sh              # ≥90% gate on core aster libs (excl. cli, gen-cpp, see script)
 ./scripts/build-matrix.sh              # Tiny / Edge / Server / Arduino / musl
 make bench-local                       # kind soak (local disk)
@@ -61,7 +60,20 @@ Multi-tenant: [deploy/bench-multitenant/README.md](deploy/bench-multitenant/READ
 Scale: [deploy/bench-scale/README.md](deploy/bench-scale/README.md).  
 Live Grafana sim: [deploy/sim-grafana/README.md](deploy/sim-grafana/README.md).  
 Arduino / ESP32 QEMU sim: [deploy/sim-arduino/README.md](deploy/sim-arduino/README.md).  
-Aster vs Milvus: [deploy/compare-milvus/README.md](deploy/compare-milvus/README.md).
+Aster vs Milvus: [deploy/compare-milvus/README.md](deploy/compare-milvus/README.md) ·
+[measured numbers](docs/bench-vs-milvus.md).
+
+### Aster vs Milvus (Apple M4, 2026-09-03)
+
+Kind + shared MinIO. HNSW `M=16`, `ef=128`, dim 2048, seed 42.
+
+| Profile | Corpus | Aster search p50 | Milvus search p50 | Jaccard@10 | Milvus recall@10 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Smoke (2 shards) | 2 000 | 17.8 ms | 4.5 ms | 0.91 | 0.95 |
+| Laptop full (4 shards) | 40 000 | 41.5 ms | 4.6 ms | 0.20 | 0.32 |
+
+Aster load is HTTP upsert + per-segment index build; Milvus batch-insert is
+much faster on this harness. Full write-up: [docs/bench-vs-milvus.md](docs/bench-vs-milvus.md).
 
 CI runs `bazel test //aster/...` on every push/PR to `main`, plus an
 `ubuntu-24.04-arm` Edge job (`--config=raspberry_pi`). Local matrix:

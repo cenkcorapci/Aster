@@ -133,11 +133,15 @@ budget = usable * 0.30 * (1024**3)
 max_by_ram = int(budget / bytes_per)
 per_shard_budget = (usable * 0.30 / max(nodes, 1)) * (1024**3)
 max_by_shard = int(per_shard_budget / (dim * 4 * 2.5)) * nodes
-cap = max(100, min(max_by_ram, max_by_shard, target))
+# Pod limit was hard-capped at 1Gi while corpus assumed more → OOMKilled mid-load.
+pod_mb = max(512, min(2048, int((usable * 0.35 / max(nodes, 1)) * 1024)))
+# Cap corpus by what actually fits under the pod memory limit (floats+HNSW+HTTP).
+per_shard_pod = int((pod_mb * (1024**2) * 0.45) / (dim * 4 * 2.5))
+max_by_pod = max(100, per_shard_pod) * nodes
+cap = max(100, min(max_by_ram, max_by_shard, max_by_pod, target))
 if target <= 10000:
     cap = target
 scaled = 1 if cap < target else 0
-pod_mb = max(256, min(1024, int((usable * 0.30 / max(nodes, 1)) * 1024)))
 mem_limit = f"{pod_mb}Mi"
 print(f"{round(mem_gb,1)} {round(usable,1)} {cap} {scaled} {mem_limit} {nodes} {nodes_capped}")
 PY
@@ -326,8 +330,11 @@ pip install -q -U pip
 pip install -q -r "${HERE}/driver/requirements.txt"
 
 ASTER_URLS_CSV="$(IFS=,; echo "${ASTER_URLS[*]}")"
-SCALED_FLAG=()
-if [[ "$SCALED" == "1" ]]; then SCALED_FLAG=(--scaled); fi
+# Bash 3.2 + set -u rejects "${empty[@]}"; keep a real argv slot or omit safely.
+SCALED_ARGS=()
+if [[ "$SCALED" == "1" ]]; then
+  SCALED_ARGS=(--scaled)
+fi
 
 log "Running comparison driver"
 (
@@ -346,7 +353,7 @@ log "Running comparison driver"
     --target-vectors "$TARGET_VECTORS" \
     --host-ram-gb "$HOST_MEM_GB" \
     --usable-gb "$USABLE_GB" \
-    "${SCALED_FLAG[@]}"
+    ${SCALED_ARGS[@]+"${SCALED_ARGS[@]}"}
 ) | tee "${OUT}/driver.log"
 
 ok "Done. See ${OUT}/report.txt and ${OUT}/report.json"

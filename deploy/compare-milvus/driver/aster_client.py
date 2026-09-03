@@ -69,14 +69,23 @@ class AsterShardClient:
 
     def upsert(self, doc_id: str, vector: Sequence[float]) -> None:
         body = {"vector": list(map(float, vector)), "timestamp": 1}
-        r = self.session.put(
-            self._url(f"/v1/collections/{self.collection}/docs/{doc_id}"),
-            headers={"Content-Type": "application/json"},
-            data=json.dumps(body),
-            timeout=self.timeout,
-        )
-        if r.status_code not in (200, 201):
-            raise RuntimeError(f"upsert {doc_id}: {r.status_code} {r.text}")
+        last: Optional[Exception] = None
+        for attempt in range(5):
+            try:
+                r = self.session.put(
+                    self._url(f"/v1/collections/{self.collection}/docs/{doc_id}"),
+                    headers={"Content-Type": "application/json"},
+                    data=json.dumps(body),
+                    timeout=self.timeout,
+                )
+                if r.status_code in (200, 201):
+                    return
+                raise RuntimeError(f"upsert {doc_id}: {r.status_code} {r.text}")
+            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+                last = e
+                time.sleep(0.25 * (2**attempt))
+                self.wait_healthy(attempts=30)
+        raise RuntimeError(f"upsert {doc_id} failed after retries: {last}")
 
     def upsert_batch(self, ids: Sequence[str], vectors: Sequence[Sequence[float]]) -> None:
         from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -84,8 +93,8 @@ class AsterShardClient:
         def one(doc_id: str, vec: Sequence[float]) -> None:
             self.upsert(doc_id, vec)
 
-        # Bound concurrency — HTTP/1 keep-alive to one shard.
-        workers = min(8, max(1, len(ids)))
+        # Bound concurrency — large dim JSON + memtable; keep below OOM.
+        workers = min(4, max(1, len(ids)))
         with ThreadPoolExecutor(max_workers=workers) as pool:
             futs = [pool.submit(one, i, v) for i, v in zip(ids, vectors)]
             for f in as_completed(futs):
