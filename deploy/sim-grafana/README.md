@@ -35,7 +35,7 @@ Core Aster metrics (from `aster/metrics`, scraped at `GET /metrics`):
 
 - Upsert / delete / search / get rates
 - Write, delete, flush latency p50/p95
-- Read + **hnsw_search_latency** p50/p95
+- Read + **aster_hnsw_search_latency_seconds** p50/p95
 - Collections, vectors, segments, memtable rows, compaction backlog
 - Drain / gossip / replication lag
 

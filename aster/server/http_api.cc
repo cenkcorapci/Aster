@@ -91,6 +91,29 @@ std::string QueryParam(const std::string& query, const char* key) {
   return {};
 }
 
+// Decodes %XX escapes (invalid escapes are kept verbatim). '+' is left as-is
+// because this is applied to path segments, not form data.
+std::string PercentDecode(const std::string& in) {
+  auto hexval = [](char c) -> int {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+  };
+  std::string out;
+  out.reserve(in.size());
+  for (size_t i = 0; i < in.size(); ++i) {
+    if (in[i] == '%' && i + 2 < in.size() && hexval(in[i + 1]) >= 0 &&
+        hexval(in[i + 2]) >= 0) {
+      out += static_cast<char>(hexval(in[i + 1]) * 16 + hexval(in[i + 2]));
+      i += 2;
+    } else {
+      out += in[i];
+    }
+  }
+  return out;
+}
+
 std::vector<std::string> SplitPath(const std::string& path) {
   std::vector<std::string> parts;
   size_t i = 0;
@@ -99,7 +122,7 @@ std::vector<std::string> SplitPath(const std::string& path) {
     if (i >= path.size()) break;
     size_t j = i;
     while (j < path.size() && path[j] != '/') ++j;
-    parts.push_back(path.substr(i, j - i));
+    parts.push_back(PercentDecode(path.substr(i, j - i)));
     i = j;
   }
   return parts;
@@ -128,10 +151,16 @@ HttpResponse ApiHandler::Handle(const HttpRequest& req) const {
         .Set(static_cast<int64_t>(u.vectors_estimate));
     reg.Gauge("segment_count").Set(static_cast<int64_t>(u.segments));
     reg.Gauge("memtable_rows").Set(static_cast<int64_t>(u.memtable_rows));
+    reg.Gauge("compaction_backlog")
+        .Set(static_cast<int64_t>(u.compaction_backlog));
     HttpResponse r;
     r.status = 200;
-    r.content_type = "text/plain; version=0.0.4";
-    r.body = reg.Render();
+    r.content_type = "text/plain; version=0.0.4; charset=utf-8";
+    r.body = reg.RenderPrometheus();
+    r.body += "# HELP aster_build_info Build information (value is always 1)\n";
+    r.body += "# TYPE aster_build_info gauge\n";
+    r.body += "aster_build_info{version=\"" + json::Escape(version_) +
+              "\"} 1\n";
     return r;
   }
   if (req.method == "GET" && req.path == "/v1/usage") {
@@ -295,10 +324,24 @@ HttpResponse ApiHandler::Handle(const HttpRequest& req) const {
     return JsonStatus(405, "method not allowed");
   }
 
-  // /v1/collections/{name}/flush|compact|search
+  // /v1/collections/{name}/flush|compact|search|stats
   if (parts.size() == 4 && parts[0] == "v1" && parts[1] == "collections") {
     const std::string& name = parts[2];
     const std::string& action = parts[3];
+    if (action == "stats" && req.method == "GET") {
+      auto stats = catalog_->Stats(name);
+      if (!stats) return JsonStatus(404, "collection not found");
+      std::ostringstream os;
+      os << "{\"name\":\"" << json::Escape(name)
+         << "\",\"dimension\":" << stats->dimension << ",\"metric\":\""
+         << Catalog::MetricToString(stats->metric)
+         << "\",\"vectors_estimate\":" << stats->vectors_estimate
+         << ",\"segment_count\":" << stats->segments
+         << ",\"memtable_rows\":" << stats->memtable_rows
+         << ",\"write_memory_bytes\":" << stats->write_memory_bytes
+         << ",\"compaction_backlog\":" << stats->compaction_backlog << "}";
+      return {200, "application/json", os.str()};
+    }
     if (action == "flush" && req.method == "POST") {
       const auto t0 = std::chrono::steady_clock::now();
       CatalogFlushStats flush_stats;
@@ -377,6 +420,7 @@ HttpResponse ApiHandler::Handle(const HttpRequest& req) const {
     if (req.method == "GET") {
       auto row = catalog_->Get(name, id);
       if (!row.ok()) return FromStatus(row.status());
+      MetricsRegistry::Instance().Counter("gets_total").Inc();
       if (!row.value()) return JsonStatus(404, "document not found");
       const Row& r = *row.value();
       std::ostringstream os;
@@ -392,7 +436,8 @@ HttpResponse ApiHandler::Handle(const HttpRequest& req) const {
         first = false;
         os << '"' << json::Escape(t) << '"';
       }
-      os << "],\"timestamp\":" << r.timestamp << "}";
+      os << "],\"timestamp\":" << r.timestamp << ",\"metadata\":\""
+         << json::Escape(r.metadata) << "\"}";
       return {200, "application/json", os.str()};
     }
     if (req.method == "PUT") {

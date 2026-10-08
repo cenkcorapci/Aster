@@ -480,6 +480,19 @@ TEST(HttpApi, RejectsOversizedDimensionAndBadDocId) {
   EXPECT_EQ(bad_topk.status, 400);
 }
 
+TEST(Json, UnescapesStringsAndRoundTripsControlChars) {
+  const std::string body =
+      R"({"s":"line1\nline2\t\"q\" \u00e9 \ud83d\ude00","a":["x\ny","z"]})";
+  auto s = json::GetString(body, "s");
+  ASSERT_TRUE(s.has_value());
+  EXPECT_EQ(*s, "line1\nline2\t\"q\" \xC3\xA9 \xF0\x9F\x98\x80");
+  auto a = json::GetStringArray(body, "a");
+  ASSERT_TRUE(a.has_value());
+  ASSERT_EQ(a->size(), 2u);
+  EXPECT_EQ((*a)[0], "x\ny");
+  EXPECT_EQ(json::Escape(std::string("a\x01" "b")), "a\\u0001b");
+}
+
 TEST(Json, GetNumberAndMissingKeys) {
   EXPECT_FALSE(json::GetString("{}", "missing").has_value());
   EXPECT_FALSE(json::GetInt("{}", "n").has_value());
@@ -576,10 +589,33 @@ TEST(HttpApi, FullRouteCoverage) {
   EXPECT_NE(got_doc.body.find("\"d1\""), std::string::npos);
   EXPECT_NE(got_doc.body.find("\"t\""), std::string::npos);
 
+  // Percent-encoded document ids are decoded before routing.
+  auto enc_put = http("PUT", "/v1/collections/full/docs/a%20b%25c",
+                      R"({"vector":[0.0,1.0],"metadata":"m\n2","timestamp":2})");
+  EXPECT_EQ(enc_put.status, 200);
+  auto enc_get = http("GET", "/v1/collections/full/docs/a%20b%25c");
+  EXPECT_EQ(enc_get.status, 200);
+  EXPECT_NE(enc_get.body.find("\"id\":\"a b%c\""), std::string::npos);
+  EXPECT_NE(enc_get.body.find("\"metadata\":\"m\\n2\""), std::string::npos);
+  EXPECT_EQ(http("GET", "/v1/collections/full/docs/a%2Fb").status, 400);
+  EXPECT_EQ(http("DELETE", "/v1/collections/full/docs/a%20b%25c", "",
+                 "timestamp=3").status, 200);
+
   auto searched = http("POST", "/v1/collections/full/search",
                        R"({"vector":[1.0,0.0],"top_k":2,"ef_search":64,"tags":["t"]})");
   EXPECT_EQ(searched.status, 200);
   EXPECT_NE(searched.body.find("d1"), std::string::npos);
+
+  EXPECT_NE(got_doc.body.find("\"metadata\":\"cb\""), std::string::npos);
+
+  auto stats = http("GET", "/v1/collections/full/stats");
+  EXPECT_EQ(stats.status, 200);
+  EXPECT_NE(stats.body.find("\"name\":\"full\""), std::string::npos);
+  EXPECT_NE(stats.body.find("\"dimension\":2"), std::string::npos);
+  EXPECT_NE(stats.body.find("\"vectors_estimate\":"), std::string::npos);
+  EXPECT_NE(stats.body.find("\"segment_count\":"), std::string::npos);
+  EXPECT_NE(stats.body.find("\"memtable_rows\":"), std::string::npos);
+  EXPECT_EQ(http("GET", "/v1/collections/nope/stats").status, 404);
 
   auto flushed = http("POST", "/v1/collections/full/flush");
   EXPECT_EQ(flushed.status, 200);
@@ -597,6 +633,13 @@ TEST(HttpApi, FullRouteCoverage) {
   auto metrics = http("GET", "/metrics");
   EXPECT_EQ(metrics.status, 200);
   EXPECT_NE(metrics.content_type.find("text/plain"), std::string::npos);
+  EXPECT_NE(metrics.body.find("# TYPE aster_build_info gauge"),
+            std::string::npos);
+  EXPECT_NE(metrics.body.find("aster_build_info{version=\"unknown\"} 1"),
+            std::string::npos);
+  EXPECT_NE(metrics.body.find("# TYPE aster_compaction_backlog gauge"),
+            std::string::npos);
+  EXPECT_NE(metrics.body.find("aster_gets_total"), std::string::npos);
 
   auto not_found = http("GET", "/v1/collections/missing");
   EXPECT_EQ(not_found.status, 404);

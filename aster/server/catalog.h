@@ -40,6 +40,19 @@ struct UsageStats {
   size_t vectors_estimate = 0;
   size_t segments = 0;
   size_t memtable_rows = 0;
+  // Segments above compaction_tier_threshold, summed across collections.
+  size_t compaction_backlog = 0;
+};
+
+// Per-collection statistics (GET /v1/collections/{name}/stats).
+struct CollectionStats {
+  uint32_t dimension = 0;
+  Metric metric = Metric::kCosine;
+  size_t vectors_estimate = 0;
+  size_t segments = 0;
+  size_t memtable_rows = 0;
+  size_t write_memory_bytes = 0;
+  size_t compaction_backlog = 0;
 };
 
 // Optional breakdown returned by Catalog::Flush (memtable seal vs HNSW build).
@@ -102,6 +115,8 @@ class Catalog {
   Status Compact(const std::string& collection);
 
   UsageStats Usage() const;
+  // nullopt when the collection does not exist or is not yet configured.
+  std::optional<CollectionStats> Stats(const std::string& collection) const;
 
  private:
   explicit Catalog(Options options);

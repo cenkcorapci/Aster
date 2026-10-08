@@ -523,15 +523,46 @@ UsageStats Catalog::Usage() const {
   size_t vectors = 0;
   size_t segments = 0;
   size_t mem_rows = 0;
+  size_t backlog = 0;
   for (const auto& [_, db] : dbs_) {
     vectors += db->approximate_row_count();
     segments += db->segment_count();
     mem_rows += db->memtable_rows();
+    const size_t seg = db->segment_count();
+    if (seg > options_.compaction_tier_threshold) {
+      backlog += seg - options_.compaction_tier_threshold;
+    }
   }
   u.vectors_estimate = vectors;
   u.segments = segments;
   u.memtable_rows = mem_rows;
+  u.compaction_backlog = backlog;
   return u;
+}
+
+std::optional<CollectionStats> Catalog::Stats(
+    const std::string& collection) const {
+  std::shared_ptr<Db> db;
+  CollectionInfo info;
+  {
+    std::lock_guard lock(mu_);
+    auto info_it = infos_.find(collection);
+    auto db_it = dbs_.find(collection);
+    if (info_it == infos_.end() || db_it == dbs_.end()) return std::nullopt;
+    info = info_it->second;
+    db = db_it->second;
+  }
+  CollectionStats s;
+  s.dimension = info.dimension;
+  s.metric = info.metric;
+  s.vectors_estimate = db->approximate_row_count();
+  s.segments = db->segment_count();
+  s.memtable_rows = db->memtable_rows();
+  s.write_memory_bytes = db->approximate_write_memory_bytes();
+  if (s.segments > options_.compaction_tier_threshold) {
+    s.compaction_backlog = s.segments - options_.compaction_tier_threshold;
+  }
+  return s;
 }
 
 }  // namespace aster

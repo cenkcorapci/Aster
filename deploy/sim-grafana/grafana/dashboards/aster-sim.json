@@ -17,72 +17,72 @@
         "overrides": []
       },
       "targets": [
-        { "expr": "sum(rate(upserts_total[1m]))", "legendFormat": "upserts/s", "refId": "A" },
-        { "expr": "sum(rate(deletes_total[1m]))", "legendFormat": "deletes/s", "refId": "B" },
-        { "expr": "sum(rate(searches_total[1m]))", "legendFormat": "searches/s", "refId": "C" },
-        { "expr": "sum(rate(gets_total[1m]))", "legendFormat": "gets/s", "refId": "D" },
+        { "expr": "sum(rate(aster_upserts_total[1m]))", "legendFormat": "upserts/s", "refId": "A" },
+        { "expr": "sum(rate(aster_deletes_total[1m]))", "legendFormat": "deletes/s", "refId": "B" },
+        { "expr": "sum(rate(aster_searches_total[1m]))", "legendFormat": "searches/s", "refId": "C" },
+        { "expr": "sum(rate(aster_gets_total[1m]))", "legendFormat": "gets/s", "refId": "D" },
         { "expr": "sum(rate(sim_controller_ops_total[1m]))", "legendFormat": "controller ops/s", "refId": "E" }
       ]
     },
     {
-      "title": "Write / delete / flush latency p50 / p95 (ms)",
+      "title": "Write / delete / flush latency p50 / p95",
       "type": "timeseries",
       "gridPos": { "h": 7, "w": 12, "x": 12, "y": 0 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "fieldConfig": {
-        "defaults": { "unit": "ms" },
+        "defaults": { "unit": "s" },
         "overrides": []
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.50, sum(rate(write_latency_ms_bucket[1m])) by (le))",
+          "expr": "histogram_quantile(0.50, sum(rate(aster_write_latency_seconds_bucket[1m])) by (le))",
           "legendFormat": "write p50",
           "refId": "A"
         },
         {
-          "expr": "histogram_quantile(0.95, sum(rate(write_latency_ms_bucket[1m])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(aster_write_latency_seconds_bucket[1m])) by (le))",
           "legendFormat": "write p95",
           "refId": "B"
         },
         {
-          "expr": "histogram_quantile(0.95, sum(rate(delete_latency_ms_bucket[1m])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(aster_delete_latency_seconds_bucket[1m])) by (le))",
           "legendFormat": "delete p95",
           "refId": "C"
         },
         {
-          "expr": "histogram_quantile(0.95, sum(rate(flush_latency_ms_bucket[1m])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(aster_flush_latency_seconds_bucket[1m])) by (le))",
           "legendFormat": "flush p95",
           "refId": "D"
         }
       ]
     },
     {
-      "title": "Search latency p50 / p95 (ms)",
+      "title": "Search latency p50 / p95",
       "type": "timeseries",
       "gridPos": { "h": 7, "w": 12, "x": 0, "y": 7 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "fieldConfig": {
-        "defaults": { "unit": "ms" },
+        "defaults": { "unit": "s" },
         "overrides": []
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.50, sum(rate(read_latency_ms_bucket[1m])) by (le))",
+          "expr": "histogram_quantile(0.50, sum(rate(aster_read_latency_seconds_bucket[1m])) by (le))",
           "legendFormat": "read p50",
           "refId": "A"
         },
         {
-          "expr": "histogram_quantile(0.95, sum(rate(read_latency_ms_bucket[1m])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(aster_read_latency_seconds_bucket[1m])) by (le))",
           "legendFormat": "read p95",
           "refId": "B"
         },
         {
-          "expr": "histogram_quantile(0.50, sum(rate(hnsw_search_latency_bucket[1m])) by (le))",
+          "expr": "histogram_quantile(0.50, sum(rate(aster_hnsw_search_latency_seconds_bucket[1m])) by (le))",
           "legendFormat": "hnsw p50",
           "refId": "C"
         },
         {
-          "expr": "histogram_quantile(0.95, sum(rate(hnsw_search_latency_bucket[1m])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(aster_hnsw_search_latency_seconds_bucket[1m])) by (le))",
           "legendFormat": "hnsw p95",
           "refId": "D"
         }
@@ -94,11 +94,11 @@
       "gridPos": { "h": 7, "w": 12, "x": 12, "y": 7 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
-        { "expr": "collection_count", "legendFormat": "collections {{pod}}", "refId": "A" },
-        { "expr": "vectors_estimate", "legendFormat": "vectors {{pod}}", "refId": "B" },
-        { "expr": "segment_count", "legendFormat": "segments {{pod}}", "refId": "C" },
-        { "expr": "memtable_rows", "legendFormat": "memtable {{pod}}", "refId": "D" },
-        { "expr": "compaction_backlog", "legendFormat": "compaction backlog {{pod}}", "refId": "E" }
+        { "expr": "aster_collections", "legendFormat": "collections {{pod}}", "refId": "A" },
+        { "expr": "aster_vectors_estimate", "legendFormat": "vectors {{pod}}", "refId": "B" },
+        { "expr": "aster_segments", "legendFormat": "segments {{pod}}", "refId": "C" },
+        { "expr": "aster_memtable_rows", "legendFormat": "memtable {{pod}}", "refId": "D" },
+        { "expr": "aster_compaction_backlog", "legendFormat": "compaction backlog {{pod}}", "refId": "E" }
       ]
     },
     {
@@ -107,9 +107,9 @@
       "gridPos": { "h": 7, "w": 12, "x": 0, "y": 14 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
-        { "expr": "sum(rate(drain_total[1m]))", "legendFormat": "drains/s", "refId": "A" },
-        { "expr": "sum(rate(gossip_messages[1m]))", "legendFormat": "gossip/s", "refId": "B" },
-        { "expr": "replication_lag", "legendFormat": "replication_lag {{pod}}", "refId": "C" }
+        { "expr": "sum(rate(aster_drain_total[1m]))", "legendFormat": "drains/s", "refId": "A" },
+        { "expr": "sum(rate(aster_gossip_messages_total[1m]))", "legendFormat": "gossip/s", "refId": "B" },
+        { "expr": "aster_replication_lag", "legendFormat": "replication_lag {{pod}}", "refId": "C" }
       ]
     },
     {

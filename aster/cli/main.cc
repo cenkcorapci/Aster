@@ -224,6 +224,7 @@ int RunServe(int argc, char** argv) {
   }
 
   aster::ApiHandler handler(catalog.value().get(), api_key);
+  handler.set_version(kVersion);
   aster::HttpServer::Options hop;
   hop.host = host;
   hop.port = port;
@@ -237,7 +238,7 @@ int RunServe(int argc, char** argv) {
               server.port());
   std::printf("data_dir=%s  api_key=%s\n", data_dir.c_str(),
               api_key.empty() ? "(none)" : "(set)");
-  std::printf("endpoints: /health /metrics /v1/collections /v1/usage\n");
+  std::printf("endpoints: /health /metrics /v1/collections /v1/usage /v1/collections/{name}/stats\n");
   server.Serve();
   return 0;
 }
