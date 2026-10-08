@@ -93,3 +93,8 @@ bench-results/
 deploy/sim-arduino/.pio/
 deploy/sim-arduino/.venv/
 .cache/sim-arduino/
+
+# Python packaging
+*.egg-info/
+__pycache__/
+build/
