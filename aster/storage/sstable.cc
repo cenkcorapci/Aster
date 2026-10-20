@@ -11,6 +11,7 @@
 
 #include "aster/core/features.h"
 #include "aster/index/tags.h"
+#include "aster/index/vector_encoding.h"
 #include "aster/storage/wal.h"  // Crc32
 
 #if ASTER_ENABLE_COMPRESSION
@@ -53,7 +54,7 @@ void AppendU32(std::string& b, uint32_t v) {
 void AppendU64(std::string& b, uint64_t v) {
   for (int i = 0; i < 8; ++i) AppendU8(b, static_cast<uint8_t>(v >> (8 * i)));
 }
-void AppendF32(std::string& b, float f) {
+[[maybe_unused]] void AppendF32(std::string& b, float f) {
   uint32_t u;
   static_assert(sizeof(float) == 4);
   std::memcpy(&u, &f, 4);
@@ -78,7 +79,7 @@ uint64_t ReadU64(const std::string& b, size_t& off) {
   for (int i = 0; i < 8; ++i) v |= static_cast<uint64_t>(ReadU8(b, off)) << (8 * i);
   return v;
 }
-float ReadF32(const std::string& b, size_t& off) {
+[[maybe_unused]] float ReadF32(const std::string& b, size_t& off) {
   const uint32_t u = ReadU32(b, off);
   float f;
   std::memcpy(&f, &u, 4);
@@ -272,21 +273,24 @@ void PatchIdMetadata(std::string& id_payload,
   }
 }
 
-std::string BuildVectorPayload(const std::vector<Row>& rows, uint32_t dimension,
-                               uint64_t live_count) {
-  if (live_count == 0 || dimension == 0) return {};
+Result<std::string> BuildVectorPayload(const std::vector<Row>& rows,
+                                       uint32_t dimension, uint64_t live_count,
+                                       VectorEncoding encoding) {
+  if (live_count == 0 || dimension == 0) return std::string{};
+  if (!IsKnownVectorEncoding(static_cast<uint8_t>(encoding))) {
+    return Status::InvalidArgument("unknown vector encoding");
+  }
+  auto packed = CompactVectorStore::Encode(encoding, dimension, rows);
+  if (!packed.ok()) return packed.status();
+
   // pad so (8 + pad) % 32 == 0 relative to uncompressed image base.
   uint32_t pad = 0;
   while ((8 + pad) % 32 != 0) ++pad;
   std::string payload;
   AppendU32(payload, pad);
   payload.append(pad, '\0');
-  for (const Row& row : rows) {
-    if (row.tombstone) continue;
-    for (uint32_t d = 0; d < dimension; ++d) {
-      AppendF32(payload, d < row.vector.size() ? row.vector[d] : 0.0f);
-    }
-  }
+  const auto& bytes = packed.value().payload();
+  payload.append(reinterpret_cast<const char*>(bytes.data()), bytes.size());
   return payload;
 }
 
@@ -384,7 +388,10 @@ Status WriteSstable(const std::string& path, uint64_t segment_id, Metric metric,
   std::string sparse_payload =
       BuildSparsePayload(rows, options.sparse_stride, id_record_offsets);
   std::string bloom_payload = BuildBloomPayload(bloom);
-  std::string vector_payload = BuildVectorPayload(rows, dimension, live);
+  auto vector_payload_res =
+      BuildVectorPayload(rows, dimension, live, options.vector_encoding);
+  if (!vector_payload_res.ok()) return vector_payload_res.status();
+  std::string vector_payload = std::move(vector_payload_res.value());
   std::string tags_payload = BuildTagsPayload(rows);
 
   std::string blocks_raw[kNumBlocks];
@@ -447,7 +454,7 @@ Status WriteSstable(const std::string& path, uint64_t segment_id, Metric metric,
     AppendU32(hdr, flags);
     AppendU32(hdr, dimension);
     AppendU8(hdr, static_cast<uint8_t>(metric));
-    AppendU8(hdr, 0);  // float32
+    AppendU8(hdr, static_cast<uint8_t>(options.vector_encoding));
     AppendU16(hdr, 0);
     AppendU64(hdr, segment_id);
     AppendU64(hdr, rows.size());
@@ -537,7 +544,12 @@ Result<std::unique_ptr<SstableReader>> SstableReader::Open(
   ReadU32(data, off);  // flags
   const uint32_t dimension = ReadU32(data, off);
   const uint8_t metric_u8 = ReadU8(data, off);
-  ReadU8(data, off);   // encoding
+  const uint8_t encoding_u8 = ReadU8(data, off);
+  if (!IsKnownVectorEncoding(encoding_u8)) {
+    return Status::Corruption("unsupported vector encoding");
+  }
+  const VectorEncoding vector_encoding =
+      static_cast<VectorEncoding>(encoding_u8);
   ReadU16(data, off);  // reserved0
   const uint64_t segment_id = ReadU64(data, off);
   const uint64_t row_count = ReadU64(data, off);
@@ -634,6 +646,7 @@ Result<std::unique_ptr<SstableReader>> SstableReader::Open(
   reader->live_row_count_ = live_row_count;
   reader->dimension_ = dimension;
   reader->metric_ = static_cast<Metric>(metric_u8);
+  reader->vector_encoding_ = vector_encoding;
   reader->sparse_stride_ = sparse_stride;
 
   if (bloom_bits > 0 && bloom_payload.ok()) {
@@ -668,16 +681,27 @@ Result<std::unique_ptr<SstableReader>> SstableReader::Open(
     reader->id_payload_ = payload;
   }
 
-  // Vectors.
+  // Vectors (packed per vector_encoding; always expanded to float32 for Get).
   if (!vector_payload.value().empty() && live_row_count > 0 && dimension > 0) {
     const std::string& vp = vector_payload.value();
     size_t vo = 0;
     const uint32_t pad = ReadU32(vp, vo);
     vo += pad;
-    reader->vectors_.resize(static_cast<size_t>(live_row_count) * dimension);
-    for (size_t i = 0; i < reader->vectors_.size(); ++i) {
-      reader->vectors_[i] = ReadF32(vp, vo);
+    const size_t packed_bytes = vp.size() - vo;
+    const uint64_t expect =
+        PackedPayloadBytes(vector_encoding, dimension, live_row_count);
+    if (packed_bytes != expect) {
+      return Status::Corruption("sstable vector payload size mismatch");
     }
+    std::vector<uint8_t> raw(vp.begin() + static_cast<std::ptrdiff_t>(vo),
+                             vp.end());
+    auto packed = CompactVectorStore::FromPayload(
+        vector_encoding, dimension, live_row_count, std::move(raw));
+    if (!packed.ok()) return packed.status();
+    auto decoded = packed.value().DecodeAll();
+    if (!decoded.ok()) return decoded.status();
+    reader->vectors_ = std::move(decoded.value());
+    reader->packed_vectors_ = std::move(packed.value());
   }
 
   reader->metadata_blob_ = meta_payload.value();

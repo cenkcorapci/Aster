@@ -14,6 +14,7 @@ cc_library(
         "hnsw_pin.cc",
         "hnsw_search.cc",
         "tags.cc",
+        "vector_encoding.cc",
     ],
     hdrs = [
         "bloom.h",
@@ -24,6 +25,7 @@ cc_library(
         "hnsw_search.h",
         "hnsw_search_layer.h",
         "tags.h",
+        "vector_encoding.h",
         "vector_index.h",
     ],
     deps = ["//aster/core"],
@@ -59,6 +61,16 @@ cc_test(
     name = "distance_test",
     size = "small",
     srcs = ["distance_test.cc"],
+    deps = [
+        ":index",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cc_test(
+    name = "vector_encoding_test",
+    size = "small",
+    srcs = ["vector_encoding_test.cc"],
     deps = [
         ":index",
         "@googletest//:gtest_main",

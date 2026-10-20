@@ -6,6 +6,8 @@
 #include <string>
 #include <vector>
 
+#include "aster/index/vector_encoding.h"
+
 #include "aster/index/bloom.h"
 #include "aster/core/features.h"
 #include "aster/index/vector_index.h"
@@ -403,6 +405,7 @@ TEST(Sstable, WriteReadRoundTrip) {
   EXPECT_EQ(reader.value()->row_count(), 3u);
   EXPECT_EQ(reader.value()->dimension(), 2u);
   EXPECT_EQ(reader.value()->metric(), Metric::kL2);
+  EXPECT_EQ(reader.value()->vector_encoding(), VectorEncoding::kFloat32);
 
   auto a = reader.value()->Get("a");
   ASSERT_TRUE(a.has_value());
@@ -426,6 +429,82 @@ TEST(Sstable, WriteReadRoundTrip) {
   auto all = reader.value()->LoadAll();
   EXPECT_EQ(all.size(), 3u);
   std::remove(path.c_str());
+}
+
+class SstableEncodingTest
+    : public ::testing::TestWithParam<VectorEncoding> {};
+
+TEST_P(SstableEncodingTest, WriteReadPreservesNeighbors) {
+  const VectorEncoding enc = GetParam();
+  const std::string path =
+      ::testing::TempDir() + "/seg_enc_" +
+      std::to_string(static_cast<int>(enc)) + ".ast";
+  std::remove(path.c_str());
+
+  std::vector<Row> rows = {
+      MakeRow("a", {1.0f, 0.0f, 0.0f, 0.0f}, 1),
+      MakeRow("b", {0.0f, 1.0f, 0.0f, 0.0f}, 2),
+      MakeRow("c", {0.9f, 0.1f, 0.0f, 0.0f}, 3),
+  };
+  SstableWriteOptions opts;
+  opts.vector_encoding = enc;
+  ASSERT_TRUE(WriteSstable(path, 7, Metric::kL2, rows, opts).ok());
+
+  auto reader = SstableReader::Open(path);
+  ASSERT_TRUE(reader.ok()) << reader.status().message();
+  EXPECT_EQ(reader.value()->vector_encoding(), enc);
+  ASSERT_NE(reader.value()->packed_vectors(), nullptr);
+  EXPECT_EQ(reader.value()->packed_vectors()->BytesUsed(),
+            PackedPayloadBytes(enc, 4, 3));
+
+  auto a = reader.value()->Get("a");
+  ASSERT_TRUE(a.has_value());
+  ASSERT_EQ(a->vector.size(), 4u);
+  // float16/int8 should keep the unit axis dominant; binary is coarser.
+  if (enc != VectorEncoding::kBinaryRabitq) {
+    EXPECT_GT(a->vector[0], 0.5f);
+  }
+  std::remove(path.c_str());
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    AllEncodings, SstableEncodingTest,
+    ::testing::Values(VectorEncoding::kFloat32, VectorEncoding::kFloat16,
+                      VectorEncoding::kInt8Sq, VectorEncoding::kBinaryRabitq));
+
+TEST(Segment, PackedInt8SavesMemoryAndSearches) {
+  constexpr uint32_t kDim = 512;
+  constexpr size_t kN = 200;
+  auto rows = std::make_shared<std::vector<Row>>();
+  rows->reserve(kN);
+  for (size_t i = 0; i < kN; ++i) {
+    std::vector<float> v(kDim, 0.0f);
+    v[i % kDim] = 1.0f;
+    // Zero-pad so ids stay lexicographically sorted (Segment contract).
+    char id[32];
+    std::snprintf(id, sizeof(id), "id%04zu", i);
+    rows->push_back(
+        MakeRow(id, std::move(v), static_cast<Timestamp>(i + 1)));
+  }
+  const uint64_t f32_bytes = kN * kDim * sizeof(float);
+  auto built =
+      Segment::Build(/*id=*/1, Metric::kL2, rows, VectorEncoding::kInt8Sq);
+  ASSERT_TRUE(built.ok()) << built.status().message();
+  EXPECT_EQ(built.value()->vector_encoding(), VectorEncoding::kInt8Sq);
+  EXPECT_LT(built.value()->VectorBytesUsed(), f32_bytes / 3);
+  EXPECT_EQ(built.value()->VectorBytesUsed(),
+            PackedPayloadBytes(VectorEncoding::kInt8Sq, kDim, kN));
+
+  std::vector<float> q(kDim, 0.0f);
+  q[7] = 1.0f;
+  auto hits = built.value()->Search(q, /*top_k=*/1, /*ef_search=*/0);
+  ASSERT_EQ(hits.size(), 1u);
+  EXPECT_EQ(hits[0].id, "id0007");
+
+  auto got = built.value()->Get("id0007");
+  ASSERT_TRUE(got.has_value());
+  ASSERT_EQ(got->vector.size(), kDim);
+  EXPECT_GT(got->vector[7], 0.5f);
 }
 
 TEST(Sstable, TakeAllMovesVectors) {

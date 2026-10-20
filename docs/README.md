@@ -10,6 +10,7 @@
 | [Indexing](indexing.md) | ANN / HNSW contract (normative for M2+) |
 | [HNSW format](hnsw-format.md) | On-disk `.hnsw` graph layout (M2) |
 | [SSTable format](sstable-format.md) | On-disk `.ast` segment layout |
+| [Vector encoding](vector-encoding.md) | float16 / int8 SQ / binary RaBitQ packing |
 | [Client API](client-api.md) | Collection-centric product API (target) |
 | [Versioning](versioning.md) | Single-version policy; embedded `aster::Db` contract |
 | [Write bench](bench-write.md) | Laptop upserts/sec + kill-9 fuzz (M1-T14) |

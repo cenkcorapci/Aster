@@ -6,6 +6,11 @@ The project follows a single-version policy; see [docs/versioning.md](docs/versi
 ## [Unreleased]
 
 ### Added
+- Compact vector encodings for sealed segments (`VectorEncoding`: float32,
+  float16, int8 SQ, binary RaBitQ-style): ~4× / ~30× smaller RAM+disk for
+  200k×512 workloads via `Db::Options::vector_encoding` and SSTable header
+  byte. Docs: [vector-encoding.md](docs/vector-encoding.md); tests
+  `//aster/index:vector_encoding_test`, storage + integration coverage.
 - Python client HTTP transport (`clients/python`, `aster-client` 0.2.0):
   `create_collection`, `upsert`, `search(top_k, ef_search, tags)`, `get`,
   `delete`, `health`, `stats`, with live-server tests.

@@ -10,6 +10,7 @@
 #include "aster/core/status.h"
 #include "aster/core/types.h"
 #include "aster/index/bloom.h"
+#include "aster/index/vector_encoding.h"
 
 namespace aster {
 
@@ -27,6 +28,8 @@ struct SstableWriteOptions {
   // Default None keeps Tiny / uncompressed layouts as the common path.
   // Non-None requires ASTER_ENABLE_COMPRESSION (Edge/Server profiles).
   CompressionCodec compression = CompressionCodec::kNone;
+  // Packed vector payload encoding (header byte `vector_encoding`).
+  VectorEncoding vector_encoding = VectorEncoding::kFloat32;
 };
 
 // Writes an immutable segment file. Rows must already be sorted by id with
@@ -44,7 +47,14 @@ class SstableReader {
   uint64_t row_count() const { return row_count_; }
   uint32_t dimension() const { return dimension_; }
   Metric metric() const { return metric_; }
+  VectorEncoding vector_encoding() const { return vector_encoding_; }
   const BloomFilter& bloom() const { return bloom_; }
+
+  // Packed live vectors as stored on disk (decoded to float32 in Get/LoadAll).
+  // Empty when the segment has no live vectors.
+  const CompactVectorStore* packed_vectors() const {
+    return packed_vectors_ ? &*packed_vectors_ : nullptr;
+  }
 
   // False when the bloom filter confidently excludes the id (negative lookup).
   bool MayContain(const RowId& id) const { return bloom_.MayContain(id); }
@@ -67,8 +77,10 @@ class SstableReader {
   uint64_t live_row_count_ = 0;
   uint32_t dimension_ = 0;
   Metric metric_ = Metric::kL2;
+  VectorEncoding vector_encoding_ = VectorEncoding::kFloat32;
   uint32_t sparse_stride_ = 16;
   BloomFilter bloom_;
+  std::optional<CompactVectorStore> packed_vectors_;
 
   struct IdEntry {
     RowId id;

@@ -463,5 +463,106 @@ TEST(Integration, HnswSearchMatchesExactAfterFlush) {
   EXPECT_GE(overlap, truth.size() * 4 / 5);
 }
 
+// Compact vector encodings: durable flush packs RAM + disk; reopen recovers.
+TEST(Integration, CompactEncodingInt8DiskAndMemory) {
+  const std::string dir = ::testing::TempDir() + "/aster_integ_int8";
+  constexpr uint32_t kDim = 512;
+  constexpr size_t kN = 256;
+
+  Db::Options options;
+  options.dimension = kDim;
+  options.metric = Metric::kL2;
+  options.data_dir = dir;
+  options.wal_sync = SyncPolicy::kNever;
+  options.vector_encoding = VectorEncoding::kInt8Sq;
+  options.compaction_tier_threshold = 0;
+  options.max_segments_before_compact = 0;
+#if ASTER_ENABLE_HNSW
+  options.background_index_build = false;
+#endif
+
+  {
+    auto db = Db::Open(options);
+    ASSERT_TRUE(db.ok()) << db.status().message();
+    for (size_t i = 0; i < kN; ++i) {
+      std::vector<float> v(kDim, 0.0f);
+      v[i % kDim] = 1.0f;
+      ASSERT_TRUE(
+          db.value()
+              ->Upsert(MakeRow("v" + std::to_string(i), std::move(v),
+                               static_cast<Timestamp>(i + 1)))
+              .ok());
+    }
+    ASSERT_TRUE(db.value()->Flush().ok());
+    EXPECT_EQ(db.value()->segment_count(), 1u);
+
+    SearchRequest req;
+    req.vector.assign(kDim, 0.0f);
+    req.vector[42] = 1.0f;
+    req.top_k = 1;
+    auto hits = db.value()->Search(req);
+    ASSERT_EQ(hits.size(), 1u);
+    EXPECT_EQ(hits[0].id, "v42");
+
+    auto got = db.value()->Get("v42");
+    ASSERT_TRUE(got.has_value());
+    ASSERT_EQ(got->vector.size(), kDim);
+    EXPECT_GT(got->vector[42], 0.5f);
+  }
+
+  // On-disk: int8 payload ≪ float32 for the same N×D.
+  const uint64_t disk = DirBytes(dir);
+  const uint64_t f32_payload = kN * kDim * 4ull;
+  EXPECT_LT(disk, f32_payload);
+
+  auto reopened = Db::Open(options);
+  ASSERT_TRUE(reopened.ok()) << reopened.status().message();
+  SearchRequest req;
+  req.vector.assign(kDim, 0.0f);
+  req.vector[42] = 1.0f;
+  req.top_k = 1;
+  auto hits = reopened.value()->Search(req);
+  ASSERT_EQ(hits.size(), 1u);
+  EXPECT_EQ(hits[0].id, "v42");
+}
+
+TEST(Integration, CompactEncodingBinaryBeatsInt8OnDisk) {
+  auto Run = [](VectorEncoding enc) -> uint64_t {
+    const std::string dir =
+        ::testing::TempDir() + "/aster_integ_enc_" +
+        std::to_string(static_cast<int>(enc));
+    constexpr uint32_t kDim = 512;
+    constexpr size_t kN = 128;
+    Db::Options options;
+    options.dimension = kDim;
+    options.metric = Metric::kL2;
+    options.data_dir = dir;
+    options.wal_sync = SyncPolicy::kNever;
+    options.vector_encoding = enc;
+    options.compaction_tier_threshold = 0;
+    options.max_segments_before_compact = 0;
+#if ASTER_ENABLE_HNSW
+    options.background_index_build = false;
+#endif
+    auto db = Db::Open(options);
+    EXPECT_TRUE(db.ok());
+    for (size_t i = 0; i < kN; ++i) {
+      std::vector<float> v(kDim, 0.0f);
+      v[i % kDim] = 1.0f;
+      EXPECT_TRUE(
+          db.value()
+              ->Upsert(MakeRow("v" + std::to_string(i), std::move(v),
+                               static_cast<Timestamp>(i + 1)))
+              .ok());
+    }
+    EXPECT_TRUE(db.value()->Flush().ok());
+    return DirBytes(dir);
+  };
+
+  const uint64_t int8_disk = Run(VectorEncoding::kInt8Sq);
+  const uint64_t bin_disk = Run(VectorEncoding::kBinaryRabitq);
+  EXPECT_LT(bin_disk, int8_disk);
+}
+
 }  // namespace
 }  // namespace aster

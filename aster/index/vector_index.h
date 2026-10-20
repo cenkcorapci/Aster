@@ -5,6 +5,7 @@
 
 #include "aster/core/features.h"
 #include "aster/core/types.h"
+#include "aster/index/vector_encoding.h"
 
 #if ASTER_ENABLE_HNSW
 #include "aster/index/hnsw_graph.h"  // HnswParams, HnswGraph (M2-T01)
@@ -42,6 +43,13 @@ std::unique_ptr<VectorIndex> BuildExactIndex(Metric metric,
 // Zero-copy build over Segment-owned rows (vectors live once in `rows`).
 std::unique_ptr<VectorIndex> BuildExactIndex(
     Metric metric, std::shared_ptr<const std::vector<Row>> rows);
+
+// Exact index over packed codes: `live_slots[row_ordinal]` is the store slot
+// for live rows (UINT32_MAX if tombstone / empty). Decode-to-scratch on score.
+std::unique_ptr<VectorIndex> BuildExactIndex(
+    Metric metric, std::shared_ptr<const std::vector<Row>> rows,
+    std::shared_ptr<const CompactVectorStore> packed,
+    std::shared_ptr<const std::vector<uint32_t>> live_slots);
 
 #if ASTER_ENABLE_HNSW
 // Segmented HNSW: build via HnswBuilder (hnsw_build.h); query via HnswSearch /

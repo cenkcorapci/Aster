@@ -586,9 +586,18 @@ Result<std::unique_ptr<Db>> Db::Open(Options options) {
                              : JoinPath(db->options_.data_dir, entry.path);
       auto reader = SstableReader::Open(path);
       if (!reader.ok()) return reader.status();
-      auto rows = reader.value()->TakeAll();
-      auto segment = Segment::Build(entry.segment_id, db->options_.metric,
-                                    std::move(rows));
+      const VectorEncoding file_enc = reader.value()->vector_encoding();
+      auto rows =
+          std::make_shared<std::vector<Row>>(reader.value()->TakeAll());
+      // Prefer file encoding for RAM packing; fall back to Db option.
+      const VectorEncoding enc =
+          file_enc != VectorEncoding::kFloat32
+              ? file_enc
+              : db->options_.vector_encoding;
+      auto built =
+          Segment::Build(entry.segment_id, db->options_.metric, rows, enc);
+      if (!built.ok()) return built.status();
+      auto segment = std::move(built.value());
 #if ASTER_ENABLE_HNSW
       // READY graphs are derived data: if the manifest names a .hnsw and the
       // file exists, rebuild the in-memory graph and mark READY. Missing or
@@ -601,9 +610,9 @@ Result<std::unique_ptr<Db>> Db::Open(Options options) {
         if (segment->TryBeginIndexBuild()) {
           auto loaded = HnswGraph::LoadFromFile(hnsw_path);
           if (loaded.ok()) {
+            const auto materialized = segment->MaterializedRows();
             auto hnsw = LoadHnswIndexFromGraph(
-                db->options_.metric, std::move(loaded).value(),
-                segment->rows());
+                db->options_.metric, std::move(loaded).value(), materialized);
             if (hnsw) {
               segment->CompleteIndexBuild(std::move(hnsw));
             } else {
@@ -919,15 +928,22 @@ Status Db::FlushLocked() {
   if (memtable_.empty()) return Status::Ok();
   const uint64_t id = next_segment_id_++;
   auto rows = std::make_shared<std::vector<Row>>(memtable_.Take());
-  auto segment = Segment::Build(id, options_.metric, rows);
-  write_arena_.Reset();
 
+  auto RestoreMemtable = [&]() {
+    for (Row& row : *rows) memtable_.Apply(std::move(row));
+    --next_segment_id_;
+    memtable_live_since_ = std::chrono::steady_clock::now();
+  };
+
+  // Persist float32 (or packed) SSTable before Segment::Build may clear
+  // in-memory vectors under a compact encoding.
   if (!options_.data_dir.empty()) {
-    if (auto st = WriteSstable(SegmentPath(id), id, options_.metric, *rows);
+    SstableWriteOptions sstable_opts;
+    sstable_opts.vector_encoding = options_.vector_encoding;
+    if (auto st = WriteSstable(SegmentPath(id), id, options_.metric, *rows,
+                               sstable_opts);
         !st.ok()) {
-      for (Row& row : *rows) memtable_.Apply(std::move(row));
-      --next_segment_id_;
-      memtable_live_since_ = std::chrono::steady_clock::now();
+      RestoreMemtable();
       return st;
     }
     char name[64];
@@ -935,12 +951,20 @@ Status Db::FlushLocked() {
                   static_cast<unsigned long long>(id));
     if (auto st = MirrorObjectLocked(name, SegmentPath(id)); !st.ok()) {
       ::remove(SegmentPath(id).c_str());
-      for (Row& row : *rows) memtable_.Apply(std::move(row));
-      --next_segment_id_;
-      memtable_live_since_ = std::chrono::steady_clock::now();
+      RestoreMemtable();
       return st;
     }
   }
+
+  auto built =
+      Segment::Build(id, options_.metric, rows, options_.vector_encoding);
+  if (!built.ok()) {
+    if (!options_.data_dir.empty()) ::remove(SegmentPath(id).c_str());
+    RestoreMemtable();
+    return built.status();
+  }
+  auto segment = std::move(built.value());
+  write_arena_.Reset();
 
   segments_.push_back(std::move(segment));
   RequestIndexBuildLocked();
@@ -1040,8 +1064,10 @@ Status Db::CompactSelectedLocked(const std::vector<size_t>& indices) {
   const bool omit_empty = full_overlap && compacted->row_count() == 0;
 
   if (!options_.data_dir.empty() && !omit_empty) {
+    SstableWriteOptions sstable_opts;
+    sstable_opts.vector_encoding = options_.vector_encoding;
     if (auto st = WriteSstable(SegmentPath(id), id, options_.metric,
-                               compacted->rows());
+                               compacted->MaterializedRows(), sstable_opts);
         !st.ok()) {
       return st;
     }
@@ -1120,9 +1146,10 @@ bool Db::BuildOneSegmentIndex(std::shared_ptr<const Segment> segment) {
   if (!segment) return false;
   if (segment->index_state() != SegState::kBuilding) return false;
 
+  const auto materialized = segment->MaterializedRows();
   std::unique_ptr<VectorIndex> hnsw =
       BuildSegmentHnsw(options_.metric, options_.hnsw_params,
-                       options_.hnsw_rng_seed, segment->rows());
+                       options_.hnsw_rng_seed, materialized);
   if (!hnsw) {
     std::lock_guard lock(mu_);
     if (segment->index_state() == SegState::kBuilding) {
@@ -1141,7 +1168,7 @@ bool Db::BuildOneSegmentIndex(std::shared_ptr<const Segment> segment) {
     }
     if (auto st = WriteHnswAtomic(HnswPath(segment->id()), options_.metric,
                                   options_.hnsw_params, options_.hnsw_rng_seed,
-                                  segment->id(), segment->rows());
+                                  segment->id(), materialized);
         !st.ok()) {
       std::lock_guard lock(mu_);
       if (segment->index_state() == SegState::kBuilding) {

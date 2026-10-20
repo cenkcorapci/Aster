@@ -512,9 +512,10 @@ property of the graph — that is what the exact-baseline CI gate is for.
 All hot loops reduce to L2²/dot over contiguous float32. Per
 `design.md`: AVX2/AVX-512/NEON kernels behind runtime dispatch, 32-byte
 aligned vector blocks, scalar fallback everywhere (the current
-implementation). float16 and int8 (scalar-quantized) storage halve/quarter
-memory bandwidth at small recall cost — applied per collection via
-`VectorEncoding`, with reranking on float32 for int8.
+implementation). Compact encodings via `VectorEncoding` / `Db::Options::vector_encoding`
+([`vector-encoding.md`](vector-encoding.md)): float16 (~2×), int8 SQ (~4×),
+binary RaBitQ-style (~32×). Sealed segments keep packed codes in RAM;
+distance kernels decode to a scratch float buffer (optional f32 rerank later).
 
 ### 10.2 Memory layout
 
@@ -569,7 +570,7 @@ query path is the memtable (single-writer, RCU-style snapshot reads in M1).
 | --- | --- |
 | Higher recall, same index | `ef_search` ↑ (per query — no rebuild) |
 | Higher recall ceiling | `M` ↑, `ef_construction` ↑ (rebuild; +memory, +build time) |
-| Lower memory | int8/float16 encoding; `M` ↓; COLD storage mode |
+| Lower memory | `vector_encoding=int8_sq` or `binary_rabitq`; `M` ↓; COLD storage mode |
 | Faster writes | bigger memtable, async indexing (default), LZ4 instead of Zstd |
 | Fewer per-query graph searches | more aggressive compaction (T ↓) |
 | Cheap harsh-filter queries | rely on bitmap fallback — do not raise `ef` |

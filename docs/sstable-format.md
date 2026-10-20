@@ -130,7 +130,7 @@ All fields little-endian.
 | 8 | `u32` | `flags` | bitfield, see below |
 | 12 | `u32` | `dimension` | vector length; `0` if `live_row_count == 0` |
 | 16 | `u8` | `metric` | `0=L2`, `1=Dot`, `2=Cosine` (`aster::Metric`) |
-| 17 | `u8` | `vector_encoding` | `0=float32` (only value in v1) |
+| 17 | `u8` | `vector_encoding` | `0=float32`, `1=float16`, `2=int8_sq`, `3=binary_rabitq` (see [`vector-encoding.md`](vector-encoding.md)); unknown → reject |
 | 18 | `u16` | `reserved0` | MUST be `0` |
 | 20 | `u64` | `segment_id` | matches `Segment::id()` / filename id |
 | 28 | `u64` | `row_count` | ID-index cardinality (incl. tombstones) |
@@ -303,23 +303,35 @@ repeated row_count times, sorted by id_bytes ascending:
 
 ### 7.4 Vector block
 
-Stores **only live** vectors, slot-major, float32, little-endian.
+Stores **only live** vectors, slot-major, little-endian. The element layout
+is selected by header `vector_encoding` ([`vector-encoding.md`](vector-encoding.md)):
+
+| encoding | Packed payload after align pad |
+| --- | --- |
+| `0` float32 | `float32[live × D]` |
+| `1` float16 | `float16[live × D]` (IEEE binary16) |
+| `2` int8_sq | per live slot: `float32 scale` then `int8[D]` |
+| `3` binary_rabitq | per live slot: `float32 scale` then `u8[⌈D/8⌉]` sign bits |
 
 Uncompressed image layout:
 
 ```text
-u32 uncompressed_payload_len;   // = 4 + pad_to_align + 4*live_row_count*dimension
+u32 uncompressed_payload_len;   // = 4 + pad_to_align + packed_payload_bytes
 u32 pad_to_align;               // 0 .. 31
 u8  align_pad[pad_to_align];    // zeros
-float32 floats[live_row_count * dimension];  // slot s at index s * dimension
+u8  packed[...];                // encoding-specific; slot-major
 ```
+
+`packed_payload_bytes` MUST equal `BytesPerVector(encoding, D) × live_row_count`
+(`aster::PackedPayloadBytes`). Readers MUST reject a size mismatch.
 
 **Alignment:** let `base` be the file offset (or buffer offset) of the
 `u32 uncompressed_payload_len` field. Choose the smallest
 `pad_to_align ∈ [0, 31]` such that
-`(base + 8 + pad_to_align) % 32 == 0`. Then `&floats[0]` is 32-byte aligned.
+`(base + 8 + pad_to_align) % 32 == 0`. Then the packed payload start is
+32-byte aligned (SIMD-friendly for float32/float16).
 When `compression == None`, writers MUST also choose directory `offset` so
-`offset % 32 == 0` (so mmap’d floats stay aligned in the file).
+`offset % 32 == 0` (so mmap’d payloads stay aligned in the file).
 
 If `live_row_count == 0`, the vector block MUST be empty (`on_disk_len = 0`).
 ### 7.5 Metadata block (CBOR)

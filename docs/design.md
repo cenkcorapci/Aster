@@ -114,7 +114,8 @@ later.
 ### CPU
 
 SIMD distance kernels (AVX2/512, NEON, scalar). Metrics: L2, dot, cosine.
-Aligned contiguous vectors; optional float16 / int8 quantization later.
+Aligned contiguous vectors; compact encodings (`float16` / `int8_sq` /
+`binary_rabitq`) via `VectorEncoding` — see [`vector-encoding.md`](vector-encoding.md).
 
 Detail and lifecycle states: [indexing.md](indexing.md).
 

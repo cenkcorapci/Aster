@@ -7,8 +7,10 @@
 #include <string>
 #include <vector>
 
+#include "aster/core/status.h"
 #include "aster/core/types.h"
 #include "aster/index/tags.h"
+#include "aster/index/vector_encoding.h"
 #include "aster/index/vector_index.h"
 
 namespace aster {
@@ -30,6 +32,10 @@ enum class SegState : uint8_t {
 // updated under the caller's synchronization (Db::mu_). Rows and the exact
 // index share one vector copy (shared_ptr) so search stays cache-friendly
 // without doubling RAM.
+//
+// When `vector_encoding != float32`, live float payloads are replaced by a
+// CompactVectorStore (docs/vector-encoding.md): Row::vector is empty for live
+// rows and Get()/search decode on demand — large RAM savings for sealed data.
 class Segment {
  public:
   // `rows` must be sorted by id and deduplicated (one version per id).
@@ -41,10 +47,26 @@ class Segment {
       uint64_t id, Metric metric,
       std::shared_ptr<std::vector<Row>> rows);
 
+  // Build and optionally pack live vectors with `encoding`. float32 keeps the
+  // historical layout (vectors stay on each Row).
+  static Result<std::shared_ptr<const Segment>> Build(
+      uint64_t id, Metric metric, std::shared_ptr<std::vector<Row>> rows,
+      VectorEncoding encoding);
+
   uint64_t id() const { return id_; }
   size_t row_count() const { return rows_ ? rows_->size() : 0; }
   const std::vector<Row>& rows() const { return *rows_; }
   const TagIndex& tag_index() const { return tag_index_; }
+  VectorEncoding vector_encoding() const { return vector_encoding_; }
+  const CompactVectorStore* packed_vectors() const {
+    return packed_ ? packed_.get() : nullptr;
+  }
+
+  // Bytes used by live vector payloads (packed or float32 on rows).
+  uint64_t VectorBytesUsed() const;
+
+  // Rows with float32 vectors materialized (for compaction / HNSW build).
+  std::vector<Row> MaterializedRows() const;
 
   // Current index build state. Callers that mutate state must serialize
   // transitions (Db holds mu_ across TryBegin/Complete/Abort).
@@ -84,18 +106,30 @@ class Segment {
  private:
   Segment(uint64_t id, Metric metric,
           std::shared_ptr<const std::vector<Row>> rows,
-          std::unique_ptr<VectorIndex> index, TagIndex tag_index)
+          std::unique_ptr<VectorIndex> index, TagIndex tag_index,
+          VectorEncoding encoding,
+          std::shared_ptr<const CompactVectorStore> packed,
+          std::shared_ptr<const std::vector<uint32_t>> live_slots)
       : id_(id),
         metric_(metric),
         rows_(std::move(rows)),
         index_(std::move(index)),
-        tag_index_(std::move(tag_index)) {}
+        tag_index_(std::move(tag_index)),
+        vector_encoding_(encoding),
+        packed_(std::move(packed)),
+        live_slots_(std::move(live_slots)) {}
+
+  Status DecodeRowVector(size_t ordinal, std::vector<float>* out) const;
 
   uint64_t id_;
   Metric metric_;
   std::shared_ptr<const std::vector<Row>> rows_;
   std::unique_ptr<VectorIndex> index_;  // exact; always present
   TagIndex tag_index_;
+  VectorEncoding vector_encoding_ = VectorEncoding::kFloat32;
+  std::shared_ptr<const CompactVectorStore> packed_;
+  // Parallel to rows_: packed slot for live rows, else UINT32_MAX.
+  std::shared_ptr<const std::vector<uint32_t>> live_slots_;
 
   // Build state machine + optional HNSW (mutable under Db::mu_).
   mutable SegState index_state_ = SegState::kPending;

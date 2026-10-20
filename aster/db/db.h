@@ -75,6 +75,9 @@ class Db {
   struct Options {
     uint32_t dimension = 0;  // 0 = do not enforce on Upsert
     Metric metric = Metric::kCosine;
+    // Sealed-segment vector packing (RAM + SSTable). Memtable/WAL stay
+    // float32. See docs/vector-encoding.md.
+    VectorEncoding vector_encoding = VectorEncoding::kFloat32;
     // Soft size trigger: background flush when memtable reaches this many
     // approximate bytes. Also checked on the write path.
     size_t memtable_flush_bytes = 64 << 20;
