@@ -4,7 +4,7 @@ JSON API over multi-collection durable storage — Phase 1 kernel from the
 [business plan](../business-plan.md). Local server today; control plane / S3
 later.
 
-Search is **exact** until HNSW (M2). Auth is an optional shared API key.
+Search uses per-segment HNSW indexes (exact for small data). Auth is an optional shared API key.
 
 ## Start the server
 

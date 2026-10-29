@@ -5,16 +5,62 @@
 Peer-to-peer vector database: LSM storage, per-segment indexes, CPU-only
 search. Runs from MCUs to multi-node clusters. C++20, Bazel, AGPL-3.0.
 
-**Status:** pre-alpha — single-node engine with segmented HNSW, HTTP + Thrift
-APIs, and catalog quotas. Cluster replication and AWS S3 (SigV4) are WIP.
-See the [development plan](docs/development-plan.md).
+**Status:** 1.0 — stable single-node engine with segmented HNSW, HTTP +
+Thrift APIs, and catalog quotas. Cluster replication and AWS S3 (SigV4)
+are on the [roadmap](docs/development-plan.md) and not part of 1.0.
 
-## Quick start
+## Install
 
-Needs [Bazel](https://bazel.build) (`.bazelversion`) and a C++20 compiler.
+### Docker (GHCR image)
 
 ```bash
-bazel test //aster/...          # unit + integration tests (30 targets)
+docker run -d -p 8080:8080 -v aster-data:/data \
+  -e ASTER_DATA_DIR=/data ghcr.io/cenkcorapci/aster:latest \
+  serve --host 0.0.0.0 --port 8080
+curl http://localhost:8080/health
+```
+
+### From source
+
+Needs [Bazel](https://bazel.build) (version in `.bazelversion`; Bazelisk
+recommended) and a C++20 compiler.
+
+```bash
+git clone https://github.com/cenkcorapci/Aster && cd Aster
+bazel build -c opt //aster/cli:aster
+./bazel-bin/aster/cli/aster --help
+```
+
+Use `-c opt` for production and benchmarks; debug builds are much slower.
+
+## Usage
+
+Start the HTTP server (set `--api-key` or `ASTER_API_KEY` to require auth):
+
+```bash
+./bazel-bin/aster/cli/aster serve --data-dir /var/lib/aster --port 8080
+```
+
+Create a collection, upsert, and search:
+
+```bash
+curl -X PUT localhost:8080/v1/collections/docs \
+  -H 'Content-Type: application/json' -d '{"dimension":3,"metric":"cosine"}'
+curl -X PUT localhost:8080/v1/collections/docs/docs/a \
+  -H 'Content-Type: application/json' -d '{"vector":[0.1,0.2,0.3]}'
+curl -X POST localhost:8080/v1/collections/docs/search \
+  -H 'Content-Type: application/json' -d '{"vector":[0.1,0.2,0.3],"top_k":5}'
+```
+
+Full API: [HTTP API](docs/tutorials/http-api.md). Config file:
+[server-config](docs/server-config.md). Thrift: `aster serve-rpc`.
+Embedding in C++: [database management](docs/tutorials/database-management.md).
+Python client: [`clients/python`](clients/python).
+
+## Development
+
+```bash
+bazel test //aster/...          # unit + integration tests
 ./scripts/run-coverage.sh       # ≥90% line coverage gate on core aster libs
 bazel run //aster/cli:aster -- serve --data-dir /tmp/aster --port 8080
 bazel run //aster/cli:aster     # local demo

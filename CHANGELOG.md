@@ -5,6 +5,14 @@ The project follows a single-version policy; see [docs/versioning.md](docs/versi
 
 ## [Unreleased]
 
+### Changed
+- First stable release: version bumped to 1.0.0 (pre-alpha label removed).
+- CLI reports `ASTER_VERSION_STRING` instead of a hard-coded `0.1.0-dev`.
+
+### Fixed
+- `--port` is validated (0..65535, numeric); previously invalid values
+  silently wrapped around.
+
 ### Added
 - Compact vector encodings for sealed segments (`VectorEncoding`: float32,
   float16, int8 SQ, binary RaBitQ-style): ~4× / ~30× smaller RAM+disk for
