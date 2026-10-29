@@ -1,6 +1,7 @@
 #include "aster/server/http_api.h"
 
 #include <arpa/inet.h>
+#include <csignal>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -504,6 +505,8 @@ HttpServer::HttpServer(Options options, ApiHandler handler)
     : options_(std::move(options)), handler_(std::move(handler)) {}
 
 Status HttpServer::Listen() {
+  // A client disconnecting mid-response must not kill the process.
+  std::signal(SIGPIPE, SIG_IGN);
   listen_fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
   if (listen_fd_ < 0) return Status::IoError("socket failed");
   int yes = 1;

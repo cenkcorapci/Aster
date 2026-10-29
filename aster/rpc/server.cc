@@ -1,6 +1,7 @@
 #include "aster/rpc/server.h"
 
 #include <arpa/inet.h>
+#include <csignal>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -38,6 +39,8 @@ Status ThriftServer::Listen() {
   if (!handler_) {
     return Status::InvalidArgument("ThriftServer requires a handler");
   }
+  // A peer closing mid-write must surface as EPIPE, not kill the process.
+  std::signal(SIGPIPE, SIG_IGN);
 
   // Bind ourselves (supports port 0) then hand the fd to Thrift so
   // TServerFramework::serve() can call listen() without rebinding.
