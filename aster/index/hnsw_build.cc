@@ -153,8 +153,9 @@ Result<HnswGraph> HnswBuilder::Build(
   if (vectors.empty()) return graph;
 
   const std::vector<float> norms = BuildNormCache(metric_, vectors);
-  VectorStore store{&vectors, metric_ == Metric::kCosine ? &norms : nullptr,
-                    metric_};
+  VectorStore store{&vectors, nullptr, nullptr,
+                    metric_ == Metric::kCosine ? &norms : nullptr, metric_,
+                    static_cast<uint32_t>(vectors.size())};
   const auto graph_neighbors = [&graph](uint32_t node, uint16_t layer) {
     return graph.Neighbors(node, layer);
   };

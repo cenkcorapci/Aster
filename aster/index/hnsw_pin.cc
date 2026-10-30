@@ -290,7 +290,8 @@ std::vector<std::pair<uint32_t, float>> HnswSearchPinned(
       norms_ptr = &owned_norms;
     }
   }
-  VectorStore store{&vectors, norms_ptr, metric};
+  VectorStore store{&vectors, nullptr, nullptr, norms_ptr, metric,
+                    static_cast<uint32_t>(vectors.size())};
   const float qnorm = QueryNorm(metric, query);
 
   const auto neighbors_fn = [&pin, layer0](uint32_t node, uint16_t layer) {

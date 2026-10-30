@@ -148,6 +148,35 @@ Result<std::shared_ptr<const Segment>> Segment::Build(
       encoding, std::move(packed), std::move(live_slots)));
 }
 
+Result<std::shared_ptr<const Segment>> Segment::BuildFromPacked(
+    uint64_t id, Metric metric, std::shared_ptr<std::vector<Row>> rows,
+    std::shared_ptr<const CompactVectorStore> packed,
+    std::shared_ptr<const std::vector<uint32_t>> live_slots,
+    VectorEncoding encoding) {
+  if (!rows) return Status::InvalidArgument("rows required");
+  if (!packed) return Status::InvalidArgument("packed store required");
+  if (!live_slots) return Status::InvalidArgument("live_slots required");
+  if (live_slots->size() != rows->size()) {
+    return Status::InvalidArgument("live_slots size mismatch");
+  }
+  if (!IsKnownVectorEncoding(static_cast<uint8_t>(encoding))) {
+    return Status::InvalidArgument("unknown vector encoding");
+  }
+  // Ensure live rows do not retain float payloads.
+  for (Row& row : *rows) {
+    if (!row.tombstone) {
+      row.vector.clear();
+      row.vector.shrink_to_fit();
+    }
+  }
+  TagIndex tags = TagIndex::Build(*rows);
+  std::shared_ptr<const std::vector<Row>> shared = std::move(rows);
+  auto index = BuildExactIndex(metric, shared, packed, live_slots);
+  return std::shared_ptr<const Segment>(new Segment(
+      id, metric, std::move(shared), std::move(index), std::move(tags),
+      encoding, std::move(packed), std::move(live_slots)));
+}
+
 bool Segment::TryBeginIndexBuild() const {
   if (index_state_ != SegState::kPending) return false;
   index_state_ = SegState::kBuilding;
@@ -198,6 +227,11 @@ uint64_t Segment::VectorBytesUsed() const {
     bytes += row.vector.size() * sizeof(float);
   }
   return bytes;
+}
+
+uint64_t Segment::VectorHeapBytesUsed() const {
+  if (packed_) return packed_->HeapBytesUsed();
+  return VectorBytesUsed();
 }
 
 std::vector<Row> Segment::MaterializedRows() const {
@@ -437,9 +471,9 @@ std::shared_ptr<const Segment> CompactSegments(
             const uint32_t node = added.value();
             if (node == 0) continue;
 
-            VectorStore store{&vectors,
+            VectorStore store{&vectors, nullptr, nullptr,
                               metric == Metric::kCosine ? &norms : nullptr,
-                              metric};
+                              metric, static_cast<uint32_t>(vectors.size())};
             VectorView query{vectors[node]};
             const float qnorm = QueryNorm(metric, query);
             uint32_t ep = old_entry;

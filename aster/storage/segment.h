@@ -48,9 +48,19 @@ class Segment {
       std::shared_ptr<std::vector<Row>> rows);
 
   // Build and optionally pack live vectors with `encoding`. float32 keeps the
-  // historical layout (vectors stay on each Row).
+  // historical layout (vectors stay on each Row) unless a packed store is
+  // supplied via BuildFromPacked.
   static Result<std::shared_ptr<const Segment>> Build(
       uint64_t id, Metric metric, std::shared_ptr<std::vector<Row>> rows,
+      VectorEncoding encoding);
+
+  // Lowest-RAM sealed segment: rows have empty live vectors; codes live in
+  // `packed` (often a MappedFile view). `live_slots[i]` maps row ordinal →
+  // packed slot (UINT32_MAX for tombstones).
+  static Result<std::shared_ptr<const Segment>> BuildFromPacked(
+      uint64_t id, Metric metric, std::shared_ptr<std::vector<Row>> rows,
+      std::shared_ptr<const CompactVectorStore> packed,
+      std::shared_ptr<const std::vector<uint32_t>> live_slots,
       VectorEncoding encoding);
 
   uint64_t id() const { return id_; }
@@ -61,9 +71,17 @@ class Segment {
   const CompactVectorStore* packed_vectors() const {
     return packed_ ? packed_.get() : nullptr;
   }
+  std::shared_ptr<const CompactVectorStore> SharePackedVectors() const {
+    return packed_;
+  }
+  std::shared_ptr<const std::vector<uint32_t>> ShareLiveSlots() const {
+    return live_slots_;
+  }
 
-  // Bytes used by live vector payloads (packed or float32 on rows).
+  // Logical live vector payload bytes (on-disk / packed size).
   uint64_t VectorBytesUsed() const;
+  // Anonymous heap retaining vector payloads (0 when file-backed).
+  uint64_t VectorHeapBytesUsed() const;
 
   // Rows with float32 vectors materialized (for compaction / HNSW build).
   std::vector<Row> MaterializedRows() const;

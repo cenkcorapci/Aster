@@ -12,6 +12,7 @@
 
 #include "aster/index/distance.h"
 #include "aster/index/hnsw_graph.h"
+#include "aster/index/vector_encoding.h"
 
 namespace aster {
 namespace hnsw_internal {
@@ -57,8 +58,13 @@ struct WorseFirst {
 
 struct VectorStore {
   const std::vector<std::vector<float>>* vectors = nullptr;
-  const std::vector<float>* norms = nullptr;  // parallel to vectors when cosine
+  // Optional packed path (lowest RAM): score via CompactVectorStore.
+  const CompactVectorStore* packed = nullptr;
+  // Parallel to graph nodes: packed slot for node id (required when packed).
+  const std::vector<uint32_t>* node_slots = nullptr;
+  const std::vector<float>* norms = nullptr;  // parallel to nodes when cosine
   Metric metric = Metric::kCosine;
+  uint32_t node_count = 0;
 };
 
 inline float QueryNorm(Metric metric, VectorView query) noexcept {
@@ -68,14 +74,38 @@ inline float QueryNorm(Metric metric, VectorView query) noexcept {
   return std::sqrt(n2);
 }
 
+inline uint32_t StoreSize(const VectorStore& store) noexcept {
+  if (store.node_count > 0) return store.node_count;
+  if (store.vectors != nullptr) {
+    return static_cast<uint32_t>(store.vectors->size());
+  }
+  if (store.packed != nullptr) {
+    return static_cast<uint32_t>(store.packed->size());
+  }
+  return 0;
+}
+
 inline bool HasNormCache(const VectorStore& store) noexcept {
   return store.metric == Metric::kCosine && store.norms != nullptr &&
-         store.vectors != nullptr &&
-         store.norms->size() == store.vectors->size();
+         store.norms->size() == StoreSize(store);
 }
 
 inline float NodeScore(const VectorStore& store, VectorView query,
                        float qnorm, uint32_t id) noexcept {
+  if (store.packed != nullptr && store.node_slots != nullptr &&
+      id < store.node_slots->size()) {
+    const uint32_t slot = (*store.node_slots)[id];
+    const auto codes = store.packed->PackedAt(slot);
+    if (store.metric == Metric::kCosine && HasNormCache(store)) {
+      thread_local std::vector<float> scratch;
+      scratch.resize(store.packed->dimension());
+      if (!store.packed->Decode(slot, scratch).ok()) return 0.0f;
+      return CosineSimilarityPreNorm(query, qnorm, scratch,
+                                     store.norms->at(id));
+    }
+    return ScorePacked(store.metric, store.packed->encoding(),
+                       store.packed->dimension(), query, codes);
+  }
   const VectorView vec{store.vectors->at(id)};
   if (HasNormCache(store)) {
     return CosineSimilarityPreNorm(query, qnorm, vec, store.norms->at(id));
@@ -101,7 +131,8 @@ inline constexpr uint32_t kBruteForceThreshold = 128;
 
 inline std::vector<ScoredNode> BruteForceTopK(
     const VectorStore& store, VectorView query, float qnorm, uint32_t top_k) {
-  if (top_k == 0 || store.vectors == nullptr || store.vectors->empty()) {
+  const uint32_t n = StoreSize(store);
+  if (top_k == 0 || n == 0) {
     return {};
   }
   using Node = std::pair<float, uint32_t>;
@@ -111,7 +142,6 @@ inline std::vector<ScoredNode> BruteForceTopK(
   };
   std::priority_queue<Node, std::vector<Node>, decltype(worse)> heap(worse);
 
-  const uint32_t n = static_cast<uint32_t>(store.vectors->size());
   for (uint32_t id = 0; id < n; ++id) {
     const float s = NodeScore(store, query, qnorm, id);
     if (heap.size() < top_k) {
@@ -137,7 +167,7 @@ std::vector<ScoredNode> SearchLayer(
     const std::vector<uint32_t>& entry_points, uint32_t ef, uint16_t layer) {
   if (entry_points.empty() || ef == 0) return {};
 
-  VisitBitmap visited(static_cast<uint32_t>(store.vectors->size()));
+  VisitBitmap visited(StoreSize(store));
 
   std::priority_queue<ScoredNode, std::vector<ScoredNode>, BetterFirst>
       candidates;

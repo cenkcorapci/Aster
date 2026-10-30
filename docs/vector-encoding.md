@@ -69,9 +69,25 @@ db->Flush();  // packs the sealed segment; WAL and memtable remain float32
 
 - **Memtable / WAL** stay float32 (write path unchanged).
 - **Flush / compact** write the SSTable vector block in the chosen encoding.
-- **Sealed segments** keep a `CompactVectorStore` in RAM (`Segment::VectorBytesUsed()`);
-  `Get` materializes one vector; exact search decodes to a scratch buffer.
-- HNSW build expands via `MaterializedRows()` then discards the temporary floats.
+- **Sealed segments** mmap uncompressed vector blocks by default
+  (`StoragePolicy::vectors = kCold`). `CompactVectorStore` may be file-backed
+  (`HeapBytesUsed() == 0`); `Segment::VectorBytesUsed()` is the logical
+  payload size, `VectorHeapBytesUsed()` is anonymous RAM.
+- `Get` materializes one vector; exact / HNSW search scores packed codes
+  (int8/binary direct kernels where possible) without keeping a float32 copy.
+- HNSW build expands via `MaterializedRows()` once, persists `.hnsw`, then
+  READY search reuses the sealed packed/mmap store.
+
+### Residency (`StoragePolicy`)
+
+| `Residency` | Sealed vectors |
+| --- | --- |
+| `kCold` (default) | mmap, demand-paged (`MADV_RANDOM`) |
+| `kCached` | mmap + prefault of the vector extent |
+| `kPinned` | heap copy of the packed payload |
+
+Encoding and residency are orthogonal: e.g. `int8_sq + cold` or
+`float16 + pinned`.
 
 ## SOTA context (choices)
 
@@ -79,11 +95,13 @@ db->Flush();  // packs the sealed segment; WAL and memtable remain float32
 | --- | --- |
 | float16 / int8 SQ | Shipped — matches prior `indexing.md` §10.1 plan |
 | RaBitQ 1-bit | Shipped as `binary_rabitq` (practical subset) |
+| mmap sealed vectors | Shipped — default cold residency |
 | Product quantization | Deferred — codebook train + LUT distance |
 | Full Faiss RaBitQ-Library | Deferred — no new deps; theory cited in the design spec |
 
 ## Tests
 
 - `//aster/index:vector_encoding_test` — sizes for 200k×512, round-trips, RMSE
-- `//aster/storage:storage_test` — SSTable encodings + packed Segment search
+- `//aster/storage:storage_test` — SSTable encodings, mmap cold/pinned, packed search
 - `//aster/integration:integration_test` — durable int8 + binary disk size
+- `//aster/bench:ram_efficiency_bench` — anonymous heap vs logical payload after reopen

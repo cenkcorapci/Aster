@@ -14,6 +14,18 @@ cc_library(
     deps = ["//aster/core"],
 )
 
+# Read-only mmap for immutable segment / index files.
+cc_library(
+    name = "mapped_file",
+    srcs = ["mapped_file.cc"],
+    hdrs = ["mapped_file.h"],
+    target_compatible_with = select({
+        "//platforms:is_baremetal": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    }),
+    deps = ["//aster/core"],
+)
+
 # POSIX filesystem backend — excluded for --config=arduino (baremetal).
 cc_library(
     name = "posix",
@@ -24,6 +36,7 @@ cc_library(
         "//conditions:default": [],
     }),
     deps = [
+        ":mapped_file",
         ":memory",
         "//aster/core",
     ],
@@ -63,6 +76,7 @@ cc_library(
     deps = [":memory"] + select({
         "//platforms:is_baremetal": [],
         "//conditions:default": [
+            ":mapped_file",
             ":posix",
             ":s3",
         ],

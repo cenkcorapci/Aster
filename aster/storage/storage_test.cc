@@ -529,6 +529,75 @@ TEST(Sstable, TakeAllMovesVectors) {
   std::remove(path.c_str());
 }
 
+TEST(Sstable, MmapColdVectorsAvoidHeapPayload) {
+  constexpr uint32_t kDim = 128;
+  constexpr size_t kN = 2000;
+  const std::string path = ::testing::TempDir() + "/seg_mmap_cold.ast";
+  std::remove(path.c_str());
+
+  std::vector<Row> rows;
+  rows.reserve(kN);
+  for (size_t i = 0; i < kN; ++i) {
+    std::vector<float> v(kDim, 0.0f);
+    v[i % kDim] = 1.0f;
+    char id[32];
+    std::snprintf(id, sizeof(id), "id%05zu", i);
+    rows.push_back(MakeRow(id, std::move(v), static_cast<Timestamp>(i + 1)));
+  }
+  SstableWriteOptions opts;
+  opts.vector_encoding = VectorEncoding::kInt8Sq;
+  ASSERT_TRUE(WriteSstable(path, 9, Metric::kL2, rows, opts).ok());
+
+  StoragePolicy cold;
+  cold.vectors = Residency::kCold;
+  auto reader = SstableReader::Open(path, cold);
+  ASSERT_TRUE(reader.ok()) << reader.status().message();
+  ASSERT_NE(reader.value()->packed_vectors(), nullptr);
+  EXPECT_TRUE(reader.value()->vectors_file_backed());
+  EXPECT_EQ(reader.value()->packed_vectors()->HeapBytesUsed(), 0u);
+  EXPECT_EQ(reader.value()->packed_vectors()->BytesUsed(),
+            PackedPayloadBytes(VectorEncoding::kInt8Sq, kDim, kN));
+
+  auto payload = reader.value()->ReleaseForSegment();
+  ASSERT_TRUE(payload.ok()) << payload.status().message();
+  auto built = Segment::BuildFromPacked(
+      9, Metric::kL2, payload.value().rows, payload.value().packed,
+      payload.value().live_slots, VectorEncoding::kInt8Sq);
+  ASSERT_TRUE(built.ok()) << built.status().message();
+  EXPECT_EQ(built.value()->VectorHeapBytesUsed(), 0u);
+  EXPECT_EQ(built.value()->VectorBytesUsed(),
+            PackedPayloadBytes(VectorEncoding::kInt8Sq, kDim, kN));
+
+  std::vector<float> q(kDim, 0.0f);
+  q[42] = 1.0f;
+  auto hits = built.value()->Search(q, /*top_k=*/1, /*ef_search=*/0);
+  ASSERT_EQ(hits.size(), 1u);
+  EXPECT_EQ(hits[0].id, "id00042");
+  std::remove(path.c_str());
+}
+
+TEST(Sstable, MmapPinnedCopiesPayloadToHeap) {
+  const std::string path = ::testing::TempDir() + "/seg_mmap_pin.ast";
+  std::remove(path.c_str());
+  std::vector<Row> rows = {
+      MakeRow("a", {1.0f, 0.0f, 0.0f, 0.0f}, 1),
+      MakeRow("b", {0.0f, 1.0f, 0.0f, 0.0f}, 2),
+  };
+  SstableWriteOptions opts;
+  opts.vector_encoding = VectorEncoding::kFloat16;
+  ASSERT_TRUE(WriteSstable(path, 3, Metric::kL2, rows, opts).ok());
+
+  StoragePolicy pinned;
+  pinned.vectors = Residency::kPinned;
+  auto reader = SstableReader::Open(path, pinned);
+  ASSERT_TRUE(reader.ok());
+  ASSERT_NE(reader.value()->packed_vectors(), nullptr);
+  EXPECT_FALSE(reader.value()->vectors_file_backed());
+  EXPECT_EQ(reader.value()->packed_vectors()->HeapBytesUsed(),
+            PackedPayloadBytes(VectorEncoding::kFloat16, 4, 2));
+  std::remove(path.c_str());
+}
+
 TEST(Sstable, EmptyAndUnsortedRejected) {
   const std::string path = ::testing::TempDir() + "/seg_empty.ast";
   std::remove(path.c_str());

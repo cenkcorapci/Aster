@@ -145,12 +145,14 @@ class ExactIndexPacked final : public VectorIndex {
     for (size_t j = 0; j < live_.size(); ++j) {
       const size_t ord = live_[j];
       const uint32_t slot = (*live_slots_)[ord];
-      if (!packed_->Decode(slot, tls_scratch).ok()) continue;
+      const auto packed = packed_->PackedAt(slot);
       float score;
       if (metric_ == Metric::kCosine) {
+        if (!packed_->Decode(slot, tls_scratch).ok()) continue;
         score = CosineSimilarityPreNorm(query, qnorm, tls_scratch, norms_[j]);
       } else {
-        score = Score(metric_, query, tls_scratch);
+        score = ScorePacked(metric_, packed_->encoding(), packed_->dimension(),
+                            query, packed);
       }
       if (heap.size() < top_k) {
         heap.emplace(score, j);

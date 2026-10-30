@@ -48,6 +48,7 @@
 #include "aster/db/storage_mode.h"
 #include "aster/storage/memtable.h"
 #include "aster/storage/segment.h"
+#include "aster/storage/storage_policy.h"
 #include "aster/storage/wal.h"
 
 #if ASTER_ENABLE_HNSW
@@ -78,6 +79,9 @@ class Db {
     // Sealed-segment vector packing (RAM + SSTable). Memtable/WAL stay
     // float32. See docs/vector-encoding.md.
     VectorEncoding vector_encoding = VectorEncoding::kFloat32;
+    // Residency of sealed vectors / HNSW layers (default: cold mmap vectors).
+    // See aster/storage/storage_policy.h and docs/vector-encoding.md.
+    StoragePolicy storage_policy{};
     // Soft size trigger: background flush when memtable reaches this many
     // approximate bytes. Also checked on the write path.
     size_t memtable_flush_bytes = 64 << 20;

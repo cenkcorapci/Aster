@@ -5,6 +5,8 @@
 #include <cstring>
 #include <limits>
 
+#include "aster/index/distance.h"
+
 namespace aster {
 namespace {
 
@@ -284,11 +286,13 @@ Result<CompactVectorStore> CompactVectorStore::Encode(VectorEncoding enc,
   store.dim_ = dim;
   store.count_ = count;
   store.stride_ = StrideFor(enc, dim);
-  store.payload_.assign(store.stride_ * count, 0);
+  store.owned_.assign(store.stride_ * count, 0);
+  store.payload_ptr_ = store.owned_.data();
+  store.payload_size_ = store.owned_.size();
   for (size_t i = 0; i < count; ++i) {
     VectorView view(data + i * dim, dim);
     if (auto st =
-            EncodeOne(enc, view, store.payload_.data() + i * store.stride_);
+            EncodeOne(enc, view, store.owned_.data() + i * store.stride_);
         !st.ok()) {
       return st;
     }
@@ -330,13 +334,112 @@ Result<CompactVectorStore> CompactVectorStore::FromPayload(
   store.dim_ = dim;
   store.count_ = static_cast<size_t>(count);
   store.stride_ = stride;
-  store.payload_ = std::move(payload);
+  store.owned_ = std::move(payload);
+  store.payload_ptr_ = store.owned_.data();
+  store.payload_size_ = store.owned_.size();
   return store;
 }
 
+Result<CompactVectorStore> CompactVectorStore::FromMappedPayload(
+    VectorEncoding enc, uint32_t dim, uint64_t count,
+    std::span<const uint8_t> payload, std::shared_ptr<void> keep_alive) {
+  if (!IsKnownVectorEncoding(static_cast<uint8_t>(enc))) {
+    return Status::InvalidArgument("unknown vector encoding");
+  }
+  const size_t stride = StrideFor(enc, dim);
+  const uint64_t need = stride * count;
+  if (payload.size() != need) {
+    return Status::Corruption("compact vector payload size mismatch");
+  }
+  if (need > 0 && (payload.data() == nullptr || keep_alive == nullptr)) {
+    return Status::InvalidArgument("mapped payload requires keep_alive");
+  }
+  CompactVectorStore store;
+  store.encoding_ = enc;
+  store.dim_ = dim;
+  store.count_ = static_cast<size_t>(count);
+  store.stride_ = stride;
+  store.payload_ptr_ = payload.data();
+  store.payload_size_ = payload.size();
+  store.keep_alive_ = std::move(keep_alive);
+  return store;
+}
+
+Result<CompactVectorStore> CompactVectorStore::PinToHeap() const {
+  if (!is_file_backed()) {
+    // Already heap-owned — return a deep copy so callers can detach mapping.
+    return FromPayload(encoding_, dim_, count_,
+                       std::vector<uint8_t>(payload_ptr_,
+                                            payload_ptr_ + payload_size_));
+  }
+  std::vector<uint8_t> copy(payload_ptr_, payload_ptr_ + payload_size_);
+  return FromPayload(encoding_, dim_, count_, std::move(copy));
+}
+
 std::span<const uint8_t> CompactVectorStore::PackedAt(size_t index) const {
-  if (index >= count_) return {};
-  return std::span<const uint8_t>(payload_.data() + index * stride_, stride_);
+  if (index >= count_ || payload_ptr_ == nullptr) return {};
+  return std::span<const uint8_t>(payload_ptr_ + index * stride_, stride_);
+}
+
+float ScorePacked(Metric metric, VectorEncoding enc, uint32_t dim,
+                  VectorView query, std::span<const uint8_t> packed) {
+  if (query.size() != dim || packed.size() < StrideFor(enc, dim)) {
+    return 0.0f;
+  }
+  switch (enc) {
+    case VectorEncoding::kInt8Sq: {
+      const float scale = ReadF32LE(packed.data());
+      const int8_t* codes =
+          reinterpret_cast<const int8_t*>(packed.data() + 4);
+      if (metric == Metric::kL2) {
+        double sum = 0.0;
+        for (uint32_t i = 0; i < dim; ++i) {
+          const double d =
+              static_cast<double>(query[i]) -
+              static_cast<double>(codes[i]) * static_cast<double>(scale);
+          sum += d * d;
+        }
+        return static_cast<float>(-sum);
+      }
+      // Dot / Cosine: reconstruct via scale * code (same as decode path for
+      // cosine energy); keep cosine via decode for norm fidelity.
+      if (metric == Metric::kDot) {
+        double sum = 0.0;
+        for (uint32_t i = 0; i < dim; ++i) {
+          sum += static_cast<double>(query[i]) *
+                 (static_cast<double>(codes[i]) * static_cast<double>(scale));
+        }
+        return static_cast<float>(sum);
+      }
+      break;
+    }
+    case VectorEncoding::kBinaryRabitq: {
+      if (metric != Metric::kDot && metric != Metric::kCosine) break;
+      const float scale = ReadF32LE(packed.data());
+      double sum = 0.0;
+      for (uint32_t i = 0; i < dim; ++i) {
+        const bool bit = (packed[4 + (i / 8)] >> (i % 8)) & 1u;
+        const float s = bit ? 1.0f : -1.0f;
+        sum += static_cast<double>(query[i]) *
+               static_cast<double>(s * scale * RabitqSign(i));
+      }
+      if (metric == Metric::kDot) return static_cast<float>(sum);
+      // Cosine ≈ dot / (|q| * scale*sqrt(D)); approximate with decode norms.
+      break;
+    }
+    case VectorEncoding::kFloat32: {
+      thread_local std::vector<float> scratch;
+      scratch.resize(dim);
+      if (!DecodeOne(enc, dim, packed.data(), scratch.data()).ok()) return 0.0f;
+      return Score(metric, query, scratch);
+    }
+    case VectorEncoding::kFloat16:
+      break;
+  }
+  thread_local std::vector<float> scratch;
+  scratch.resize(dim);
+  if (!DecodeOne(enc, dim, packed.data(), scratch.data()).ok()) return 0.0f;
+  return Score(metric, query, scratch);
 }
 
 Status CompactVectorStore::Decode(size_t index, std::span<float> out) const {

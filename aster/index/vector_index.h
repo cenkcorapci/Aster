@@ -65,8 +65,11 @@ std::unique_ptr<VectorIndex> BuildHnswIndexFromGraph(
     std::vector<RowId> ids);
 
 // Rehydrate an in-memory HNSW index from a persisted graph + segment rows.
+// Prefers packed scoring when `packed` is non-null (no float32 vector copy).
 std::unique_ptr<VectorIndex> LoadHnswIndexFromGraph(
-    Metric metric, HnswGraph graph, const std::vector<Row>& rows);
+    Metric metric, HnswGraph graph, const std::vector<Row>& rows,
+    std::shared_ptr<const CompactVectorStore> packed = nullptr,
+    std::shared_ptr<const std::vector<uint32_t>> live_slots = nullptr);
 
 // Compaction rebuild strategy (docs/indexing.md §6.2): fresh graph over
 // live (non-tombstone, non-empty) rows only — never merge input graphs.

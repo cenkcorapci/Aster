@@ -7,11 +7,13 @@
 #include <limits>
 #include <map>
 #include <set>
+#include <string_view>
 #include <utility>
 
 #include "aster/core/features.h"
 #include "aster/index/tags.h"
 #include "aster/index/vector_encoding.h"
+#include "aster/platform/mapped_file.h"
 #include "aster/storage/wal.h"  // Crc32
 
 #if ASTER_ENABLE_COMPRESSION
@@ -61,25 +63,25 @@ void AppendU64(std::string& b, uint64_t v) {
   AppendU32(b, u);
 }
 
-uint8_t ReadU8(const std::string& b, size_t& off) {
+uint8_t ReadU8(std::string_view b, size_t& off) {
   return static_cast<uint8_t>(b[off++]);
 }
-uint16_t ReadU16(const std::string& b, size_t& off) {
+uint16_t ReadU16(std::string_view b, size_t& off) {
   const uint16_t v = static_cast<uint16_t>(ReadU8(b, off)) |
                      (static_cast<uint16_t>(ReadU8(b, off)) << 8);
   return v;
 }
-uint32_t ReadU32(const std::string& b, size_t& off) {
+uint32_t ReadU32(std::string_view b, size_t& off) {
   uint32_t v = 0;
   for (int i = 0; i < 4; ++i) v |= static_cast<uint32_t>(ReadU8(b, off)) << (8 * i);
   return v;
 }
-uint64_t ReadU64(const std::string& b, size_t& off) {
+uint64_t ReadU64(std::string_view b, size_t& off) {
   uint64_t v = 0;
   for (int i = 0; i < 8; ++i) v |= static_cast<uint64_t>(ReadU8(b, off)) << (8 * i);
   return v;
 }
-[[maybe_unused]] float ReadF32(const std::string& b, size_t& off) {
+[[maybe_unused]] float ReadF32(std::string_view b, size_t& off) {
   const uint32_t u = ReadU32(b, off);
   float f;
   std::memcpy(&f, &u, 4);
@@ -518,11 +520,11 @@ Status WriteSstable(const std::string& path, uint64_t segment_id, Metric metric,
 }
 
 Result<std::unique_ptr<SstableReader>> SstableReader::Open(
-    const std::string& path) {
-  std::ifstream in(path, std::ios::binary);
-  if (!in) return Status::IoError("open failed: " + path);
-  std::string data((std::istreambuf_iterator<char>(in)),
-                   std::istreambuf_iterator<char>());
+    const std::string& path, const StoragePolicy& policy) {
+  auto mapped = MappedFile::Open(path);
+  if (!mapped.ok()) return mapped.status();
+  std::shared_ptr<MappedFile> file = std::move(mapped.value());
+  const std::string_view data = file->view();
   if (data.size() > kMaxSstableFileBytes) {
     return Status::Corruption("sstable exceeds size limit");
   }
@@ -573,7 +575,6 @@ Result<std::unique_ptr<SstableReader>> SstableReader::Open(
     return Status::Corruption("sstable vector block would overflow");
   }
 
-  // Footer checks.
   const size_t footer_off = data.size() - kFooterBytes;
   size_t foff = footer_off;
   uint32_t block_crc[kNumBlocks];
@@ -607,40 +608,9 @@ Result<std::unique_ptr<SstableReader>> SstableReader::Open(
     }
   }
 
-  auto unwrap = [&](size_t bi) -> Result<std::string> {
-    if (descs[bi].on_disk_len == 0) return std::string();
-    const CompressionCodec codec =
-        static_cast<CompressionCodec>(descs[bi].compression);
-    auto image = DecompressBlockImage(data.data() + descs[bi].offset,
-                                      descs[bi].on_disk_len, codec);
-    if (!image.ok()) return image.status();
-    const std::string& uncompressed = image.value();
-    if (uncompressed.size() < 4) {
-      return Status::Corruption("block image too small");
-    }
-    size_t bo = 0;
-    const uint32_t plen = ReadU32(uncompressed, bo);
-    if (bo + plen > uncompressed.size()) {
-      return Status::Corruption("block length overrun");
-    }
-    return uncompressed.substr(bo, plen);
-  };
-
-  auto bloom_payload = unwrap(0);
-  if (!bloom_payload.ok()) return bloom_payload.status();
-  auto sparse_payload = unwrap(1);
-  if (!sparse_payload.ok()) return sparse_payload.status();
-  auto id_payload = unwrap(2);
-  if (!id_payload.ok()) return id_payload.status();
-  auto vector_payload = unwrap(3);
-  if (!vector_payload.ok()) return vector_payload.status();
-  auto meta_payload = unwrap(4);
-  if (!meta_payload.ok()) return meta_payload.status();
-  auto tags_payload = unwrap(5);
-  if (!tags_payload.ok()) return tags_payload.status();
-
   auto reader = std::unique_ptr<SstableReader>(new SstableReader());
-  reader->data_ = std::move(data);
+  reader->policy_ = policy;
+  reader->mapped_ = file;
   reader->segment_id_ = segment_id;
   reader->row_count_ = row_count;
   reader->live_row_count_ = live_row_count;
@@ -649,24 +619,68 @@ Result<std::unique_ptr<SstableReader>> SstableReader::Open(
   reader->vector_encoding_ = vector_encoding;
   reader->sparse_stride_ = sparse_stride;
 
-  if (bloom_bits > 0 && bloom_payload.ok()) {
+  // Unwrap block `bi` into `owned` when a heap copy is required; otherwise
+  // return a view into the mapped file (uncompressed blocks only).
+  auto unwrap = [&](size_t bi, std::string* owned) -> Result<std::string_view> {
+    if (descs[bi].on_disk_len == 0) return std::string_view();
+    const CompressionCodec codec =
+        static_cast<CompressionCodec>(descs[bi].compression);
+    const char* on_disk = data.data() + descs[bi].offset;
+    if (codec == CompressionCodec::kNone) {
+      if (descs[bi].on_disk_len < 4) {
+        return Status::Corruption("block image too small");
+      }
+      size_t bo = 0;
+      std::string_view img(on_disk, descs[bi].on_disk_len);
+      const uint32_t plen = ReadU32(img, bo);
+      if (bo + plen > img.size()) {
+        return Status::Corruption("block length overrun");
+      }
+      return img.substr(bo, plen);
+    }
+    auto image =
+        DecompressBlockImage(on_disk, descs[bi].on_disk_len, codec);
+    if (!image.ok()) return image.status();
+    *owned = std::move(image.value());
+    if (owned->size() < 4) {
+      return Status::Corruption("block image too small");
+    }
+    size_t bo = 0;
+    const uint32_t plen = ReadU32(*owned, bo);
+    if (bo + plen > owned->size()) {
+      return Status::Corruption("block length overrun");
+    }
+    return std::string_view(owned->data() + bo, plen);
+  };
+
+  auto bloom_payload = unwrap(0, &reader->bloom_owned_);
+  if (!bloom_payload.ok()) return bloom_payload.status();
+  auto sparse_payload = unwrap(1, &reader->sparse_owned_);
+  if (!sparse_payload.ok()) return sparse_payload.status();
+  auto id_payload = unwrap(2, &reader->id_owned_);
+  if (!id_payload.ok()) return id_payload.status();
+  auto vector_payload = unwrap(3, &reader->vector_owned_);
+  if (!vector_payload.ok()) return vector_payload.status();
+  auto meta_payload = unwrap(4, &reader->meta_owned_);
+  if (!meta_payload.ok()) return meta_payload.status();
+  auto tags_payload = unwrap(5, &reader->tags_owned_);
+  if (!tags_payload.ok()) return tags_payload.status();
+
+  if (bloom_bits > 0 && !bloom_payload.value().empty()) {
     std::vector<uint8_t> bits(bloom_payload.value().begin(),
                               bloom_payload.value().end());
-    reader->bloom_ =
-        BloomFilter::FromBits(bloom_bits, bloom_hashes, bloom_seed,
-                              std::move(bits));
+    reader->bloom_ = BloomFilter::FromBits(bloom_bits, bloom_hashes, bloom_seed,
+                                           std::move(bits));
   }
 
-  // Parse ID index.
   {
-    const std::string& payload = id_payload.value();
+    const std::string_view payload = id_payload.value();
     size_t po = 0;
     reader->id_entries_.reserve(static_cast<size_t>(row_count));
     for (uint64_t i = 0; i < row_count; ++i) {
       IdEntry e;
-      e.record_begin = po;
       const uint16_t id_len = ReadU16(payload, po);
-      e.id = payload.substr(po, id_len);
+      e.id = std::string(payload.substr(po, id_len));
       po += id_len;
       e.flags = ReadU8(payload, po);
       ReadU8(payload, po);
@@ -678,51 +692,72 @@ Result<std::unique_ptr<SstableReader>> SstableReader::Open(
       ReadU32(payload, po);  // tag ordinal
       reader->id_entries_.push_back(std::move(e));
     }
-    reader->id_payload_ = payload;
   }
 
-  // Vectors (packed per vector_encoding; always expanded to float32 for Get).
+  // Vectors: prefer zero-copy mmap view; pin/copy only when policy demands.
   if (!vector_payload.value().empty() && live_row_count > 0 && dimension > 0) {
-    const std::string& vp = vector_payload.value();
+    const std::string_view vp = vector_payload.value();
     size_t vo = 0;
     const uint32_t pad = ReadU32(vp, vo);
     vo += pad;
+    if (vo > vp.size()) {
+      return Status::Corruption("sstable vector pad overrun");
+    }
     const size_t packed_bytes = vp.size() - vo;
     const uint64_t expect =
         PackedPayloadBytes(vector_encoding, dimension, live_row_count);
     if (packed_bytes != expect) {
       return Status::Corruption("sstable vector payload size mismatch");
     }
-    std::vector<uint8_t> raw(vp.begin() + static_cast<std::ptrdiff_t>(vo),
-                             vp.end());
-    auto packed = CompactVectorStore::FromPayload(
-        vector_encoding, dimension, live_row_count, std::move(raw));
+    const auto* packed_ptr =
+        reinterpret_cast<const uint8_t*>(vp.data() + vo);
+    std::span<const uint8_t> packed_span(packed_ptr, packed_bytes);
+
+    const bool can_view =
+        reader->vector_owned_.empty() && policy.vectors != Residency::kPinned;
+    Result<CompactVectorStore> packed = Status::Internal("unset");
+    if (can_view) {
+      // Keep the MappedFile alive via shared_ptr erase to void.
+      std::shared_ptr<void> keep = file;
+      packed = CompactVectorStore::FromMappedPayload(
+          vector_encoding, dimension, live_row_count, packed_span,
+          std::move(keep));
+      const size_t vec_off =
+          static_cast<size_t>(reinterpret_cast<const char*>(packed_ptr) -
+                              data.data());
+      if (policy.vectors == Residency::kCached) {
+        file->Prefault(vec_off, packed_bytes);
+      } else {
+        file->AdviseRandom(vec_off, packed_bytes);
+      }
+    } else {
+      std::vector<uint8_t> raw(packed_span.begin(), packed_span.end());
+      packed = CompactVectorStore::FromPayload(vector_encoding, dimension,
+                                               live_row_count, std::move(raw));
+    }
     if (!packed.ok()) return packed.status();
-    auto decoded = packed.value().DecodeAll();
-    if (!decoded.ok()) return decoded.status();
-    reader->vectors_ = std::move(decoded.value());
-    reader->packed_vectors_ = std::move(packed.value());
+    reader->packed_vectors_ =
+        std::make_shared<CompactVectorStore>(std::move(packed.value()));
   }
 
   reader->metadata_blob_ = meta_payload.value();
 
-  if (auto st = ParseTagsPayload(tags_payload.value(),
+  if (auto st = ParseTagsPayload(std::string(tags_payload.value()),
                                  static_cast<size_t>(row_count),
                                  &reader->row_tags_);
       !st.ok()) {
     return st;
   }
 
-  // Sparse (optional acceleration; Get uses binary search on id_entries_).
   if (!sparse_payload.value().empty()) {
-    const std::string& sp = sparse_payload.value();
+    const std::string_view sp = sparse_payload.value();
     size_t so = 0;
     while (so + 10 <= sp.size()) {
-      ReadU32(sp, so);  // ordinal
-      ReadU32(sp, so);  // id_index_offset
+      ReadU32(sp, so);
+      ReadU32(sp, so);
       const uint16_t id_len = ReadU16(sp, so);
       if (so + id_len > sp.size()) break;
-      std::string id = sp.substr(so, id_len);
+      std::string id(sp.substr(so, id_len));
       so += id_len;
       reader->sparse_.emplace_back(std::move(id), 0);
     }
@@ -743,14 +778,17 @@ std::optional<Row> SstableReader::Get(const RowId& id) const {
   row.timestamp = it->timestamp;
   row.version = it->version;
   row.tombstone = (it->flags & 0x01) != 0;
-  if (!row.tombstone && it->vector_slot != kNoVector && dimension_ > 0) {
-    const size_t base = static_cast<size_t>(it->vector_slot) * dimension_;
-    row.vector.assign(vectors_.begin() + static_cast<std::ptrdiff_t>(base),
-                      vectors_.begin() + static_cast<std::ptrdiff_t>(base + dimension_));
+  if (!row.tombstone && it->vector_slot != kNoVector && packed_vectors_ &&
+      dimension_ > 0) {
+    row.vector.assign(dimension_, 0.0f);
+    if (!packed_vectors_->Decode(it->vector_slot, row.vector).ok()) {
+      row.vector.clear();
+    }
   }
   if (it->metadata_len > 0 &&
       it->metadata_offset + it->metadata_len <= metadata_blob_.size()) {
-    row.metadata = metadata_blob_.substr(it->metadata_offset, it->metadata_len);
+    row.metadata = std::string(
+        metadata_blob_.substr(it->metadata_offset, it->metadata_len));
   }
   const size_t ordinal =
       static_cast<size_t>(std::distance(id_entries_.begin(), it));
@@ -770,8 +808,39 @@ std::vector<Row> SstableReader::LoadAll() const {
 }
 
 std::vector<Row> SstableReader::TakeAll() {
-  std::vector<Row> out;
-  out.reserve(id_entries_.size());
+  std::vector<Row> out = LoadAll();
+  id_entries_.clear();
+  id_entries_.shrink_to_fit();
+  row_tags_.clear();
+  row_tags_.shrink_to_fit();
+  sparse_.clear();
+  sparse_.shrink_to_fit();
+  bloom_ = BloomFilter();
+  packed_vectors_.reset();
+  mapped_.reset();
+  bloom_owned_.clear();
+  sparse_owned_.clear();
+  id_owned_.clear();
+  vector_owned_.clear();
+  meta_owned_.clear();
+  tags_owned_.clear();
+  metadata_blob_ = {};
+  row_count_ = 0;
+  live_row_count_ = 0;
+  return out;
+}
+
+Result<SstableReader::SegmentPayload> SstableReader::ReleaseForSegment() {
+  SegmentPayload out;
+  out.segment_id = segment_id_;
+  out.metric = metric_;
+  out.encoding = vector_encoding_;
+  out.packed = packed_vectors_;
+  out.rows = std::make_shared<std::vector<Row>>();
+  out.rows->reserve(id_entries_.size());
+  auto slots = std::make_shared<std::vector<uint32_t>>();
+  slots->reserve(id_entries_.size());
+
   for (size_t i = 0; i < id_entries_.size(); ++i) {
     IdEntry& e = id_entries_[i];
     Row row;
@@ -779,46 +848,41 @@ std::vector<Row> SstableReader::TakeAll() {
     row.timestamp = e.timestamp;
     row.version = e.version;
     row.tombstone = (e.flags & 0x01) != 0;
-    if (!row.tombstone && e.vector_slot != kNoVector && dimension_ > 0) {
-      const size_t base = static_cast<size_t>(e.vector_slot) * dimension_;
-      const size_t end = base + dimension_;
-      if (end <= vectors_.size()) {
-        row.vector.resize(dimension_);
-        std::move(vectors_.begin() + static_cast<std::ptrdiff_t>(base),
-                  vectors_.begin() + static_cast<std::ptrdiff_t>(end),
-                  row.vector.begin());
-      }
-    }
     if (e.metadata_len > 0 &&
         e.metadata_offset + e.metadata_len <= metadata_blob_.size()) {
-      row.metadata =
-          metadata_blob_.substr(e.metadata_offset, e.metadata_len);
+      row.metadata = std::string(
+          metadata_blob_.substr(e.metadata_offset, e.metadata_len));
     }
     if (i < row_tags_.size()) {
       row.tags = std::move(row_tags_[i]);
     }
-    out.push_back(std::move(row));
+    if (row.tombstone || e.vector_slot == kNoVector) {
+      slots->push_back(0xFFFFFFFFu);
+    } else {
+      slots->push_back(e.vector_slot);
+    }
+    out.rows->push_back(std::move(row));
   }
+  out.live_slots = std::move(slots);
 
-  // Drop file + index scratch; caller owns the rows now.
-  data_.clear();
-  data_.shrink_to_fit();
   id_entries_.clear();
-  id_entries_.shrink_to_fit();
-  id_payload_.clear();
-  id_payload_.shrink_to_fit();
-  vectors_.clear();
-  vectors_.shrink_to_fit();
-  metadata_blob_.clear();
-  metadata_blob_.shrink_to_fit();
   row_tags_.clear();
-  row_tags_.shrink_to_fit();
   sparse_.clear();
-  sparse_.shrink_to_fit();
   bloom_ = BloomFilter();
+  packed_vectors_.reset();
+  // Keep mapped_ alive via out.packed->keep_alive; drop reader handle.
+  mapped_.reset();
+  bloom_owned_.clear();
+  sparse_owned_.clear();
+  id_owned_.clear();
+  vector_owned_.clear();
+  meta_owned_.clear();
+  tags_owned_.clear();
+  metadata_blob_ = {};
   row_count_ = 0;
   live_row_count_ = 0;
   return out;
 }
 
 }  // namespace aster
+

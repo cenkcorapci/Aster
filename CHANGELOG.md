@@ -6,6 +6,14 @@ The project follows a single-version policy; see [docs/versioning.md](docs/versi
 ## [Unreleased]
 
 ### Changed
+- Sealed SSTable vectors are **mmap'd by default** (`StoragePolicy::vectors =
+  kCold`): flush/reopen no longer copies the packed payload into anonymous
+  RSS or expands `DecodeAll` float32 on open. Prefer
+  `Segment::VectorHeapBytesUsed()` for RAM accounting;
+  `VectorBytesUsed()` remains logical/on-disk size.
+- READY HNSW search scores from the sealed packed/mmap store (no second
+  float32 corpus). Direct int8 / binary distance kernels avoid decode-to-float
+  on L2/Dot hot paths.
 - First stable release: version bumped to 1.0.0 (pre-alpha label removed).
 - CLI reports `ASTER_VERSION_STRING` instead of a hard-coded `0.1.0-dev`.
 
@@ -14,6 +22,9 @@ The project follows a single-version policy; see [docs/versioning.md](docs/versi
   silently wrapped around.
 
 ### Added
+- `MappedFile`, `StoragePolicy` / `Residency` (`cold`/`cached`/`pinned`),
+  bounded `PageCache`, and `//aster/bench:ram_efficiency_bench` for
+  heap-vs-file-backed measurement. Docs: [vector-encoding.md](docs/vector-encoding.md).
 - Compact vector encodings for sealed segments (`VectorEncoding`: float32,
   float16, int8 SQ, binary RaBitQ-style): ~4× / ~30× smaller RAM+disk for
   200k×512 workloads via `Db::Options::vector_encoding` and SSTable header
