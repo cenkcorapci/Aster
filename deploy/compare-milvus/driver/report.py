@@ -1,4 +1,4 @@
-"""Pretty + JSON report for Aster vs Milvus comparison."""
+"""Pretty + JSON report for Aster vector database comparisons."""
 
 from __future__ import annotations
 
@@ -21,7 +21,8 @@ def render_text(report: Dict[str, Any]) -> str:
     lines = []
     a = report.get("scale", {})
     lines.append("=" * 72)
-    lines.append("Aster vs Milvus — distributed MinIO comparison")
+    competitor = str(report.get("competitor", "milvus")).title()
+    lines.append(f"Aster vs {competitor} — distributed comparison")
     lines.append("=" * 72)
     lines.append(
         f"target_vectors={a.get('target_vectors')}  actual_vectors={a.get('actual_vectors')}  "
@@ -34,7 +35,7 @@ def render_text(report: Dict[str, Any]) -> str:
     lines.append("")
     lines.append("--- Load / index ---")
     al = report.get("aster_load", {})
-    ml = report.get("milvus_load", {})
+    ml = report.get("competitor_load", report.get("milvus_load", {}))
     lines.append(
         f"Aster  load={_fmt(al.get('load_seconds', 0))}s  "
         f"flush={_fmt(al.get('flush_seconds', 0))}s  "
@@ -43,14 +44,14 @@ def render_text(report: Dict[str, Any]) -> str:
         f"vps={_fmt(al.get('vectors_per_sec', 0))}"
     )
     lines.append(
-        f"Milvus insert={_fmt(ml.get('insert_seconds', 0))}s  "
+        f"{competitor} insert={_fmt(ml.get('insert_seconds', 0))}s  "
         f"flush={_fmt(ml.get('flush_seconds', 0))}s  "
         f"index={_fmt(ml.get('index_seconds', 0))}s  "
         f"load={_fmt(ml.get('load_seconds', 0))}s  "
         f"vps={_fmt(ml.get('vectors_per_sec', 0))}"
     )
     lines.append("")
-    hnsw = report.get("aster_index") or report.get("milvus_index") or {}
+    hnsw = report.get("aster_index") or report.get("competitor_index") or {}
     if hnsw:
         lines.append(
             f"HNSW  M={hnsw.get('M')}  efConstruction={hnsw.get('efConstruction')}  "
@@ -58,10 +59,11 @@ def render_text(report: Dict[str, Any]) -> str:
         )
         lines.append("")
     lines.append("--- Search latency (ms) ---")
-    for name in ("aster_search", "milvus_search"):
+    for name in ("aster_search", "competitor_search"):
         s = report.get(name, {})
+        label = competitor.lower() if name == "competitor_search" else name
         lines.append(
-            f"{name:14s}  avg={_fmt(s.get('avg_ms', 0))}  "
+            f"{label:14s}  avg={_fmt(s.get('avg_ms', 0))}  "
             f"p50={_fmt(s.get('p50_ms', 0))}  p95={_fmt(s.get('p95_ms', 0))}  "
             f"p99={_fmt(s.get('p99_ms', 0))}  max={_fmt(s.get('max_ms', 0))}"
         )
@@ -73,7 +75,8 @@ def render_text(report: Dict[str, Any]) -> str:
         f"(min={_fmt(acc.get('min_jaccard_at_k', 0))} max={_fmt(acc.get('max_jaccard_at_k', 0))})"
     )
     lines.append(
-        f"mean Milvus recall@k vs Aster: {_fmt(acc.get('mean_milvus_recall_vs_aster', 0))}"
+        f"mean {competitor} recall@k vs Aster: "
+        f"{_fmt(acc.get('mean_competitor_recall_vs_aster', acc.get('mean_milvus_recall_vs_aster', 0)))}"
     )
     lines.append(
         f"top-1 agreement: {_fmt(acc.get('top1_agreement_rate', 0))}  "
@@ -114,35 +117,41 @@ def write_report(report: Dict[str, Any], out_dir: str) -> None:
 
 def build_verdict(report: Dict[str, Any]) -> Dict[str, Any]:
     acc = report.get("accuracy", {})
-    recall = float(acc.get("mean_milvus_recall_vs_aster", 0))
+    competitor = str(report.get("competitor", "milvus")).title()
+    recall = float(
+        acc.get(
+            "mean_competitor_recall_vs_aster",
+            acc.get("mean_milvus_recall_vs_aster", 0),
+        )
+    )
     jaccard = float(acc.get("mean_jaccard_at_k", 0))
     top1 = float(acc.get("top1_agreement_rate", 0))
     notes = []
     notes.append(
         "Aster search uses per-segment HNSW (scatter-gather across shards); "
-        "Milvus uses HNSW ANN — compare ef and corpus scale when interpreting recall."
+        f"{competitor} uses HNSW ANN — compare ef and corpus scale when interpreting recall."
     )
     al = report.get("aster_search", {}).get("avg_ms", 0)
-    ml = report.get("milvus_search", {}).get("avg_ms", 0)
+    ml = report.get("competitor_search", report.get("milvus_search", {})).get("avg_ms", 0)
     if al and ml:
         if ml < al:
             notes.append(
-                f"Milvus search avg latency lower ({ml:.2f}ms vs Aster {al:.2f}ms)."
+                f"{competitor} search avg latency lower ({ml:.2f}ms vs Aster {al:.2f}ms)."
             )
         else:
             notes.append(
-                f"Aster search avg latency lower ({al:.2f}ms vs Milvus {ml:.2f}ms)."
+                f"Aster search avg latency lower ({al:.2f}ms vs {competitor} {ml:.2f}ms)."
             )
     if recall >= 0.99 and jaccard >= 0.99:
         summary = "Results essentially match (both HNSW ANN; overlap≥0.99)."
     elif recall >= 0.90:
         summary = (
-            f"Close but not identical: mean Milvus recall@k={recall:.4f}, "
+            f"Close but not identical: mean {competitor} recall@k={recall:.4f}, "
             f"Jaccard={jaccard:.4f}, top1={top1:.4f}."
         )
     else:
         summary = (
-            f"Material disagreement: mean Milvus recall@k={recall:.4f}, "
+            f"Material disagreement: mean {competitor} recall@k={recall:.4f}, "
             f"Jaccard={jaccard:.4f}, top1={top1:.4f}."
         )
     scale = report.get("scale", {})

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Aster vs Milvus distributed MinIO comparison (target 100M × 2048).
+# Aster vs Milvus or Qdrant distributed comparison (target 100M × 2048).
 #
 # Usage:
 #   ./deploy/compare-milvus/run.sh
@@ -7,16 +7,22 @@
 #
 # Env overrides:
 #   COMPARE_NODES=4 TARGET_VECTORS=100000000 DIMENSION=2048 TOP_K=10 QUERIES=50
-#   IMAGE=aster:local CLUSTER=aster-vs-milvus EF=128 BATCH_SIZE=32
+#   IMAGE=aster:local CLUSTER=aster-vs-milvus COMPARE_BACKEND=milvus|qdrant
+#   EF=128 BATCH_SIZE=32
 #   FORCE_NODES=1   # do not auto-cap shard count to host RAM
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 HERE="${ROOT}/deploy/compare-milvus"
 PROFILE="${1:-full}"
+BACKEND="${COMPARE_BACKEND:-milvus}"
+case "$BACKEND" in
+  milvus|qdrant) ;;
+  *) printf 'unsupported comparison backend: %s\n' "$BACKEND" >&2; exit 2 ;;
+esac
 
 # Dedicated cluster — never inherit Makefile CLUSTER=aster-bench / NODES=50.
-CLUSTER="${COMPARE_CLUSTER:-aster-vs-milvus}"
+CLUSTER="${COMPARE_CLUSTER:-aster-vs-${BACKEND}}"
 IMAGE="${IMAGE:-aster:local}"
 NS=compare-milvus
 DIMENSION="${DIMENSION:-2048}"
@@ -82,15 +88,17 @@ dump_aster_debug() {
 need docker
 need kubectl
 need kind
-ensure_helm
+if [[ "$BACKEND" == "milvus" ]]; then
+  ensure_helm
+fi
 need python3
 need bazel
 
-# Serialize vs-milvus runs (smoke + full fighting for one kind cluster).
+# Serialize comparisons (smoke + full fighting for one kind cluster).
 # mkdir lock — portable on macOS (no flock(1)).
-LOCK_DIR="${ROOT}/bench-results/.vs-milvus.lock.d"
+LOCK_DIR="${ROOT}/bench-results/.vs-${BACKEND}.lock.d"
 if ! mkdir "$LOCK_DIR" 2>/dev/null; then
-  err "another bench-vs-milvus / smoke run holds ${LOCK_DIR}"
+  err "another bench-vs-${BACKEND} / smoke run holds ${LOCK_DIR}"
   err "remove it only if no compare-milvus process is running"
   exit 1
 fi
@@ -98,7 +106,7 @@ release_lock() { rmdir "$LOCK_DIR" 2>/dev/null || true; }
 trap release_lock EXIT
 
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
-OUT="${ROOT}/bench-results/vs-milvus-${PROFILE}-${STAMP}"
+OUT="${ROOT}/bench-results/vs-${BACKEND}-${PROFILE}-${STAMP}"
 mkdir -p "$OUT"
 export FORCE_COLOR="${FORCE_COLOR:-1}"
 
@@ -149,7 +157,7 @@ PY
 EOF
 
 log "Host: ${HOST_CPUS} CPUs, ${HOST_MEM_GB} GiB RAM (usable≈${USABLE_GB} GiB)"
-log "Profile=${PROFILE}  target=${TARGET_VECTORS}  actual=${ACTUAL_VECTORS}  dim=${DIMENSION}"
+log "Backend=${BACKEND}  profile=${PROFILE}  target=${TARGET_VECTORS}  actual=${ACTUAL_VECTORS}  dim=${DIMENSION}"
 log "Shards: requested=${REQUESTED_NODES}  using=${ASTER_SHARDS}  cluster=${CLUSTER}"
 if [[ "$NODES_CAPPED" == "1" ]]; then
   warn "Capped shards ${REQUESTED_NODES}→${ASTER_SHARDS} for host RAM (Milvus+Aster). FORCE_NODES=1 to override."
@@ -236,26 +244,27 @@ if ! kubectl -n "$NS" rollout status statefulset/aster-node --timeout=480s; then
 fi
 ok "Aster ${ASTER_SHARDS}/${ASTER_SHARDS} shards Ready"
 
-# ---- Milvus cluster --------------------------------------------------------
-log "Installing Milvus standalone (Helm) with external MinIO"
-chmod +x "${HERE}/milvus/install.sh"
-NS="$NS" PROFILE="$PROFILE" "${HERE}/milvus/install.sh" | tee "${OUT}/milvus-install.log"
-for i in $(seq 1 60); do
-  if kubectl -n "$NS" get svc milvus >/dev/null 2>&1 || \
-     kubectl -n "$NS" get svc milvus-milvus >/dev/null 2>&1; then
-    break
-  fi
-  sleep 5
-done
+# ---- Comparison backend ----------------------------------------------------
+if [[ "$BACKEND" == "milvus" ]]; then
+  log "Installing Milvus standalone (Helm) with external MinIO"
+  chmod +x "${HERE}/milvus/install.sh"
+  NS="$NS" PROFILE="$PROFILE" "${HERE}/milvus/install.sh" | tee "${OUT}/milvus-install.log"
+  for i in $(seq 1 60); do
+    if kubectl -n "$NS" get svc milvus >/dev/null 2>&1 || \
+       kubectl -n "$NS" get svc milvus-milvus >/dev/null 2>&1; then
+      break
+    fi
+    sleep 5
+  done
 
-MILVUS_SVC="$(kubectl -n "$NS" get svc -o name 2>/dev/null | grep -E 'svc/milvus$|svc/milvus-milvus$' | head -1 | sed 's|service/||' || true)"
-if [[ -z "${MILVUS_SVC}" ]]; then
-  MILVUS_SVC="$(kubectl -n "$NS" get svc -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' \
-    | grep -i milvus | grep -v etcd | grep -v minio | grep -v pulsar | grep -v bookie \
-    | grep -v zookeeper | grep -v proxy | head -1 || true)"
-fi
-if [[ -z "${MILVUS_SVC}" ]]; then
-  MILVUS_SVC="$(kubectl -n "$NS" get svc -o json | python3 -c '
+  BACKEND_SVC="$(kubectl -n "$NS" get svc -o name 2>/dev/null | grep -E 'svc/milvus$|svc/milvus-milvus$' | head -1 | sed 's|service/||' || true)"
+  if [[ -z "${BACKEND_SVC}" ]]; then
+    BACKEND_SVC="$(kubectl -n "$NS" get svc -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' \
+      | grep -i milvus | grep -v etcd | grep -v minio | grep -v pulsar | grep -v bookie \
+      | grep -v zookeeper | grep -v proxy | head -1 || true)"
+  fi
+  if [[ -z "${BACKEND_SVC}" ]]; then
+    BACKEND_SVC="$(kubectl -n "$NS" get svc -o json | python3 -c '
 import json,sys
 d=json.load(sys.stdin)
 for it in d["items"]:
@@ -263,13 +272,23 @@ for it in d["items"]:
   if any(p.get("port")==19530 or p.get("targetPort")==19530 for p in ports):
     print(it["metadata"]["name"]); break
 ' 2>/dev/null || true)"
+  fi
+  BACKEND_PORT=19530
+else
+  log "Deploying Qdrant"
+  kubectl -n "$NS" delete deploy qdrant --ignore-not-found --wait=true || true
+  kubectl -n "$NS" delete svc qdrant --ignore-not-found || true
+  kubectl apply -f "${HERE}/qdrant.yaml"
+  kubectl -n "$NS" rollout status deploy/qdrant --timeout=300s
+  BACKEND_SVC=qdrant
+  BACKEND_PORT=6333
 fi
-if [[ -z "${MILVUS_SVC}" ]]; then
-  err "could not find Milvus proxy Service"
-  kubectl -n "$NS" get svc,pods | tee "${OUT}/milvus-debug.txt"
+if [[ -z "${BACKEND_SVC:-}" ]]; then
+  err "could not find ${BACKEND} Service"
+  kubectl -n "$NS" get svc,pods | tee "${OUT}/${BACKEND}-debug.txt"
   exit 1
 fi
-ok "Milvus service: ${MILVUS_SVC}"
+ok "${BACKEND} service: ${BACKEND_SVC}"
 
 # ---- Port-forwards ---------------------------------------------------------
 PF_DIR="${OUT}/port-forward"
@@ -289,9 +308,9 @@ for i in $(seq 0 $((ASTER_SHARDS - 1))); do
   PIDS+=($!)
   ASTER_URLS+=("http://127.0.0.1:${local_port}")
 done
-MILVUS_LOCAL=19530
-kubectl -n "$NS" port-forward "svc/${MILVUS_SVC}" "${MILVUS_LOCAL}:19530" \
-  >"${PF_DIR}/milvus.log" 2>&1 &
+BACKEND_LOCAL="$BACKEND_PORT"
+kubectl -n "$NS" port-forward "svc/${BACKEND_SVC}" "${BACKEND_LOCAL}:${BACKEND_PORT}" \
+  >"${PF_DIR}/${BACKEND}.log" 2>&1 &
 PIDS+=($!)
 
 log "Waiting for port-forwards"
@@ -342,7 +361,8 @@ log "Running comparison driver"
   python compare.py \
     --out-dir "$OUT" \
     --aster-urls "$ASTER_URLS_CSV" \
-    --milvus-uri "http://127.0.0.1:${MILVUS_LOCAL}" \
+    --backend "$BACKEND" \
+    --competitor-uri "http://127.0.0.1:${BACKEND_LOCAL}" \
     --vectors "$ACTUAL_VECTORS" \
     --dimension "$DIMENSION" \
     --batch-size "$BATCH_SIZE" \

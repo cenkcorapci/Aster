@@ -26,13 +26,17 @@
 #   make sim-arduino-native       # host smoke (no MCU)
 #   make sim-arduino-clean
 #
-# Aster vs Milvus (Aster shards + Milvus standalone + MinIO, target 100M × 2048):
+# Aster vs Milvus / Qdrant (Aster shards + competitor + MinIO, target 100M × 2048):
 #   make bench-vs-milvus
 #   make bench-vs-milvus-smoke
 #   make bench-vs-milvus-clean
+#   make bench-vs-qdrant
+#   make bench-vs-qdrant-smoke
+#   make bench-vs-qdrant-clean
 
 .PHONY: help bench-local bench-minio bench-clean bench-test docker-image test \
 	bench-vs-milvus bench-vs-milvus-smoke bench-vs-milvus-clean \
+	bench-vs-qdrant bench-vs-qdrant-smoke bench-vs-qdrant-clean \
 	bench-multitenant bench-multitenant-smoke bench-multitenant-large \
 	bench-multitenant-test \
 	bench-scale bench-scale-smoke bench-scale-test \
@@ -84,6 +88,9 @@ help:
 		'  make bench-vs-milvus           Aster vs Milvus (100M×2048 target)' \
 		'  make bench-vs-milvus-smoke     tiny Aster vs Milvus smoke' \
 		'  make bench-vs-milvus-clean     delete kind cluster aster-vs-milvus' \
+		'  make bench-vs-qdrant           Aster vs Qdrant (100M×2048 target)' \
+		'  make bench-vs-qdrant-smoke     tiny Aster vs Qdrant smoke' \
+		'  make bench-vs-qdrant-clean     delete kind cluster aster-vs-qdrant' \
 		'  make docker-image              build BusyBox aster + aster-bench image' \
 		'  make test                      bazel test //aster/...' \
 		'' \
@@ -160,3 +167,15 @@ bench-vs-milvus-smoke: docker-image
 bench-vs-milvus-clean:
 	-kind delete cluster --name aster-vs-milvus
 	@echo "kind cluster aster-vs-milvus removed (if it existed)"
+
+bench-vs-qdrant: docker-image
+	env -u NODES CLUSTER=aster-vs-qdrant COMPARE_CLUSTER=aster-vs-qdrant \
+		COMPARE_BACKEND=qdrant FORCE_COLOR=1 ./deploy/compare-milvus/run.sh full
+
+bench-vs-qdrant-smoke: docker-image
+	env -u NODES CLUSTER=aster-vs-qdrant COMPARE_CLUSTER=aster-vs-qdrant \
+		COMPARE_BACKEND=qdrant FORCE_COLOR=1 ./deploy/compare-milvus/run.sh smoke
+
+bench-vs-qdrant-clean:
+	-kind delete cluster --name aster-vs-qdrant
+	@echo "kind cluster aster-vs-qdrant removed (if it existed)"

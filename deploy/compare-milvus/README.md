@@ -1,11 +1,12 @@
-# Aster vs Milvus comparison (100M × 2048, MinIO)
+# Aster vector database comparisons (100M × 2048, MinIO)
 
-Realistic head-to-head for **speed** and **result agreement** under a shared
-workload. Both systems use **MinIO** as object storage on kind. Aster runs
-**multi-shard**; Milvus runs **standalone** (rocksmq) so Helm’s default Pulsar
-stack does not OOM the laptop.
+Realistic head-to-head comparisons for **speed** and **result agreement** under
+a shared workload. Aster runs **multi-shard** with MinIO synchronization;
+Milvus runs **standalone** (rocksmq) with external MinIO, and Qdrant runs as
+one container in the same kind cluster.
 
 Measured laptop numbers: [docs/bench-vs-milvus.md](../../docs/bench-vs-milvus.md).
+Qdrant methodology and commands: [docs/bench-vs-qdrant.md](../../docs/bench-vs-qdrant.md).
 
 ## What is compared
 
@@ -27,11 +28,15 @@ make bench-vs-milvus-smoke                    # ~2k vectors, 2 shards
 TARGET_VECTORS=40000 make bench-vs-milvus     # laptop full (documented)
 make bench-vs-milvus                          # 100M target, auto-scaled
 make bench-vs-milvus-clean                    # delete kind cluster aster-vs-milvus
+make bench-vs-qdrant-smoke                    # ~2k vectors, 2 shards
+TARGET_VECTORS=40000 make bench-vs-qdrant     # laptop full corpus
+make bench-vs-qdrant                          # 100M target, auto-scaled
+make bench-vs-qdrant-clean                    # delete kind cluster aster-vs-qdrant
 ```
 
 **Note:** `make` exports `NODES=50` for other benches; this suite **ignores**
 `NODES` and uses `COMPARE_NODES` (default 4 full / 2 smoke) with a hard kind
-cap of 4. Dedicated cluster: `aster-vs-milvus`.
+cap of 4. Dedicated clusters: `aster-vs-milvus` and `aster-vs-qdrant`.
 
 ```bash
 # Cap is automatic on laptops (≤4 shards). To force more:
@@ -80,3 +85,6 @@ script.
 
 Driver requirements pin `setuptools<82` because pymilvus 2.4 still imports
 `pkg_resources`.
+
+Qdrant is pinned to `qdrant/qdrant:v1.12.6` and uses the same cosine HNSW
+settings as Aster and Milvus. It does not need Helm.

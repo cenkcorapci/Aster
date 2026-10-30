@@ -4,6 +4,7 @@
 # urllib3>=2.0
 # setuptools 82+ removed pkg_resources; pymilvus 2.4 still imports it.
 pymilvus>=2.4.0,<2.5
+qdrant-client>=1.12.0,<2
 setuptools>=70,<82
 numpy>=1.26
 requests>=2.31

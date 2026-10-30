@@ -13,6 +13,12 @@ are on the [roadmap](docs/development-plan.md) and not part of 1.0.
 
 ### Docker (GHCR image)
 
+Install the CLI from source into `~/.local/bin`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cenkcorapci/Aster/main/scripts/install.sh | sh
+```
+
 ```bash
 docker run -d -p 8080:8080 -v aster-data:/data \
   -e ASTER_DATA_DIR=/data ghcr.io/cenkcorapci/aster:latest \
@@ -99,6 +105,8 @@ make sim-arduino                       # ESP32 Tiny firmware + Espressif QEMU
 make sim-arduino-native                # same harness on host (no MCU)
 make bench-vs-milvus-smoke             # Aster vs Milvus (tiny)
 make bench-vs-milvus                   # Aster vs Milvus (100M×2048 target, auto-scaled)
+make bench-vs-qdrant-smoke             # Aster vs Qdrant (tiny)
+make bench-vs-qdrant                   # Aster vs Qdrant (100M×2048 target, auto-scaled)
 bazel build --config=arduino //aster/embedded   # MCU static lib
 ```
 
@@ -108,6 +116,7 @@ Live Grafana sim: [deploy/sim-grafana/README.md](deploy/sim-grafana/README.md).
 Arduino / ESP32 QEMU sim: [deploy/sim-arduino/README.md](deploy/sim-arduino/README.md).  
 Aster vs Milvus: [deploy/compare-milvus/README.md](deploy/compare-milvus/README.md) ·
 [measured numbers](docs/bench-vs-milvus.md).
+Aster vs Qdrant: [docs/bench-vs-qdrant.md](docs/bench-vs-qdrant.md).
 
 ### Aster vs Milvus (Apple M4, 2026-09-03)
 
