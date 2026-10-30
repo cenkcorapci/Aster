@@ -6,7 +6,8 @@ monorepo.
 
 Companion docs: [design](design.md), [code structure](code-structure.md),
 [indexing](indexing.md), [vector encoding](vector-encoding.md),
-[tutorials](tutorials/README.md), [TLA+](../tla/README.md).
+[RAM efficiency](ram-efficiency.md), [tutorials](tutorials/README.md),
+[TLA+](../tla/README.md).
 
 ## Guiding rules
 

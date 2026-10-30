@@ -2,6 +2,8 @@
 
 How Aster packs sealed vectors for **RAM and disk**. Normative wire values live
 in [`sstable-format.md`](sstable-format.md) (§5 `vector_encoding`, §7.4).
+Design choices (mmap first, encoding vs residency, deferred PQ/graph tiers):
+[`ram-efficiency.md`](ram-efficiency.md).
 
 ## Purpose
 

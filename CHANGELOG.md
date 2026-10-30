@@ -17,6 +17,8 @@ The project follows a single-version policy; see [docs/versioning.md](docs/versi
 - Docs updated for mmap residency; removed completed `docs/superpowers/`
   planning artifacts and dangling links to previously deleted task/business/
   client-api docs. Root README documentation map is the index.
+- Added [ram-efficiency.md](docs/ram-efficiency.md): design choices for sealed
+  mmap residency, encoding vs placement, and deferred PQ/graph-disk work.
 - First stable release: version bumped to 1.0.0 (pre-alpha label removed).
 - CLI reports `ASTER_VERSION_STRING` instead of a hard-coded `0.1.0-dev`.
 

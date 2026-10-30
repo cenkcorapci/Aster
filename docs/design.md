@@ -172,8 +172,9 @@ Coordinator → replica set → parallel segment HNSW → merge → filter → r
 
 Sealed SSTable vector blocks use `MappedFile` + `StoragePolicy`
 ([vector-encoding.md](vector-encoding.md)): cold demand-pages, cached
-prefaults, pinned heap-copies. SSD: mmap vectors, larger segments. HDD /
-object store: upper layers pinned; locality-aware reorder on compact.
+prefaults, pinned heap-copies. Design rationale and deferred milestones:
+[ram-efficiency.md](ram-efficiency.md). SSD: mmap vectors, larger segments.
+HDD / object store: upper layers pinned; locality-aware reorder on compact.
 
 ## Networking & ops
 

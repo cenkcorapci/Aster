@@ -6,7 +6,8 @@ graphs inside the LSM engine, and distributed search behavior.
 **Implementation status:** segmented HNSW is implemented (PENDING exact →
 READY graph search; see [`development-plan.md`](development-plan.md)).
 Sealed vector payloads default to **mmap / cold residency**
-([`vector-encoding.md`](vector-encoding.md)). Lifecycle invariants are
+([`vector-encoding.md`](vector-encoding.md);
+[`ram-efficiency.md`](ram-efficiency.md)). Lifecycle invariants are
 specified in [`tla/AsterLsmIndex.tla`](../tla/AsterLsmIndex.tla) and
 [`tla/AsterReplication.tla`](../tla/AsterReplication.tla) — do not change
 those semantics without updating the specs.
