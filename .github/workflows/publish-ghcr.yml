@@ -5,16 +5,18 @@ name: Publish image
 # (bazel --config=linux_musl_{amd64,arm64}); a manifest list joins them.
 
 on:
-  push:
-    tags:
-      - "v*"
-  release:
-    types: [published]
   workflow_dispatch:
     inputs:
       tag:
         description: Image tag (default: ref name)
         required: false
+        type: string
+  push:
+    tags:
+      - "v*"
+  release:
+    types:
+      - published
 
 permissions:
   contents: read
@@ -34,7 +36,7 @@ jobs:
       matrix:
         arch: [amd64, arm64]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v4
 
       - name: Resolve tag
         id: meta
