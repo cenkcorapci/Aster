@@ -40,12 +40,10 @@ std::vector<std::vector<float>> MakeCorpus(uint32_t dim, uint32_t n,
   for (uint32_t i = 0; i < n; ++i) {
     const int c = cluster(rng);
     std::vector<float> v(dim);
-    float norm_sq = 0.0f;
     for (uint32_t d = 0; d < dim; ++d) {
       const float center =
           ((d + static_cast<uint32_t>(c) * 3u) % dim < dim / 4u) ? 1.0f : 0.0f;
       v[d] = center + noise(rng);
-      norm_sq += v[d] * v[d];
     }
     out.push_back(std::move(v));
   }
@@ -124,4 +122,3 @@ TEST(AccuracyProfile, RecallImprovesWithProfile) {
 #endif  // ASTER_ENABLE_HNSW
 
 }  // namespace aster
-

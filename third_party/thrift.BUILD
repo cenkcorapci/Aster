@@ -85,8 +85,11 @@ cc_library(
         allow_empty = True,
     ),
     copts = [
+        "-Wno-deprecated-declarations",
+        "-Wno-unused-function",
         "-Wno-unused-parameter",
         "-Wno-unused-const-variable",
+        "-Wno-unused-variable",
     ],
     defines = [
         "THRIFT_STATIC_DEFINE",

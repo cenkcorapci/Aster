@@ -147,7 +147,7 @@ TEST(Integration, PosixLayoutWithSstableAndManifest) {
 
   Manifest m;
   m.generation = 1;
-  m.segments.push_back({1, seg_rel});
+  m.segments.push_back({1, seg_rel, ""});
   const std::string man = root + "/MANIFEST";
   ASSERT_TRUE(WriteManifest(man, m).ok());
 

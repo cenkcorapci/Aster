@@ -6,6 +6,9 @@ build --host_cxxopt=-std=c++20
 build --cxxopt=-Wall
 build --cxxopt=-Wextra
 
+# Homebrew OpenSSL is built for macOS 26. Keep Bazel's linker target aligned.
+build --macos_minimum_os=26.0
+
 # Test output.
 test --test_output=errors
 
