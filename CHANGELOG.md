@@ -5,6 +5,11 @@ The project follows a single-version policy; see [docs/versioning.md](docs/versi
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-10-30
+
+First stable release. Pre-alpha status removed; server, Bazel module, and
+clients share the single version `1.0.0` (see [versioning.md](docs/versioning.md)).
+
 ### Changed
 - Sealed SSTable vectors are **mmap'd by default** (`StoragePolicy::vectors =
   kCold`): flush/reopen no longer copies the packed payload into anonymous
@@ -22,12 +27,14 @@ The project follows a single-version policy; see [docs/versioning.md](docs/versi
 - Added `//aster/bench:ram_stress_bench` and published single-node (50k×384)
   + 3-node RF=3 (30k×384) cold-mmap stress results in
   [ram-efficiency.md](docs/ram-efficiency.md).
-- First stable release: version bumped to 1.0.0 (pre-alpha label removed).
 - CLI reports `ASTER_VERSION_STRING` instead of a hard-coded `0.1.0-dev`.
 
 ### Fixed
 - `--port` is validated (0..65535, numeric); previously invalid values
   silently wrapped around.
+- HTTP JSON reader now unescapes `\n \r \t \uXXXX` (previously `\n` became `n`);
+  `json::Escape` escapes control characters.
+- HTTP API percent-decodes path segments (document ids with spaces, `%`, UTF-8).
 
 ### Added
 - `MappedFile`, `StoragePolicy` / `Residency` (`cold`/`cached`/`pinned`),
@@ -38,7 +45,7 @@ The project follows a single-version policy; see [docs/versioning.md](docs/versi
   200k×512 workloads via `Db::Options::vector_encoding` and SSTable header
   byte. Docs: [vector-encoding.md](docs/vector-encoding.md); tests
   `//aster/index:vector_encoding_test`, storage + integration coverage.
-- Python client HTTP transport (`clients/python`, `aster-client` 0.2.0):
+- Python client HTTP transport (`clients/python`, `aster-client`):
   `create_collection`, `upsert`, `search(top_k, ef_search, tags)`, `get`,
   `delete`, `health`, `stats`, with live-server tests.
 - `GET /v1/collections/{name}/stats` (vectors, segments, memtable rows,
@@ -52,7 +59,6 @@ The project follows a single-version policy; see [docs/versioning.md](docs/versi
 - `compaction_backlog` gauge is now populated (segments above the tier
   threshold); `gets_total` is now incremented.
 - GHCR multi-arch image workflow (`.github/workflows/publish-image.yml`).
-
 - M2-T10: HNSW recall@10 CI gate (`//aster/qa:recall_gate_test`, nightly
   `//aster/qa:recall_gate_nightly_test`) — SIFT/GloVe-like subsets must
   reach ≥ 0.95 @ ef=128 vs exact; workflows `.github/workflows/recall-gate.yml`
@@ -60,11 +66,6 @@ The project follows a single-version policy; see [docs/versioning.md](docs/versi
 - Installable embedded library target `//aster:embedded_lib` — single
   `cc_library` for downstream in-process deps (re-exports `//aster/db`).
   See [docs/code-structure.md](docs/code-structure.md).
-
-### Fixed
-- HTTP JSON reader now unescapes `\n \r \t \uXXXX` (previously `\n` became `n`);
-  `json::Escape` escapes control characters.
-- HTTP API percent-decodes path segments (document ids with spaces, `%`, UTF-8).
 
 ### Stabilized
 - Embedded `aster::Db` public API (`aster/db/db.h`) is the in-process contract.
