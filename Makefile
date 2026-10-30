@@ -34,7 +34,7 @@
 #   make bench-vs-qdrant-smoke
 #   make bench-vs-qdrant-clean
 
-.PHONY: help bench-local bench-minio bench-clean bench-test docker-image test \
+.PHONY: help bench-local bench-minio bench-clean bench-test bench-vs-test install-test docker-image test \
 	bench-vs-milvus bench-vs-milvus-smoke bench-vs-milvus-clean \
 	bench-vs-qdrant bench-vs-qdrant-smoke bench-vs-qdrant-clean \
 	bench-multitenant bench-multitenant-smoke bench-multitenant-large \
@@ -91,6 +91,8 @@ help:
 		'  make bench-vs-qdrant           Aster vs Qdrant (100M×2048 target)' \
 		'  make bench-vs-qdrant-smoke     tiny Aster vs Qdrant smoke' \
 		'  make bench-vs-qdrant-clean     delete kind cluster aster-vs-qdrant' \
+		'  make bench-vs-test             offline Milvus / Qdrant driver checks' \
+		'  make install-test              offline one-line installer check' \
 		'  make docker-image              build BusyBox aster + aster-bench image' \
 		'  make test                      bazel test //aster/...' \
 		'' \
@@ -179,3 +181,9 @@ bench-vs-qdrant-smoke: docker-image
 bench-vs-qdrant-clean:
 	-kind delete cluster --name aster-vs-qdrant
 	@echo "kind cluster aster-vs-qdrant removed (if it existed)"
+
+bench-vs-test:
+	cd deploy/compare-milvus/driver && ./run-tests.sh
+
+install-test:
+	./scripts/test-install.sh

@@ -73,6 +73,30 @@ jobs:
           fail-on-error: false
           fail-on-empty: false
 
+  comparison-driver-tests:
+    name: Comparison driver tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: deploy/compare-milvus/driver/requirements.txt
+
+      - name: Install comparison driver dependencies
+        run: pip install -r deploy/compare-milvus/driver/requirements.txt
+
+      - name: Run offline comparison and installer tests
+        run: |
+          make bench-vs-test
+          make install-test
+
   # Native aarch64 + Edge profile (ARM NEON distance kernels). M3-T06.
   # Local equivalents: bazel test --config=raspberry_pi //aster/...
   #   or ./scripts/build-matrix.sh --full (zig cross from non-Pi hosts).

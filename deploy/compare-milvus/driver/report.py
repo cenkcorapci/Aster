@@ -35,7 +35,7 @@ def render_text(report: Dict[str, Any]) -> str:
     lines.append("")
     lines.append("--- Load / index ---")
     al = report.get("aster_load", {})
-    ml = report.get("competitor_load", report.get("milvus_load", {}))
+    ml = report.get("competitor_load") or report.get("milvus_load", {})
     lines.append(
         f"Aster  load={_fmt(al.get('load_seconds', 0))}s  "
         f"flush={_fmt(al.get('flush_seconds', 0))}s  "
@@ -132,7 +132,9 @@ def build_verdict(report: Dict[str, Any]) -> Dict[str, Any]:
         f"{competitor} uses HNSW ANN — compare ef and corpus scale when interpreting recall."
     )
     al = report.get("aster_search", {}).get("avg_ms", 0)
-    ml = report.get("competitor_search", report.get("milvus_search", {})).get("avg_ms", 0)
+    ml = (report.get("competitor_search") or report.get("milvus_search", {})).get(
+        "avg_ms", 0
+    )
     if al and ml:
         if ml < al:
             notes.append(

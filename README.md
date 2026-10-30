@@ -1,137 +1,287 @@
 # Aster
 
 [![CI](https://github.com/cenkcorapci/Aster/actions/workflows/ci.yml/badge.svg)](https://github.com/cenkcorapci/Aster/actions/workflows/ci.yml)
+[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
 
-Peer-to-peer vector database: LSM storage, per-segment indexes, CPU-only
-search. Runs from MCUs to multi-node clusters. C++20, Bazel, AGPL-3.0.
+**Aster is a CPU-first vector database for embedded, local, and server
+deployments.** It combines an LSM storage engine with per-segment HNSW indexes,
+durable WAL/SSTables, an HTTP API, and a stable C++ embedding API. The same
+codebase supports memory-constrained targets through multi-node benchmark
+harnesses.
 
-**Status:** 1.0 — stable single-node engine with segmented HNSW, HTTP +
-Thrift APIs, and catalog quotas. Cluster replication and AWS S3 (SigV4)
-are on the [roadmap](docs/development-plan.md) and not part of 1.0.
+| What | Status in 1.0 |
+| --- | --- |
+| Embedded C++ database | Stable public API |
+| Single-node durable storage | Supported |
+| HTTP and Thrift servers | Supported |
+| HNSW approximate search | Supported |
+| Catalog quotas and multiple HTTP collections | Supported |
+| Client package transport/code generation | Planned (M5/M6) |
+| Cluster replication and AWS S3 SigV4 | Planned; not included in 1.0 |
 
-## Install
+This README is the fast path to running Aster. See the [documentation
+index](docs/README.md) for design documents, API references, tutorials, and
+the roadmap.
 
-### Docker (GHCR image)
+## Contents
 
-Install the CLI from source into `~/.local/bin`:
+- [Choose an installation](#choose-an-installation)
+- [Run your first collection](#run-your-first-collection)
+- [Operate a server](#operate-a-server)
+- [Embed Aster in C++](#embed-aster-in-c)
+- [Run benchmarks](#run-benchmarks)
+- [Develop and test](#develop-and-test)
+- [Documentation map](#documentation-map)
+
+## Choose an installation
+
+### One-line source install
+
+The installer downloads a source snapshot, uses your installed Bazel or
+bootstraps the pinned Bazel version through Bazelisk, builds an optimized CLI,
+and installs it into `~/.local/bin`.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/cenkcorapci/Aster/main/scripts/install.sh | sh
 ```
 
+It requires `curl`, `tar`, and a C++20 compiler. The script supports macOS
+Apple Silicon/Intel and Linux x86_64/arm64. Add `~/.local/bin` to `PATH` if the
+installer reports that it is absent:
+
 ```bash
-docker run -d -p 8080:8080 -v aster-data:/data \
+export PATH="$HOME/.local/bin:$PATH"
+aster --help
+```
+
+Set `PREFIX` to select another destination or `ASTER_REF` to build a different
+repository branch:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cenkcorapci/Aster/main/scripts/install.sh | \
+  PREFIX="$HOME/bin" ASTER_REF=main sh
+```
+
+### Docker
+
+Run the published image with a named volume for durable data:
+
+```bash
+docker run -d --name aster -p 8080:8080 -v aster-data:/data \
   -e ASTER_DATA_DIR=/data ghcr.io/cenkcorapci/aster:latest \
   serve --host 0.0.0.0 --port 8080
+
 curl http://localhost:8080/health
 ```
 
-### From source
+The container exposes the server only on the Docker host. Use a reverse proxy,
+network policy, and an API key before exposing it beyond a trusted network.
 
-Needs [Bazel](https://bazel.build) (version in `.bazelversion`; Bazelisk
-recommended) and a C++20 compiler.
+### Build from source
+
+For development, install [Bazelisk](https://github.com/bazelbuild/bazelisk)
+(recommended) or the version recorded in `.bazelversion`, plus a C++20
+compiler:
 
 ```bash
-git clone https://github.com/cenkcorapci/Aster && cd Aster
+git clone https://github.com/cenkcorapci/Aster.git
+cd Aster
 bazel build -c opt //aster/cli:aster
 ./bazel-bin/aster/cli/aster --help
 ```
 
-Use `-c opt` for production and benchmarks; debug builds are much slower.
+Use `-c opt` for production and benchmark runs. Debug builds intentionally
+trade speed for diagnostics.
 
-## Usage
+## Run your first collection
 
-Start the HTTP server (set `--api-key` or `ASTER_API_KEY` to require auth):
-
-```bash
-./bazel-bin/aster/cli/aster serve --data-dir /var/lib/aster --port 8080
-```
-
-Create a collection, upsert, and search:
+Start a local HTTP server. `--data-dir` enables durable WAL and SSTable
+storage; use a writable directory that is backed up according to your
+operational policy.
 
 ```bash
-curl -X PUT localhost:8080/v1/collections/docs \
-  -H 'Content-Type: application/json' -d '{"dimension":3,"metric":"cosine"}'
-curl -X PUT localhost:8080/v1/collections/docs/docs/a \
-  -H 'Content-Type: application/json' -d '{"vector":[0.1,0.2,0.3]}'
-curl -X POST localhost:8080/v1/collections/docs/search \
-  -H 'Content-Type: application/json' -d '{"vector":[0.1,0.2,0.3],"top_k":5}'
+aster serve --data-dir "$HOME/.local/share/aster" --port 8080
 ```
 
-Full API: [HTTP API](docs/tutorials/http-api.md). Config file:
-[server-config](docs/server-config.md). Thrift: `aster serve-rpc`.
-Embedding in C++: [database management](docs/tutorials/database-management.md).
-Python client: [`clients/python`](clients/python).
-
-## Development
+Create a three-dimensional cosine collection, write one document, and search
+it:
 
 ```bash
-bazel test //aster/...          # unit + integration tests
-./scripts/run-coverage.sh       # ≥90% line coverage gate on core aster libs
-bazel run //aster/cli:aster -- serve --data-dir /tmp/aster --port 8080
-bazel run //aster/cli:aster     # local demo
-./scripts/docker-build.sh       # BusyBox image → aster:local
+curl -X PUT http://localhost:8080/v1/collections/docs \
+  -H 'Content-Type: application/json' \
+  -d '{"dimension":3,"metric":"cosine"}'
+
+curl -X PUT http://localhost:8080/v1/collections/docs/docs/getting-started \
+  -H 'Content-Type: application/json' \
+  -d '{"vector":[0.1,0.2,0.3],"metadata":"hello"}'
+
+curl -X POST http://localhost:8080/v1/collections/docs/search \
+  -H 'Content-Type: application/json' \
+  -d '{"vector":[0.1,0.2,0.3],"top_k":5}'
 ```
 
-## Tutorials
+The HTTP API supports collection management, upserts, reads, deletes, search,
+flush/compaction operations, health, statistics, and Prometheus metrics. Read
+the [HTTP API tutorial](docs/tutorials/http-api.md) before integrating a
+service.
 
-- [Database management](docs/tutorials/database-management.md) — open, upsert, search, flush, compact, Docker
-- [HTTP API](docs/tutorials/http-api.md) — multi-collection JSON server (`aster serve`)
-- [Client libraries](docs/tutorials/client-libraries.md) — seven-language facades (transport = M5)
+## Operate a server
 
-Full docs index: [docs/README.md](docs/README.md).
+### Durability and lifecycle
 
-## Layout
+A collection accepts writes into a memtable, persists them to the WAL when a
+data directory is configured, then flushes immutable SSTable segments with
+their vector indexes. Compaction merges segments and removes obsolete
+tombstones. The [database management tutorial](docs/tutorials/database-management.md)
+explains the durability, flush, and compaction model.
 
-| Path | What |
+Useful operational endpoints and commands:
+
+| Goal | Command or endpoint |
 | --- | --- |
-| `aster/` | Engine (`db`, `embedded`, storage, index, …) |
-| `clients/` | Client SDKs ([README](clients/README.md)) |
-| `docs/` | Design, tutorials, roadmap |
-| `tla/` | Formal specs ([README](tla/README.md)) |
+| Check liveness | `GET /health` |
+| Inspect collection size and backlog | `GET /v1/collections/<name>/stats` |
+| Export Prometheus metrics | `GET /metrics` |
+| Run with a configuration file | [server configuration](docs/server-config.md) |
+| Start the Thrift server | `aster serve-rpc` |
 
-## More
+### Security
 
-```bash
-./scripts/run-coverage.sh              # ≥90% gate on core aster libs (excl. cli, gen-cpp, see script)
-./scripts/build-matrix.sh              # Tiny / Edge / Server / Arduino / musl
-make bench-local                       # kind soak (local disk)
-make bench-minio                       # kind soak + MinIO
-make bench-multitenant-smoke           # multi-tenant Catalog (mixed dims/rows)
-make bench-scale                       # elastic scale 15↔50 (local+minio)
-make sim-grafana                       # 50-node MinIO sim + Grafana dashboards
-make sim-grafana-stop
-make sim-arduino                       # ESP32 Tiny firmware + Espressif QEMU
-make sim-arduino-native                # same harness on host (no MCU)
-make bench-vs-milvus-smoke             # Aster vs Milvus (tiny)
-make bench-vs-milvus                   # Aster vs Milvus (100M×2048 target, auto-scaled)
-make bench-vs-qdrant-smoke             # Aster vs Qdrant (tiny)
-make bench-vs-qdrant                   # Aster vs Qdrant (100M×2048 target, auto-scaled)
-bazel build --config=arduino //aster/embedded   # MCU static lib
+Require authentication with `--api-key` or `ASTER_API_KEY`; clients then send
+the corresponding API key with requests. Keep Aster behind TLS termination and
+limit network access to trusted clients. The server does not make an insecure
+deployment safe by itself.
+
+### Search and storage choices
+
+Use cosine metric for normalized embeddings. Aster supports exact search and
+segmented HNSW approximate search; `top_k` and `ef_search` are request-level
+controls. Storage can use compact vector encodings where their precision and
+recall trade-offs fit the workload. See [vector encodings](docs/vector-encoding.md)
+and the [API tutorial](docs/tutorials/http-api.md) for the available options.
+
+## Embed Aster in C++
+
+The stable in-process interface is `aster::Db` from `aster/db/db.h`. Downstream
+Bazel projects depend on `//aster:embedded_lib`.
+
+```cpp
+#include "aster/db/db.h"
+
+aster::Db::Options options;
+options.dimension = 384;
+options.metric = aster::Metric::kCosine;
+options.data_dir = "/var/lib/my-app/aster";
+
+auto opened = aster::Db::Open(options);
+if (!opened.ok()) {
+  // Handle opened.status().
+}
+std::unique_ptr<aster::Db> db = std::move(opened.value());
 ```
 
-Multi-tenant: [deploy/bench-multitenant/README.md](deploy/bench-multitenant/README.md).  
-Scale: [deploy/bench-scale/README.md](deploy/bench-scale/README.md).  
-Live Grafana sim: [deploy/sim-grafana/README.md](deploy/sim-grafana/README.md).  
-Arduino / ESP32 QEMU sim: [deploy/sim-arduino/README.md](deploy/sim-arduino/README.md).  
-Aster vs Milvus: [deploy/compare-milvus/README.md](deploy/compare-milvus/README.md) ·
-[measured numbers](docs/bench-vs-milvus.md).
-Aster vs Qdrant: [docs/bench-vs-qdrant.md](docs/bench-vs-qdrant.md).
+The [database management tutorial](docs/tutorials/database-management.md)
+documents writes, reads, filters, flushes, compaction, error handling, and
+thread-safety. The [versioning policy](docs/versioning.md) defines compatibility
+rules for this public API.
 
-### Aster vs Milvus (Apple M4, 2026-09-03)
+## Clients and protocol
 
-Kind + shared MinIO. HNSW `M=16`, `ef=128`, dim 2048, seed 42.
+The repository includes C++, Python, Go, Rust, Java, Scala, and JavaScript
+client facades. Their source-of-truth wire protocol is
+[`aster/rpc/aster.thrift`](aster/rpc/aster.thrift). Transport and generated
+package publishing are roadmap milestones, so use HTTP or the embedded C++ API
+for production integrations today. See [client libraries](clients/README.md)
+for the status and compatibility contract.
 
-| Profile | Corpus | Aster search p50 | Milvus search p50 | Jaccard@10 | Milvus recall@10 |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| Smoke (2 shards) | 2 000 | 17.8 ms | 4.5 ms | 0.91 | 0.95 |
-| Laptop full (4 shards) | 40 000 | 41.5 ms | 4.6 ms | 0.20 | 0.32 |
+## Run benchmarks
 
-Aster load is HTTP upsert + per-segment index build; Milvus batch-insert is
-much faster on this harness. Full write-up: [docs/bench-vs-milvus.md](docs/bench-vs-milvus.md).
+All benchmark commands are reproducible harnesses, not production capacity
+claims. Record host details, dimensions, corpus size, index parameters, and
+result artifacts when comparing runs.
 
-CI runs `bazel test //aster/...` on every push/PR to `main`, plus an
-`ubuntu-24.04-arm` Edge job (`--config=raspberry_pi`). Local matrix:
-`./scripts/build-matrix.sh --full`.
+| Workflow | Command | Purpose |
+| --- | --- | --- |
+| Local kind soak | `make bench-local` | Mixed write/update/search on local disk |
+| MinIO soak | `make bench-minio` | Same workload with MinIO object storage |
+| Multi-tenant | `make bench-multitenant-smoke` | Catalog quotas across dimensions and sizes |
+| Elastic scale | `make bench-scale` | Scale/rebalance workload with local and MinIO backends |
+| Milvus comparison | `make bench-vs-milvus-smoke` | Aster vs Milvus, deterministic 2k smoke corpus |
+| Qdrant comparison | `make bench-vs-qdrant-smoke` | Aster vs Qdrant, deterministic 2k smoke corpus |
+| Full comparison target | `make bench-vs-qdrant` | 100M × 2048 target, automatically scaled to host RAM |
 
-License: [AGPL-3.0](LICENSE).
+Milvus and Qdrant comparisons share deterministic seed `42`, the same vectors
+and queries, HNSW settings, and agreement metrics. Their full target is
+100M × 2048 vectors, but the harness reduces the actual corpus and Aster shard
+count to fit host and pod memory. Results are saved under `bench-results/`.
+
+- [Comparison harness](deploy/compare-milvus/README.md)
+- [Aster vs Milvus measured results](docs/bench-vs-milvus.md)
+- [Aster vs Qdrant methodology](docs/bench-vs-qdrant.md)
+- [Multi-tenant benchmark](deploy/bench-multitenant/README.md)
+- [Elastic-scale benchmark](deploy/bench-scale/README.md)
+- [Grafana simulation](deploy/sim-grafana/README.md)
+
+## Develop and test
+
+### Core engine
+
+```bash
+bazel test //aster/...             # unit and integration suite
+./scripts/run-coverage.sh          # core library coverage gate (>=90%)
+./scripts/build-matrix.sh --quick  # host, profiles, and Arduino smoke matrix
+```
+
+CI runs the core suite on every push and pull request, plus an ARM64 Edge
+profile. Use `./scripts/build-matrix.sh --full` to add cross-platform builds
+when the required toolchains are available.
+
+### Comparison harness
+
+The comparison driver is separately testable without Docker, kind, or a live
+vector database. Create a Python environment, install its dependencies, then
+run the offline suite:
+
+```bash
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -r deploy/compare-milvus/driver/requirements.txt
+make bench-vs-test
+make install-test
+```
+
+`bench-vs-test` covers deterministic workloads, agreement metrics, Aster HTTP
+request construction and shard routing, report rendering, the Milvus/Qdrant
+driver paths, and Qdrant request mapping. `install-test` simulates the
+one-line installer, including its Bazelisk fallback, without downloading or
+building a real release.
+
+### Repository layout
+
+| Path | Contents |
+| --- | --- |
+| `aster/` | Core database, storage, index, RPC, CLI, and embedded targets |
+| `clients/` | Language client facades and wire conformance corpus |
+| `deploy/` | kind, MinIO, comparison, scale, and simulation harnesses |
+| `docs/` | Tutorials, operational guides, architecture, and roadmap |
+| `tla/` | TLA+ specifications |
+| `scripts/` | Build, coverage, image, release, and installer tooling |
+
+## Documentation map
+
+| Need | Start here |
+| --- | --- |
+| HTTP endpoints and examples | [HTTP API tutorial](docs/tutorials/http-api.md) |
+| C++ embedding, durability, and compaction | [Database management](docs/tutorials/database-management.md) |
+| Server environment and configuration | [Server configuration](docs/server-config.md) |
+| System architecture | [Code structure](docs/code-structure.md) |
+| Vector precision/storage trade-offs | [Vector encodings](docs/vector-encoding.md) |
+| Client support and protocol compatibility | [Client libraries](clients/README.md) |
+| Compatibility and release rules | [Versioning](docs/versioning.md) |
+| Planned work | [Development plan](docs/development-plan.md) |
+
+## Contributing and license
+
+Read the [development plan](docs/development-plan.md), keep changes covered by
+the relevant test target, and run the narrowest applicable checks before
+opening a pull request. Aster is licensed under [AGPL-3.0](LICENSE).
