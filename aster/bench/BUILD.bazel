@@ -29,6 +29,20 @@ cc_binary(
 )
 
 cc_binary(
+    name = "ram_stress_bench",
+    srcs = ["ram_stress_bench.cc"],
+    target_compatible_with = select({
+        "//platforms:is_baremetal": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    }),
+    deps = [
+        "//aster/db",
+        "//aster/distributed",
+        "//aster/storage",
+    ],
+)
+
+cc_binary(
     name = "multi-tenant-bench",
     srcs = ["multi_tenant_bench.cc"],
     target_compatible_with = select({

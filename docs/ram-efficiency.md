@@ -111,7 +111,79 @@ options.storage_policy.cache_budget_bytes = 256ull << 20;   // hot-page budget
 Object-store HOT/WARM/COLD (`StorageMode`) is orthogonal: it controls
 mirroring and S3 block-cache behaviour, not SSTable mmap residency.
 
-## Benchmark expectations
+## Measured stress results (2026-10-30)
+
+Host: **Apple M4**, macOS 26.6.2, cold mmap
+(`StoragePolicy::vectors = kCold`), `vector_encoding=int8_sq`, WAL
+`SyncPolicy::kNever`, **HNSW background build off** (exact scan — latency is
+a correctness/throughput floor, not an HNSW claim). Anonymous vector heap is
+read from sealed `.ast` packed stores after reopen (`0` ⇒ file-backed).
+
+Harness: `//aster/bench:ram_stress_bench` (single durable `Db` + in-process
+3×`Db` with `Coordinator` RF=3, quorum writes/reads).
+
+### Single-node durable (cold mmap)
+
+| Metric | Value |
+| --- | ---: |
+| Vectors | 50 000 |
+| Dimension | 384 |
+| Encoding | `int8_sq` |
+| Raw float32 payload | 73.24 MiB |
+| Logical packed payload | 7.46 MiB |
+| Anonymous vector heap | **0 B (file-backed)** |
+| Load + flush | 2.83 s (≈17.7k upserts/s) |
+| Reopen | 0.121 s |
+| Search QPS (warm, exact) | 21.3 |
+| Search p50 / p95 / p99 | 45.6 / 56.3 / 68.9 ms |
+| Write p95 (ingest) | 0.019 ms |
+| Process RSS max | 135.8 MiB |
+| Searches / errors | 500 / 0 |
+
+### 3-node RF=3 Coordinator (cold mmap per replica)
+
+In-process three durable replicas + coordinator (not a kind/K8s cluster).
+With RF=3 on three nodes every key is stored on every replica; anonymous
+heap below is the **sum** across the three sealed stores after reopen.
+
+| Metric | Value |
+| --- | ---: |
+| Vectors | 30 000 |
+| Dimension | 384 |
+| Encoding | `int8_sq` |
+| Raw float32 payload | 43.95 MiB |
+| Logical packed (per replica) | 3.64 MiB |
+| Anonymous vector heap (3 replicas) | **0 B (file-backed)** |
+| Quorum load + flush | 3.52 s (≈8.5k writes/s) |
+| Reopen (3 nodes) | 0.379 s |
+| Mixed quorum-read + ANN QPS | 33.8 |
+| Combined op p50 / p95 / p99 | 28.6 / 34.4 / 39.4 ms |
+| Quorum write p95 | 0.090 ms |
+| Process RSS max | 337.3 MiB |
+| Searches / errors | 500 / 0 |
+
+### Gate check (`ram_efficiency_bench`)
+
+Same host, 50k × 384 `int8_sq` flush+reopen:
+
+```text
+anonymous_vector_heap_bytes=0
+file_backed=yes
+reduction_vs_raw=100.0%   # vs float32 payload for the sealed vector heap
+```
+
+### How to reproduce
+
+```bash
+# Anonymous-heap gate
+bazel run //aster/bench:ram_efficiency_bench -- --n 50000 --dim 384 --encoding int8_sq
+
+# Single-node + 3-node RF=3 stress (writes Markdown tables to stdout)
+bazel run //aster/bench:ram_stress_bench -- \
+  --single-n 50000 --cluster-n 30000 --dim 384 --encoding int8_sq --searches 500
+```
+
+## Longer-term scale targets
 
 After warm-up with a corpus larger than the RAM budget, treat these as
 **engineering targets** (not claimed current results):
@@ -124,13 +196,8 @@ After warm-up with a corpus larger than the RAM budget, treat these as
 
 Always record: recall@k, latency percentiles, **anonymous RSS**, heap vector
 bytes, resident file pages if available, page faults / bytes read per query,
-and cold vs warm first-query latency.
-
-Reproduce the anonymous-heap gate locally:
-
-```bash
-bazel run //aster/bench:ram_efficiency_bench -- --n 15000 --dim 768 --encoding int8_sq
-```
+and cold vs warm first-query latency. Re-run with
+`background_index_build=true` when quoting HNSW latency.
 
 ## References (external ideas, not dependencies)
 

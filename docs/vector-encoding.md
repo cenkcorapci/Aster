@@ -111,3 +111,5 @@ separately; mmap RSS is reclaimable page cache, not a hard working-set claim.
 - `//aster/storage:storage_test` — SSTable encodings, mmap cold/pinned, packed search
 - `//aster/integration:integration_test` — durable int8 + binary disk size
 - `//aster/bench:ram_efficiency_bench` — anonymous heap vs logical payload after reopen
+- `//aster/bench:ram_stress_bench` — single-node + 3-node RF=3 cold-mmap stress
+  (results in [`ram-efficiency.md`](ram-efficiency.md))

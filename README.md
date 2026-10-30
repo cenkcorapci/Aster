@@ -265,7 +265,7 @@ building a real release.
 | Server environment and configuration | [Server configuration](docs/server-config.md) |
 | System architecture | [Design](docs/design.md) · [Code structure](docs/code-structure.md) |
 | Vector packing / mmap residency | [Vector encodings](docs/vector-encoding.md) |
-| Why mmap / residency choices | [RAM efficiency](docs/ram-efficiency.md) |
+| Why mmap / residency + stress numbers | [RAM efficiency](docs/ram-efficiency.md) |
 | Indexing / HNSW | [Indexing](docs/indexing.md) |
 | Client support and protocol compatibility | [Client libraries](clients/README.md) |
 | Compatibility and release rules | [Versioning](docs/versioning.md) |

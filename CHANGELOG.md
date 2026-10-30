@@ -19,6 +19,9 @@ The project follows a single-version policy; see [docs/versioning.md](docs/versi
   client-api docs. Root README documentation map is the index.
 - Added [ram-efficiency.md](docs/ram-efficiency.md): design choices for sealed
   mmap residency, encoding vs placement, and deferred PQ/graph-disk work.
+- Added `//aster/bench:ram_stress_bench` and published single-node (50k×384)
+  + 3-node RF=3 (30k×384) cold-mmap stress results in
+  [ram-efficiency.md](docs/ram-efficiency.md).
 - First stable release: version bumped to 1.0.0 (pre-alpha label removed).
 - CLI reports `ASTER_VERSION_STRING` instead of a hard-coded `0.1.0-dev`.
 

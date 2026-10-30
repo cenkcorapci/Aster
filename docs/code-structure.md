@@ -19,7 +19,7 @@ aster/
 ├── platform/       IStorageBackend: memory + POSIX + S3; MappedFile (mmap)
 ├── metrics/        counters / histograms (Prometheus)
 ├── cli/            local demo binary
-├── bench/          soak / load / ram_efficiency_bench
+├── bench/          soak / load / ram_efficiency_bench / ram_stress_bench
 ├── qa/             kill-9 fuzz, write microbench, recall CI
 └── integration/    end-to-end tests
 clients/            seven language facades
