@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <thread>
 #include <cmath>
 #include <cstring>
 #include <queue>
@@ -1226,6 +1227,7 @@ Status Db::BuildPendingIndexes() {
   for (;;) {
     std::shared_ptr<const Segment> target;
     uint64_t seg_id = 0;
+    bool others_building = false;
     {
       std::lock_guard lock(mu_);
       for (const auto& seg : segments_) {
@@ -1243,9 +1245,18 @@ Status Db::BuildPendingIndexes() {
             if (!last_error.ok()) return last_error;
             return Status::IoError("index build incomplete: pending segments remain");
           }
+          if (seg->index_state() == SegState::kBuilding) {
+            others_building = true;
+          }
         }
-        return last_error;
+        if (!others_building) return last_error;
       }
+    }
+    if (!target) {
+      // The background index thread owns these segments; wait for it so
+      // callers see READY graphs on return.
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      continue;
     }
     if (!BuildOneSegmentIndex(std::move(target))) {
       ++failures[seg_id];

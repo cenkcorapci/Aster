@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aster-client"
-version = "0.2.0"
+version = "1.0.0"
 description = "Python client for Aster, the peer-to-peer vector database (HTTP JSON transport)"
 readme = "README.md"
 license = "AGPL-3.0-or-later"

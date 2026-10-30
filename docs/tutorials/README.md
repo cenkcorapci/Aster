@@ -1,6 +1,6 @@
 # Tutorials
 
-Practical guides for what works today in Aster (pre-alpha). The embedded
+Practical guides for what works in Aster 1.0. The embedded
 engine API (`aster::Db`) is the stable in-process contract — see
 [database management](database-management.md) and [versioning](../versioning.md).
 

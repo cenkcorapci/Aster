@@ -1,6 +1,6 @@
 {
   "name": "@aster-db/client",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "JavaScript/TypeScript client for Aster, the peer-to-peer vector database",
   "license": "AGPL-3.0-or-later",
   "type": "module",

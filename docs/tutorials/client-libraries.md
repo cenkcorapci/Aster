@@ -4,11 +4,11 @@ Aster ships seven language clients in `clients/`. They share one public
 shape (`connect` → `collection` → upsert / get / delete / search) and one
 wire protocol: [`aster/rpc/aster.thrift`](../../aster/rpc/aster.thrift).
 
-**Status (pre-alpha):** facades and package skeletons exist. Transport,
-codegen, and a live Thrift server land in milestones **M4–M5**. Calling
-data methods today raises “not implemented” (or equivalent). Use the
-[C++ engine tutorial](database-management.md) for real reads/writes until
-then.
+**Status (1.0):** the Python client has a working HTTP transport
+(`clients/python`). The other facades expose the API surface only; their
+transport is on the roadmap and data methods raise “not implemented” (or
+equivalent). Use the HTTP API or the
+[C++ engine tutorial](database-management.md) from those languages.
 
 ## Packages
 
