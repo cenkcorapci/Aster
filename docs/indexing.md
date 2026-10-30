@@ -15,7 +15,7 @@ Contents:
 
 1. [Background: the ANN problem](#1-background-the-ann-problem)
 2. [HNSW: the algorithm](#2-hnsw-the-algorithm)
-3. [Why not one big mutable graph](#3-why-not-one-big-mutable-graph)
+3. [Immutable graphs](#3-immutable-graphs)
 4. [Segmented HNSW: indexing inside the LSM tree](#4-segmented-hnsw-indexing-inside-the-lsm-tree)
 5. [Deletes, updates, and visibility rules](#5-deletes-updates-and-visibility-rules)
 6. [Compaction and graph maintenance](#6-compaction-and-graph-maintenance)
@@ -48,6 +48,32 @@ recall@k = |returned ∩ true_top_k| / k
 
 Aster uses HNSW graphs as its ANN index and always measures them against
 the exact scan (`BuildExactIndex` in `aster/index/vector_index.h`).
+
+### C++
+
+Choose build-time graph parameters on `Db::Options`, then choose the
+per-query work budget with `ef_search`. This requires an HNSW-enabled build;
+Tiny uses the same `SearchRequest` with exact search instead.
+
+```cpp
+aster::Db::Options options;
+options.dimension = 384;
+options.metric = aster::Metric::kCosine;
+options.data_dir = "/var/lib/aster/docs";
+options.hnsw_params.m = 16;
+options.hnsw_params.ef_construction = 128;
+options.hnsw_params.ef_search_default = 64;
+
+auto opened = aster::Db::Open(options);
+if (!opened.ok()) { /* handle opened.status() */ }
+std::unique_ptr<aster::Db> db = std::move(opened.value());
+
+aster::SearchRequest request;
+request.vector = query;
+request.top_k = 10;
+request.ef_search = 128;  // 0 uses ef_search_default
+auto hits = db->TrySearch(request);
+```
 
 Uniform scoring rule: Aster converts every metric to a "higher is better"
 score (`Score()` in `aster/index/distance.h`), i.e. `-L2²`, `dot`, or
@@ -156,7 +182,7 @@ Build cost is `O(N · log N · ef_construction · d)` in practice; building is
 the expensive part of HNSW, which is precisely why Aster never rebuilds
 graphs on the write path (section 4).
 
-## 3. Why not one big mutable graph
+## 3. Immutable graphs
 
 The classic deployment (one global, mutable HNSW protected by locks) fails
 Aster's requirements:

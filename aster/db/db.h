@@ -154,6 +154,11 @@ class Db {
   // or the newest version is a tombstone.
   std::optional<Row> Get(const RowId& id) const;
 
+  // Point lookup including tombstones. A missing row is represented by a
+  // tombstone with timestamp 0. Distributed read repair uses this to ensure
+  // deletes win over stale live replicas.
+  Row GetRaw(const RowId& id) const;
+
   // Exact (brute-force) top-k over memtable + segments; higher score is
   // always better. request.tags is an AND post-filter when non-empty.
   // Enforces max_qps when configured; returns ResourceExhausted on exceed.

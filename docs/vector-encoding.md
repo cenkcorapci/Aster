@@ -4,7 +4,7 @@ How Aster packs sealed vectors for **RAM and disk**. Normative wire values live
 in [`sstable-format.md`](sstable-format.md) (§5 `vector_encoding`, §7.4). Design
 notes: [`superpowers/specs/2026-10-20-compact-vector-encoding-design.md`](superpowers/specs/2026-10-20-compact-vector-encoding-design.md).
 
-## Why
+## Purpose
 
 At **200 000 × 512** float32 vectors the payload alone is **≈ 409.6 MiB**. The
 HNSW graph is a small fraction of that (`indexing.md` §10.2). Encoding is the
@@ -50,9 +50,21 @@ values.
 ## API
 
 ```cpp
-Db::Options opt;
-opt.dimension = 512;
-opt.vector_encoding = VectorEncoding::kInt8Sq;  // pack on flush + reopen
+aster::Db::Options options;
+options.dimension = 512;
+options.data_dir = "/var/lib/aster/compact";
+options.vector_encoding = aster::VectorEncoding::kInt8Sq;
+
+auto opened = aster::Db::Open(options);
+if (!opened.ok()) { /* handle opened.status() */ }
+std::unique_ptr<aster::Db> db = std::move(opened.value());
+
+aster::Row row;
+row.id = "doc-1";
+row.vector.resize(512);
+row.timestamp = 1;
+db->Upsert(std::move(row));
+db->Flush();  // packs the sealed segment; WAL and memtable remain float32
 ```
 
 - **Memtable / WAL** stay float32 (write path unchanged).

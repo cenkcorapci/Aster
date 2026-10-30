@@ -43,6 +43,41 @@ Client → any coordinator node
 
 Every node can coordinate. No master.
 
+### C++
+
+`Coordinator` executes the replication protocol over independently durable
+`Db` instances. A transport registers local or remote replica endpoints with
+the same interface; this example uses three already-open durable instances.
+
+```cpp
+#include "aster/distributed/replication.h"
+
+aster::CoordinatorOptions options;
+options.replication_factor = 3;
+options.hint_directory = "/var/lib/aster/hints";
+auto opened = aster::Coordinator::Open(options);
+if (!opened.ok()) { /* handle opened.status() */ }
+std::unique_ptr<aster::Coordinator> coordinator = std::move(opened.value());
+
+coordinator->AddReplica("node-a", node_a.get());
+coordinator->AddReplica("node-b", node_b.get());
+coordinator->AddReplica("node-c", node_c.get());
+
+aster::Row row;
+row.id = "doc-42";
+row.vector = {0.1f, 0.2f};
+row.timestamp = 42;
+coordinator->Write(row, aster::ConsistencyLevel::kQuorum);
+
+auto read = coordinator->Read("doc-42", aster::ConsistencyLevel::kQuorum);
+```
+
+Each acknowledged replica has synchronously appended the row to its WAL.
+When a replica is unreachable, the coordinator fsyncs a coalesced hint before
+returning; call `DrainHints("node-c")` after that replica rejoins. Quorum
+reads merge the newest row and repair older reachable copies, including
+tombstones.
+
 ## Storage (LSM)
 
 ### Write path

@@ -848,10 +848,14 @@ Row Db::Reconcile(const RowId& id) const {
 }
 
 std::optional<Row> Db::Get(const RowId& id) const {
-  std::lock_guard lock(mu_);
-  Row row = Reconcile(id);
+  Row row = GetRaw(id);
   if (row.tombstone) return std::nullopt;
   return row;
+}
+
+Row Db::GetRaw(const RowId& id) const {
+  std::lock_guard lock(mu_);
+  return Reconcile(id);
 }
 
 std::vector<SearchHit> Db::SearchLocked(const SearchRequest& request) const {

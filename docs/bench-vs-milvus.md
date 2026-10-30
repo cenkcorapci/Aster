@@ -52,7 +52,7 @@ Artifacts: `bench-results/vs-milvus-smoke-20260903T095207Z/`.
 
 Artifacts: `bench-results/vs-milvus-full-20260903T095601Z/`.
 
-### How to read this
+### Results
 
 - **Latency:** Aster search is client-side scatter-gather across shards over
   HTTP; Milvus answers from one standalone process. Expect Milvus to win raw
