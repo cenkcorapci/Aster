@@ -1,7 +1,7 @@
 # Tutorial: HTTP API
 
 JSON API over multi-collection durable storage. For planned delivery work, see
-the [development plan](../development-plan.md) and [task board](../tasks.md).
+the [development plan](../development-plan.md).
 
 Search uses per-segment HNSW indexes (exact for small data). Auth is an optional shared API key.
 

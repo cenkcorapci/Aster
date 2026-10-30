@@ -3,12 +3,12 @@
 Target architecture: Cassandra-style peer-to-peer vector database with LSM
 storage and **per-segment HNSW** indexes. C++20, Bazel, CPU-only search.
 
-For milestone status, delivery gates, and planned work, see the
-[development plan](development-plan.md) and [task board](tasks.md).
+For milestone status and delivery gates, see the
+[development plan](development-plan.md).
 
 Normative indexing lifecycle: [indexing.md](indexing.md) + `tla/`.  
 On-disk format: [sstable-format.md](sstable-format.md).  
-SaaS / S3 economics: [business-plan.md](business-plan.md).
+Sealed vector packing / mmap residency: [vector-encoding.md](vector-encoding.md).
 
 ## Goals
 
@@ -114,8 +114,8 @@ for hierarchical attributes.
 Logical row: `id`, float32 vector, optional metadata, optional tags,
 timestamps / version for LWW.
 
-Product API is **collection-centric** (dimension, metric, index settings) —
-see [client-api.md](client-api.md). Wire surface: `aster/rpc/aster.thrift`.
+Product API is **collection-centric** (dimension, metric, index settings).
+Wire surface: `aster/rpc/aster.thrift`. HTTP JSON: [tutorials/http-api.md](tutorials/http-api.md).
 
 ## Segmented HNSW
 
@@ -164,14 +164,16 @@ Coordinator → replica set → parallel segment HNSW → merge → filter → r
 
 ## Memory tiers
 
-| Tier | Keep hot |
-| --- | --- |
-| Hot | Upper HNSW layers, manifests, blooms, sparse indexes, tag dict |
-| Warm | Lower graph / adjacency |
-| Cold | Vector payloads, metadata |
+| Tier | Keep hot | Default residency |
+| --- | --- | --- |
+| Hot | Upper HNSW layers, manifests, blooms, sparse indexes, tag dict | pinned |
+| Warm | Lower graph / adjacency (cached when beneficial) | cold / cached |
+| Cold | Vector payloads, metadata | **mmap cold** (shipped for sealed vectors) |
 
-SSD: mmap vectors/graph, larger segments. HDD: upper layers in RAM,
-locality-aware reorder on compact, sequential vector pages.
+Sealed SSTable vector blocks use `MappedFile` + `StoragePolicy`
+([vector-encoding.md](vector-encoding.md)): cold demand-pages, cached
+prefaults, pinned heap-copies. SSD: mmap vectors, larger segments. HDD /
+object store: upper layers pinned; locality-aware reorder on compact.
 
 ## Networking & ops
 
@@ -223,6 +225,5 @@ Worth exploring after the baseline works:
 
 Differentiator: **Cassandra-style LSM + immutable per-segment HNSW**, not a
 globally mutable distributed graph. That preserves write throughput, keeps
-locking simple, and scales with vnode ownership. SaaS cost advantage comes
-from the same immutability when compute is ephemeral and S3 holds truth
-([business-plan.md](business-plan.md)).
+locking simple, and scales with vnode ownership. The same immutability lets
+sealed vectors stay mmap/file-backed so corpus size need not track worker RAM.

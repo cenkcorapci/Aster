@@ -150,10 +150,10 @@ Collections and RPCs are defined in Thrift:
 - `createCollection` / `dropCollection`
 - `upsert` / `get` / `remove` / `search`
 
-Target product options (accuracy profiles, HOT/WARM/COLD storage, quotas)
-are described in [`../client-api.md`](../client-api.md). The Thrift IDL is
-the wire source of truth; the collection-config doc is the longer-term
-SaaS shape.
+Accuracy profiles, HOT/WARM/COLD storage modes, and quotas are exposed on
+`aster::Db::Options` / the catalog HTTP API
+([database management](database-management.md), [HTTP API](http-api.md)).
+The Thrift IDL (`aster/rpc/aster.thrift`) is the wire source of truth.
 
 ## Until the server ships
 

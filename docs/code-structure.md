@@ -8,22 +8,22 @@ platform backends plug in storage, clocks, and (later) networking.
 ```
 aster/
 ├── core/           types, Status/Result, hashing, feature profiles
-├── storage/        WAL, memtable, SSTable, manifest, segment
-├── index/          distance kernels, bloom, exact index, HNSW (+ S3 upper-layer pin)
+├── storage/        WAL, memtable, SSTable, manifest, segment, storage_policy / page_cache
+├── index/          distance kernels, bloom, exact index, packed encodings, HNSW (+ S3 upper-layer pin)
 ├── query/          top-k merge across segments / replicas
 ├── distributed/    consistent-hash ring + vnodes
 ├── db/             hosted single-node Db (POSIX durable path)
 ├── server/         multi-collection catalog + HTTP JSON API
 ├── embedded/       Tiny in-memory Db (Arduino / bare metal)
 ├── rpc/            aster.thrift (server = M4)
-├── platform/       IStorageBackend: memory + POSIX + S3 (multipart / Range GET)
-├── metrics/        counters / histograms (Prometheus = M4)
+├── platform/       IStorageBackend: memory + POSIX + S3; MappedFile (mmap)
+├── metrics/        counters / histograms (Prometheus)
 ├── cli/            local demo binary
-├── bench/          soak / load binary
-├── qa/             kill-9 fuzz, write microbench (M1-T14), recall CI (M2-T10)
+├── bench/          soak / load / ram_efficiency_bench
+├── qa/             kill-9 fuzz, write microbench, recall CI
 └── integration/    end-to-end tests
-clients/            seven language facades (transport = M5)
-docs/               design, tutorials, roadmap
+clients/            seven language facades
+docs/               design, tutorials, formats, roadmap
 tla/                TLC-checked specs
 platforms/          Bazel platform constraints (CPU/OS/musl/baremetal)
 ```
@@ -64,7 +64,8 @@ other hosts use `--config=raspberry_pi_cross` or `./scripts/build-matrix.sh --fu
 | --- | --- |
 | `MemoryStorage` | Done |
 | `PosixStorage` | Done (path traversal hardened) |
-| S3 | Done (M8-T01/T02): multipart Put, Range GET, LRU block cache + non-evictable upper-layer pin; SigV4 deferred |
+| `MappedFile` | Done — read-only mmap for sealed `.ast` / `.hnsw` |
+| S3 | Done: multipart Put, Range GET, LRU block cache + non-evictable upper-layer pin; SigV4 deferred |
 
 ## Depending on the embedded library
 

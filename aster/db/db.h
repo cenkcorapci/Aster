@@ -105,10 +105,10 @@ class Db {
     // Also mirrored in resource_limits.memory_budget_bytes when set via
     // SetResourceLimits / CollectionConfig.
     size_t memory_budget_bytes = 0;
-    // Per-collection quotas + isolation (docs/client-api.md § Resources).
+    // Per-collection quotas + isolation (docs/design.md / Db::Options).
     // Safe online via SetResourceLimits(). 0 numeric fields = unlimited.
     ResourceLimits resource_limits{};
-    // HOT / WARM / COLD cache layout (docs/client-api.md). Safe to change
+    // HOT / WARM / COLD cache layout (docs/design.md). Safe to change
     // online via SetStorageMode(). Default HOT keeps the historical local path.
     StorageMode storage_mode = StorageMode::kHot;
     // Optional S3-compatible object store used by WARM/COLD mirroring and
@@ -206,14 +206,14 @@ class Db {
 
   // Current storage cache mode (HOT / WARM / COLD).
   StorageMode storage_mode() const;
-  // Online mode switch (docs/client-api.md: cache mode is safe online).
+  // Online mode switch (docs/design.md: cache mode is safe online).
   // WARM/COLD require Options::object_store. Switching into WARM/COLD mirrors
   // live segment/index objects and (re)pins HNSW upper layers.
   Status SetStorageMode(StorageMode mode);
 
   // Current per-collection resource limits + isolation.
   ResourceLimits resource_limits() const;
-  // Online quota / isolation update (docs/client-api.md: limits are safe
+  // Online quota / isolation update (docs/design.md: limits are safe
   // online). Also syncs Options::memory_budget_bytes from the limits struct.
   Status SetResourceLimits(ResourceLimits limits);
 

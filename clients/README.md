@@ -58,7 +58,7 @@ clients — see [docs/versioning.md](../docs/versioning.md) and
 All client languages in this repo are generated from the same Thrift IDL:
 `aster/rpc/aster.thrift`.
 
-Per `docs/client-api.md`, the wire protocol is frozen by the following policy:
+Per `docs/versioning.md`, the wire protocol is frozen by the following policy:
 
 - Keep existing field IDs stable forever; never reuse them.
 - Prefer additive changes: add new OPTIONAL fields and enum values.

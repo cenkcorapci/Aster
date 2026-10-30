@@ -7,7 +7,7 @@
 
 namespace aster {
 
-// Collection storage cache modes (docs/client-api.md § Storage modes).
+// Collection storage cache modes (docs/design.md).
 //
 // Semantics implemented for M8-T03 (mode switch is safe online):
 //

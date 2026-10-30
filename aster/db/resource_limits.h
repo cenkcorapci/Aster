@@ -7,7 +7,7 @@
 
 namespace aster {
 
-// Per-collection tenancy / noisy-neighbor isolation (docs/client-api.md).
+// Per-collection tenancy / noisy-neighbor isolation (docs/design.md).
 //
 //   SHARED    — default. Collection shares the node with other collections;
 //               configured numeric limits are enforced as soft quotas.
@@ -36,7 +36,7 @@ inline std::optional<IsolationLevel> IsolationLevelFromString(
   return std::nullopt;
 }
 
-// Per-collection resource quotas (docs/client-api.md § Resources).
+// Per-collection resource quotas (docs/design.md / Db::Options).
 // Numeric fields use 0 to mean unlimited.
 struct ResourceLimits {
   // Reject Upsert of a new live id when live row count would exceed this.

@@ -45,14 +45,14 @@ enum ConsistencyLevel {
   ALL = 3,
 }
 
-// Collection storage cache mode (docs/client-api.md). Safe online switch.
+// Collection storage cache mode (docs/design.md). Safe online switch.
 enum StorageMode {
   HOT = 0,   // RAM + local SSD (default)
   WARM = 1,  // Local index; mirror objects to object store
   COLD = 2,  // Object-store primary + local HNSW upper-layer pins
 }
 
-// Per-collection isolation (docs/client-api.md § Resources). Safe online.
+// Per-collection isolation (docs/design.md / Db::Options). Safe online.
 enum IsolationLevel {
   SHARED = 0,     // Multi-tenant default; share node capacity
   DEDICATED = 1,  // Reserved-capacity hint for scheduling / SLA

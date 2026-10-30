@@ -5,8 +5,8 @@ Roadmap for Aster: peer-to-peer, low-resource vector database in C++20
 monorepo.
 
 Companion docs: [design](design.md), [code structure](code-structure.md),
-[client API](client-api.md), [indexing](indexing.md), [tutorials](tutorials/README.md),
-[tasks](tasks.md), [TLA+](../tla/README.md).
+[indexing](indexing.md), [vector encoding](vector-encoding.md),
+[tutorials](tutorials/README.md), [TLA+](../tla/README.md).
 
 ## Guiding rules
 
@@ -21,9 +21,8 @@ Companion docs: [design](design.md), [code structure](code-structure.md),
 
 ## Milestone status and gates
 
-This is the canonical status and gate record. Task-level status and completed
-task history live in [tasks.md](tasks.md). A milestone is complete only when
-its gate is satisfied; completing its listed implementation tasks alone does
+This is the canonical status and gate record. A milestone is complete only
+when its gate is satisfied; completing listed implementation work alone does
 not establish that the gate was met.
 
 | Milestone | Status | Gate |
@@ -39,9 +38,9 @@ not establish that the gate was met.
 | M8 — Cloud & SaaS | In progress | S3 cold-start and cost-model gate |
 | M9 — 1.0 hardening | Not started | Published targets, security review, and operations-doc gate |
 
-The board shows M1-T08, M4-T09, client transports, release work, most
-distribution work, tenancy, and hardening as open. M2 and M3 are therefore
-not unstarted: their recorded implementation tasks are complete, while their
+Open areas include remaining durable-engine evidence, client transports,
+release work, most distribution work, tenancy, and hardening. M2 and M3 are
+not unstarted: their recorded implementation work is complete, while their
 milestone gates still need evidence.
 
 ## Milestones
@@ -59,25 +58,24 @@ TLA+ specs.
 
 Goal: crash-safe disk engine matching `tla/AsterLsmIndex.tla`.
 
-Dependencies: M0. The remaining board task is M1-T08; the milestone gate is
-the kill -9 recovery and sustained-write evidence recorded on the board.
+Dependencies: M0. The milestone gate is kill -9 recovery and sustained-write
+evidence.
 
 ### M2 — Segmented HNSW (~8 weeks)
 
 Goal: real ANN per [indexing.md](indexing.md).
 
-Dependencies: M1 durable storage interfaces. All listed M2 implementation
-tasks are recorded complete; milestone completion waits for the recall and
-latency gate evidence.
+Dependencies: M1 durable storage interfaces. Segmented HNSW implementation
+is in tree; milestone completion waits for the recall and latency gate
+evidence.
 
 ### M3 — Embedded & platform profiles (~4 weeks)
 
 Goal: “SQLite for vectors” as a first-class product.
 
 Dependencies vary by profile: platform targets can proceed independently,
-while persistence and ANN integrations use the M1 and M2 interfaces recorded
-by their tasks. All listed M3 tasks are recorded complete; milestone
-completion waits for the edge-profile resource gate.
+while persistence and ANN integrations use the M1 and M2 interfaces.
+Milestone completion waits for the edge-profile resource gate.
 
 ### M4 — Server & observability (~4 weeks)
 

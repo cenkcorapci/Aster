@@ -541,19 +541,23 @@ All hot loops reduce to L2²/dot over contiguous float32. Per
 aligned vector blocks, scalar fallback everywhere (the current
 implementation). Compact encodings via `VectorEncoding` / `Db::Options::vector_encoding`
 ([`vector-encoding.md`](vector-encoding.md)): float16 (~2×), int8 SQ (~4×),
-binary RaBitQ-style (~32×). Sealed segments keep packed codes in RAM;
-distance kernels decode to a scratch float buffer (optional f32 rerank later).
+binary RaBitQ-style (~32×). Sealed segments **mmap** uncompressed vector
+blocks by default (`StoragePolicy::vectors = kCold`); anonymous heap for the
+payload is zero when file-backed. Exact / HNSW search scores packed codes
+(direct int8/binary kernels where possible); Cosine may decode to a scratch
+buffer. Optional float rerank remains a future knob.
 
 ### 10.2 Memory layout
 
 Per segment (hot → cold): entry point + upper layers (tiny, always RAM);
 layer-0 adjacency (the bulk of the graph: `N · M0 · 4` bytes with delta +
-varint encoding); vector block (mmap; the OS page cache is the cache);
-metadata (cold, never touched by traversal).
+varint encoding); vector block (**mmap**; OS page cache is the cache;
+`VectorHeapBytesUsed()` reports anonymous copies only); metadata (cold,
+never touched by traversal).
 
-Rule of thumb at `M=16` (`M0=32`): graph ≈ 128 B/vector + vectors
-themselves (1536 B at 384d float32) — the graph is <10% overhead, so
-memory planning is dominated by vectors and controlled by encoding.
+Rule of thumb at `M=16` (`M0=32`): graph ≈ 128 B/vector. With cold mmap +
+`int8_sq` / `binary_rabitq`, steady-state **anonymous** RAM is dominated by
+navigation state and query scratch — not the full vector corpus.
 
 ### 10.3 Disk/S3 tiers
 
@@ -597,7 +601,7 @@ query path is the memtable (single-writer, RCU-style snapshot reads in M1).
 | --- | --- |
 | Higher recall, same index | `ef_search` ↑ (per query — no rebuild) |
 | Higher recall ceiling | `M` ↑, `ef_construction` ↑ (rebuild; +memory, +build time) |
-| Lower memory | `vector_encoding=int8_sq` or `binary_rabitq`; `M` ↓; COLD storage mode |
+| Lower memory | `vector_encoding=int8_sq` or `binary_rabitq`; keep `storage_policy.vectors=cold` (default mmap); `M` ↓; COLD storage mode |
 | Faster writes | bigger memtable, async indexing (default), LZ4 instead of Zstd |
 | Fewer per-query graph searches | more aggressive compaction (T ↓) |
 | Cheap harsh-filter queries | rely on bitmap fallback — do not raise `ef` |
@@ -616,7 +620,7 @@ query path is the memtable (single-writer, RCU-style snapshot reads in M1).
 | `shadowed_compact_threshold` | 0.3 | — | Shadow/tombstone fraction forcing compaction |
 | `fetch_k` policy | `2k+16` | — | Per-segment over-fetch, adaptive with filters |
 
-Accuracy profiles (`client-api.md`) map deterministically onto HNSW params:
+Accuracy profiles (`AccuracyProfile` on `Db::Options`) map deterministically onto HNSW params:
 
 | Profile | `m` | `ef_construction` | `ef_search_default` | `max_layers` |
 | --- | ---: | ---: | ---: | ---: |

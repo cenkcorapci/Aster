@@ -878,7 +878,7 @@ Row Db::GetRaw(const RowId& id) const {
 
 std::vector<SearchHit> Db::SearchLocked(const SearchRequest& request) const {
   // COLD workers drop the LRU block cache before each search; non-evictable
-  // upper-layer pins remain (docs/indexing.md §10.3.1 / client-api.md).
+  // upper-layer pins remain (docs/indexing.md §10.3.1).
   if (ClearsBlockCacheOnSearch(options_.storage_mode) && options_.object_store) {
     options_.object_store->ClearCache();
   }

@@ -14,6 +14,9 @@ The project follows a single-version policy; see [docs/versioning.md](docs/versi
 - READY HNSW search scores from the sealed packed/mmap store (no second
   float32 corpus). Direct int8 / binary distance kernels avoid decode-to-float
   on L2/Dot hot paths.
+- Docs updated for mmap residency; removed completed `docs/superpowers/`
+  planning artifacts and dangling links to previously deleted task/business/
+  client-api docs. Root README documentation map is the index.
 - First stable release: version bumped to 1.0.0 (pre-alpha label removed).
 - CLI reports `ASTER_VERSION_STRING` instead of a hard-coded `0.1.0-dev`.
 

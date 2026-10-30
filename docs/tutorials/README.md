@@ -10,4 +10,6 @@ engine API (`aster::Db`) is the stable in-process contract — see
 | [HTTP API](http-api.md) | Multi-collection JSON server (`aster serve`) |
 | [Client libraries](client-libraries.md) | Use the seven language facades (API surface ready; transport lands in M5) |
 
-For architecture and roadmap, see the [docs index](../README.md).
+For architecture and roadmap, see [design](../design.md),
+[vector encodings](../vector-encoding.md), and the
+[development plan](../development-plan.md).
