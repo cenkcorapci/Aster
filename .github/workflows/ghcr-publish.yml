@@ -1,9 +1,5 @@
 name: Publish image
 
-# Publishes ghcr.io/<owner>/aster:<tag> (multi-arch) on version tags.
-# Per-arch static musl binaries are cross-compiled by scripts/docker-build.sh
-# (bazel --config=linux_musl_{amd64,arm64}); a manifest list joins them.
-
 on:
   workflow_dispatch:
     inputs:
