@@ -5,7 +5,8 @@ Atomic, claimable sub-tasks for the roadmap in
 from here using the protocol in [`start-the-tasks.md`](start-the-tasks.md).
 
 Hands-on docs: [tutorials](tutorials/README.md). Progress snapshot lives in
-the development plan.
+the [development plan](development-plan.md), which is the source of truth for
+milestone status and gates.
 
 ## How to read a task
 
@@ -231,18 +232,5 @@ Status updates happen in this file (see start-the-tasks.md § Claiming).
 
 ---
 
-## Parallelism snapshot (what can start now)
-
-Right after M0, these are **simultaneously open** with low collision risk:
-
-1. **M1-T01** (storage RFC) — unlocks the whole storage lane  
-2. **M2-T01** can *design* graph format in docs while M1-T01 proceeds (implementation waits on M1-T03)  
-3. **M3-T05** (profile flags) — independent  
-4. **M3-T07** arena design (implementation after M1 flush lands)  
-5. **spec** polish / more TLC bounds anytime  
-6. **M4-T06** metrics enrichment (partial) without server  
-
-Do **not** start M5 client transports until M5-T01 (IDL freeze) and M4-T02 (server).  
-Do **not** start M7 until M2 exit criteria hold (plan gate).
-
-See [`start-the-tasks.md`](start-the-tasks.md) for how agents claim and coordinate.
+See [`start-the-tasks.md`](start-the-tasks.md) for how contributors claim and
+coordinate work.

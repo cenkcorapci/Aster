@@ -4,7 +4,7 @@
 | --- | --- |
 | [Tutorials](tutorials/README.md) | Hands-on guides (start here) |
 | [Business plan](business-plan.md) | SaaS positioning, pricing, cloud architecture |
-| [Development plan](development-plan.md) | Milestones and roadmap |
+| [Development plan](development-plan.md) | Canonical milestone status, gates, and dependency roadmap |
 | [Design](design.md) | Engine architecture (LSM + segmented HNSW + ring) |
 | [Code structure](code-structure.md) | Layers, packages, profiles |
 | [Indexing](indexing.md) | ANN / HNSW contract (normative for M2+) |
@@ -16,7 +16,8 @@
 | [Write bench](bench-write.md) | Laptop upserts/sec + kill-9 fuzz (M1-T14) |
 | [Latency bench](bench-latency.md) | 1M×384d search p50 < 5ms (M2-T11) |
 | [vs Milvus bench](bench-vs-milvus.md) | Kind + MinIO Aster vs Milvus (smoke + 40k) |
-| [Tasks](tasks.md) / [Start the tasks](start-the-tasks.md) | Parallel work board |
+| [Tasks](tasks.md) | Claimable work and completed-task history |
+| [Start the tasks](start-the-tasks.md) | Evergreen contributor protocol |
 
 Related:
 

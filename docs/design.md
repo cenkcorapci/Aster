@@ -3,10 +3,8 @@
 Target architecture: Cassandra-style peer-to-peer vector database with LSM
 storage and **per-segment HNSW** indexes. C++20, Bazel, CPU-only search.
 
-**Status (1.0):** single-node `Db` with durable LSM, **per-segment HNSW**
-search (exact fallback while segments are PENDING), multi-collection HTTP +
-Thrift APIs, and catalog quotas. Gossip/replication transport and real AWS S3
-(SigV4) are roadmap — see [development-plan.md](development-plan.md).
+For milestone status, delivery gates, and planned work, see the
+[development plan](development-plan.md) and [task board](tasks.md).
 
 Normative indexing lifecycle: [indexing.md](indexing.md) + `tla/`.  
 On-disk format: [sstable-format.md](sstable-format.md).  

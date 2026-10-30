@@ -5,23 +5,13 @@
 
 **Aster is a CPU-first vector database for embedded, local, and server
 deployments.** It combines an LSM storage engine with per-segment HNSW indexes,
-durable WAL/SSTables, an HTTP API, and a stable C++ embedding API. The same
-codebase supports memory-constrained targets through multi-node benchmark
-harnesses.
-
-| What | Status in 1.0 |
-| --- | --- |
-| Embedded C++ database | Stable public API |
-| Single-node durable storage | Supported |
-| HTTP and Thrift servers | Supported |
-| HNSW approximate search | Supported |
-| Catalog quotas and multiple HTTP collections | Supported |
-| Client package transport/code generation | Planned (M5/M6) |
-| Cluster replication and AWS S3 SigV4 | Planned; not included in 1.0 |
+durable WAL/SSTables, an HTTP API, and a C++ embedding API. The same codebase
+supports memory-constrained targets through multi-node benchmark harnesses.
 
 This README is the fast path to running Aster. See the [documentation
 index](docs/README.md) for design documents, API references, tutorials, and
-the roadmap.
+canonical [milestone status and gates](docs/development-plan.md) /
+[claimable work](docs/tasks.md).
 
 ## Contents
 
@@ -189,10 +179,9 @@ rules for this public API.
 
 The repository includes C++, Python, Go, Rust, Java, Scala, and JavaScript
 client facades. Their source-of-truth wire protocol is
-[`aster/rpc/aster.thrift`](aster/rpc/aster.thrift). Transport and generated
-package publishing are roadmap milestones, so use HTTP or the embedded C++ API
-for production integrations today. See [client libraries](clients/README.md)
-for the status and compatibility contract.
+[`aster/rpc/aster.thrift`](aster/rpc/aster.thrift). Transport and generated package publishing are planned delivery work. See the
+[development plan](docs/development-plan.md), [task board](docs/tasks.md), and
+[client libraries](clients/README.md) for the compatibility contract.
 
 ## Run benchmarks
 
@@ -278,10 +267,12 @@ building a real release.
 | Vector precision/storage trade-offs | [Vector encodings](docs/vector-encoding.md) |
 | Client support and protocol compatibility | [Client libraries](clients/README.md) |
 | Compatibility and release rules | [Versioning](docs/versioning.md) |
-| Planned work | [Development plan](docs/development-plan.md) |
+| Milestone status and gates | [Development plan](docs/development-plan.md) |
+| Claimable engineering work | [Task board](docs/tasks.md) |
 
 ## Contributing and license
 
-Read the [development plan](docs/development-plan.md), keep changes covered by
-the relevant test target, and run the narrowest applicable checks before
-opening a pull request. Aster is licensed under [AGPL-3.0](LICENSE).
+Read the [development plan](docs/development-plan.md) and
+[contributor protocol](docs/start-the-tasks.md), keep changes covered by the
+relevant test target, and run the narrowest applicable checks before opening a
+pull request. Aster is licensed under [AGPL-3.0](LICENSE).

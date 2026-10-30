@@ -2,7 +2,8 @@
 
 Positioning for a low-cost, serverless vector-database SaaS built on the
 open-source Aster engine. Companion: [development-plan.md](development-plan.md)
-(engineering milestones), [design.md](design.md) (engine architecture).
+(for engineering milestones and gates), [tasks.md](tasks.md) (claimable
+engineering work), and [design.md](design.md) (engine architecture).
 
 ## Positioning
 
@@ -17,7 +18,7 @@ find Pinecone expensive and Milvus/Qdrant clusters heavy.
 | S3-first storage | Immutable segments; workers are disposable |
 | Shared multi-tenant compute | Spot/K8s pools, not per-tenant clusters |
 | Simple API | Collection CRUD + search (HTTP today; Thrift clients later) |
-| Open-source engine | Same kernel embeddable from MCU to server |
+| Open-source engine | Same kernel can serve embedded through server deployments |
 
 ## Market
 
@@ -70,22 +71,20 @@ Main risks: S3 latency (mitigate with segment cache), cold starts (warm
 pools), noisy neighbors (scheduler budgets). Compete on cost/simplicity at
 good-enough recall, not max recall.
 
-## Delivery phases
+## Product path
 
-Aligns with engineering milestones in the development plan.
+Use these stages to guide product investment, not to report engineering
+delivery. The canonical delivery status and milestone gates are in the
+[development plan](development-plan.md); active work is in the
+[task board](tasks.md).
 
 | Phase | Goal | Engineering |
 | --- | --- | --- |
 | 0 — Validate | Landing page, waitlist, ~20 customer interviews | Little/no product code |
-| 1 — Core engine | Excellent single-node Aster + HTTP collection API | M1–M4 (partial today) |
+| 1 — Core engine | Excellent single-node Aster + HTTP collection API | M1–M4 |
 | 2 — Distributed cloud | S3 backend, workers, tenancy, compaction | M7–M8 |
 | 3 — SaaS MVP | Signup, keys, billing, usage, docs; private beta | Control plane on M8 |
 | 4 — Production | Backups/DR, enterprise, hybrid search, SLOs | M9+ |
-
-**Status (2026-09):** Phase 1 kernel is **shippable for single-node** —
-multi-collection HTTP + Thrift APIs, usage meters, per-collection quotas,
-segmented HNSW with recall gates. Still open before cloud MVP: SigV4 S3,
-worker orchestration, signup/billing, and client transports (M5).
 
 Do not spend a year on the perfect distributed system before paying users.
 Path: ship a sharp single-node product → 20–50 paying users → build S3/spot
