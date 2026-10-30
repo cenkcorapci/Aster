@@ -1,0 +1,10 @@
+name: Publish image
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "publish image workflow registered"
