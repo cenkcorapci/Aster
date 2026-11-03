@@ -248,6 +248,34 @@ std::vector<Row> Segment::MaterializedRows() const {
   return out;
 }
 
+const std::vector<float>& Segment::Centroid() const {
+  std::call_once(centroid_once_, [this] {
+    if (!rows_) return;
+    std::vector<double> sum;
+    std::vector<float> tmp;
+    size_t live = 0;
+    for (size_t i = 0; i < rows_->size(); ++i) {
+      const Row& row = (*rows_)[i];
+      if (row.tombstone) continue;
+      VectorView v{row.vector};
+      if (v.empty()) {
+        if (!DecodeRowVector(i, &tmp).ok()) continue;
+        v = VectorView{tmp};
+      }
+      if (sum.empty()) sum.assign(v.size(), 0.0);
+      if (v.size() != sum.size()) continue;
+      for (size_t d = 0; d < v.size(); ++d) sum[d] += v[d];
+      ++live;
+    }
+    if (live == 0) return;
+    centroid_.resize(sum.size());
+    for (size_t d = 0; d < sum.size(); ++d) {
+      centroid_[d] = static_cast<float>(sum[d] / static_cast<double>(live));
+    }
+  });
+  return centroid_;
+}
+
 std::optional<Row> Segment::Get(const RowId& row_id) const {
   const auto& rows = *rows_;
   auto it = std::lower_bound(

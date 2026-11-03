@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <mutex>
 #include <memory>
 #include <optional>
 #include <set>
@@ -110,6 +111,10 @@ class Segment {
   // BUILDING → PENDING (build interrupted / abandoned).
   void AbortIndexBuild() const;
 
+  // Mean of live vectors (lazily computed once, thread-safe). Empty when the
+  // segment has no live vectors. Used for SPANN-style query-aware pruning.
+  const std::vector<float>& Centroid() const;
+
   // Point lookup by binary search over the sorted id index.
   std::optional<Row> Get(const RowId& row_id) const;
 
@@ -152,6 +157,9 @@ class Segment {
   // Build state machine + optional HNSW (mutable under Db::mu_).
   mutable SegState index_state_ = SegState::kPending;
   mutable std::unique_ptr<VectorIndex> hnsw_index_;
+
+  mutable std::once_flag centroid_once_;
+  mutable std::vector<float> centroid_;
 };
 
 // Merges segments into one, applying LWW per id. Tombstones may only be

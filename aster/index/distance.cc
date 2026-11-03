@@ -33,7 +33,21 @@ __attribute__((target("avx512f,fma"))) float L2SquaredAvx512(VectorView a,
   const float* pb = b.data();
 
   __m512 acc = _mm512_setzero_ps();
+  __m512 acc1 = _mm512_setzero_ps();
+  __m512 acc2 = _mm512_setzero_ps();
+  __m512 acc3 = _mm512_setzero_ps();
   size_t i = 0;
+  for (; i + 64 <= n; i += 64) {
+    const __m512 d0 = _mm512_sub_ps(_mm512_loadu_ps(pa + i), _mm512_loadu_ps(pb + i));
+    const __m512 d1 = _mm512_sub_ps(_mm512_loadu_ps(pa + i + 16), _mm512_loadu_ps(pb + i + 16));
+    const __m512 d2 = _mm512_sub_ps(_mm512_loadu_ps(pa + i + 32), _mm512_loadu_ps(pb + i + 32));
+    const __m512 d3 = _mm512_sub_ps(_mm512_loadu_ps(pa + i + 48), _mm512_loadu_ps(pb + i + 48));
+    acc = _mm512_fmadd_ps(d0, d0, acc);
+    acc1 = _mm512_fmadd_ps(d1, d1, acc1);
+    acc2 = _mm512_fmadd_ps(d2, d2, acc2);
+    acc3 = _mm512_fmadd_ps(d3, d3, acc3);
+  }
+  acc = _mm512_add_ps(_mm512_add_ps(acc, acc1), _mm512_add_ps(acc2, acc3));
   for (; i + 16 <= n; i += 16) {
     const __m512 va = _mm512_loadu_ps(pa + i);
     const __m512 vb = _mm512_loadu_ps(pb + i);
@@ -57,7 +71,17 @@ __attribute__((target("avx512f,fma"))) float DotAvx512(VectorView a,
   const float* pb = b.data();
 
   __m512 acc = _mm512_setzero_ps();
+  __m512 acc1 = _mm512_setzero_ps();
+  __m512 acc2 = _mm512_setzero_ps();
+  __m512 acc3 = _mm512_setzero_ps();
   size_t i = 0;
+  for (; i + 64 <= n; i += 64) {
+    acc = _mm512_fmadd_ps(_mm512_loadu_ps(pa + i), _mm512_loadu_ps(pb + i), acc);
+    acc1 = _mm512_fmadd_ps(_mm512_loadu_ps(pa + i + 16), _mm512_loadu_ps(pb + i + 16), acc1);
+    acc2 = _mm512_fmadd_ps(_mm512_loadu_ps(pa + i + 32), _mm512_loadu_ps(pb + i + 32), acc2);
+    acc3 = _mm512_fmadd_ps(_mm512_loadu_ps(pa + i + 48), _mm512_loadu_ps(pb + i + 48), acc3);
+  }
+  acc = _mm512_add_ps(_mm512_add_ps(acc, acc1), _mm512_add_ps(acc2, acc3));
   for (; i + 16 <= n; i += 16) {
     const __m512 va = _mm512_loadu_ps(pa + i);
     const __m512 vb = _mm512_loadu_ps(pb + i);
@@ -92,7 +116,21 @@ __attribute__((target("avx2,fma"))) float L2SquaredAvx2(VectorView a,
   const float* pb = b.data();
 
   __m256 acc = _mm256_setzero_ps();
+  __m256 acc1 = _mm256_setzero_ps();
+  __m256 acc2 = _mm256_setzero_ps();
+  __m256 acc3 = _mm256_setzero_ps();
   size_t i = 0;
+  for (; i + 32 <= n; i += 32) {
+    const __m256 d0 = _mm256_sub_ps(_mm256_loadu_ps(pa + i), _mm256_loadu_ps(pb + i));
+    const __m256 d1 = _mm256_sub_ps(_mm256_loadu_ps(pa + i + 8), _mm256_loadu_ps(pb + i + 8));
+    const __m256 d2 = _mm256_sub_ps(_mm256_loadu_ps(pa + i + 16), _mm256_loadu_ps(pb + i + 16));
+    const __m256 d3 = _mm256_sub_ps(_mm256_loadu_ps(pa + i + 24), _mm256_loadu_ps(pb + i + 24));
+    acc = _mm256_fmadd_ps(d0, d0, acc);
+    acc1 = _mm256_fmadd_ps(d1, d1, acc1);
+    acc2 = _mm256_fmadd_ps(d2, d2, acc2);
+    acc3 = _mm256_fmadd_ps(d3, d3, acc3);
+  }
+  acc = _mm256_add_ps(_mm256_add_ps(acc, acc1), _mm256_add_ps(acc2, acc3));
   for (; i + 8 <= n; i += 8) {
     const __m256 va = _mm256_loadu_ps(pa + i);
     const __m256 vb = _mm256_loadu_ps(pb + i);
@@ -116,7 +154,17 @@ __attribute__((target("avx2,fma"))) float DotAvx2(VectorView a, VectorView b) {
   const float* pb = b.data();
 
   __m256 acc = _mm256_setzero_ps();
+  __m256 acc1 = _mm256_setzero_ps();
+  __m256 acc2 = _mm256_setzero_ps();
+  __m256 acc3 = _mm256_setzero_ps();
   size_t i = 0;
+  for (; i + 32 <= n; i += 32) {
+    acc = _mm256_fmadd_ps(_mm256_loadu_ps(pa + i), _mm256_loadu_ps(pb + i), acc);
+    acc1 = _mm256_fmadd_ps(_mm256_loadu_ps(pa + i + 8), _mm256_loadu_ps(pb + i + 8), acc1);
+    acc2 = _mm256_fmadd_ps(_mm256_loadu_ps(pa + i + 16), _mm256_loadu_ps(pb + i + 16), acc2);
+    acc3 = _mm256_fmadd_ps(_mm256_loadu_ps(pa + i + 24), _mm256_loadu_ps(pb + i + 24), acc3);
+  }
+  acc = _mm256_add_ps(_mm256_add_ps(acc, acc1), _mm256_add_ps(acc2, acc3));
   for (; i + 8 <= n; i += 8) {
     const __m256 va = _mm256_loadu_ps(pa + i);
     const __m256 vb = _mm256_loadu_ps(pb + i);
@@ -146,7 +194,19 @@ float L2SquaredNeon(VectorView a, VectorView b) {
   const float* pb = b.data();
 
   float32x4_t acc = vdupq_n_f32(0.0f);
+  float32x4_t acc1 = acc, acc2 = acc, acc3 = acc;
   size_t i = 0;
+  for (; i + 16 <= n; i += 16) {
+    const float32x4_t d0 = vsubq_f32(vld1q_f32(pa + i), vld1q_f32(pb + i));
+    const float32x4_t d1 = vsubq_f32(vld1q_f32(pa + i + 4), vld1q_f32(pb + i + 4));
+    const float32x4_t d2 = vsubq_f32(vld1q_f32(pa + i + 8), vld1q_f32(pb + i + 8));
+    const float32x4_t d3 = vsubq_f32(vld1q_f32(pa + i + 12), vld1q_f32(pb + i + 12));
+    acc = vfmaq_f32(acc, d0, d0);
+    acc1 = vfmaq_f32(acc1, d1, d1);
+    acc2 = vfmaq_f32(acc2, d2, d2);
+    acc3 = vfmaq_f32(acc3, d3, d3);
+  }
+  acc = vaddq_f32(vaddq_f32(acc, acc1), vaddq_f32(acc2, acc3));
   for (; i + 4 <= n; i += 4) {
     const float32x4_t va = vld1q_f32(pa + i);
     const float32x4_t vb = vld1q_f32(pb + i);
@@ -168,7 +228,15 @@ float DotNeon(VectorView a, VectorView b) {
   const float* pb = b.data();
 
   float32x4_t acc = vdupq_n_f32(0.0f);
+  float32x4_t acc1 = acc, acc2 = acc, acc3 = acc;
   size_t i = 0;
+  for (; i + 16 <= n; i += 16) {
+    acc = vfmaq_f32(acc, vld1q_f32(pa + i), vld1q_f32(pb + i));
+    acc1 = vfmaq_f32(acc1, vld1q_f32(pa + i + 4), vld1q_f32(pb + i + 4));
+    acc2 = vfmaq_f32(acc2, vld1q_f32(pa + i + 8), vld1q_f32(pb + i + 8));
+    acc3 = vfmaq_f32(acc3, vld1q_f32(pa + i + 12), vld1q_f32(pb + i + 12));
+  }
+  acc = vaddq_f32(vaddq_f32(acc, acc1), vaddq_f32(acc2, acc3));
   for (; i + 4 <= n; i += 4) {
     const float32x4_t va = vld1q_f32(pa + i);
     const float32x4_t vb = vld1q_f32(pb + i);

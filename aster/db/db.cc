@@ -10,6 +10,7 @@
 #include <chrono>
 #include <thread>
 #include <cmath>
+#include <limits>
 #include <cstring>
 #include <queue>
 #include <set>
@@ -903,7 +904,35 @@ std::vector<SearchHit> Db::SearchLocked(const SearchRequest& request) const {
   candidates.reserve(1 + segments_.size());
   candidates.push_back(MemtableTopK(memtable_, options_.metric, request.vector,
                                     fetch_k, request.tags));
-  for (const auto& segment : segments_) {
+  std::vector<const Segment*> targets;
+  targets.reserve(segments_.size());
+  for (const auto& segment : segments_) targets.push_back(segment.get());
+  if (options_.segment_prune_epsilon > 0.0 && request.tags.empty() &&
+      targets.size() > 1 && options_.metric != Metric::kDot) {
+    // SPANN query-aware pruning: keep segments with
+    // dist(q, centroid) <= (1 + eps) * min dist(q, centroid).
+    std::vector<double> dist(targets.size(), -1.0);
+    double best = std::numeric_limits<double>::infinity();
+    for (size_t i = 0; i < targets.size(); ++i) {
+      const auto& c = targets[i]->Centroid();
+      if (c.size() != request.vector.size()) continue;
+      dist[i] = options_.metric == Metric::kL2
+                    ? std::sqrt(static_cast<double>(
+                          L2Squared(request.vector, c)))
+                    : 1.0 - static_cast<double>(
+                                CosineSimilarity(request.vector, c));
+      best = std::min(best, dist[i]);
+    }
+    if (std::isfinite(best)) {
+      const double limit = (1.0 + options_.segment_prune_epsilon) * best;
+      std::vector<const Segment*> kept;
+      for (size_t i = 0; i < targets.size(); ++i) {
+        if (dist[i] < 0.0 || dist[i] <= limit) kept.push_back(targets[i]);
+      }
+      targets.swap(kept);
+    }
+  }
+  for (const Segment* segment : targets) {
     candidates.push_back(segment->Search(request.vector, fetch_k,
                                          request.ef_search, request.tags));
   }

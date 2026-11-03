@@ -5,6 +5,19 @@ The project follows a single-version policy; see [docs/versioning.md](docs/versi
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-11-03
+
+### Performance
+- AVX-512 / AVX2 / NEON dot and L2 kernels use four independent accumulators
+  (~3.5× faster 2048-dim `Dot` in a microbenchmark on Apple Silicon).
+- Float32 packed vectors are scored in place during HNSW search (no per-node
+  decode into a scratch buffer) when aligned on little-endian hosts.
+
+### Added
+- Opt-in SPANN-style query-aware segment pruning
+  (`Db::Options::segment_prune_epsilon`, default `0` = off) for unfiltered
+  L2 / cosine searches; `Segment::Centroid()`.
+
 ## [1.0.0] - 2026-10-30
 
 First stable release. Pre-alpha status removed; server, Bazel module, and

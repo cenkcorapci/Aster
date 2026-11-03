@@ -90,6 +90,11 @@ class Db {
     // Empty = in-memory only (constructor). Non-empty = durable (prefer Open).
     std::string data_dir;
     SyncPolicy wal_sync = SyncPolicy::kAlways;
+    // SPANN-style query-aware pruning (NeurIPS 2021): when > 0, unfiltered
+    // searches skip segments whose centroid is farther from the query than
+    // (1 + epsilon) x the closest segment centroid (L2 / cosine only). Only
+    // safe when segments are spatially clustered; 0 disables (exact fan-out).
+    double segment_prune_epsilon = 0.0;
     // Size-tiered compaction: merge when a size bucket has this many
     // similar-sized segments (Cassandra-style; see docs/indexing.md §6.1).
     // 0 disables size-tiered auto-compaction.

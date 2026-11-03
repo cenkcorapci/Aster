@@ -64,6 +64,19 @@ Artifacts: `bench-results/vs-milvus-full-20260903T095601Z/`.
   per-segment HNSW on flush; Milvus batch-inserts then builds one collection
   index — insert vps is not an apples-to-apples engine microbench.
 
+## Performance notes
+
+Search-path changes since the 2026-09-03 run (not yet re-measured against
+Milvus/Qdrant): 4-accumulator unrolled AVX-512/AVX2/NEON dot and L2 kernels,
+and zero-copy scoring of float32 packed vectors (no per-node decode into a
+scratch buffer). Microbenchmark (Apple M-series, dim 2048 `Dot`): ~1.5–1.9 µs → ~0.4–0.5 µs
+per call. Also added opt-in SPANN-style query-aware pruning
+([NeurIPS 2021](https://proceedings.neurips.cc/paper/2021/hash/299dc35e747eb77177d9cea10a802da2-Abstract.html)):
+`Db::Options::segment_prune_epsilon > 0` skips segments whose centroid is
+farther from the query than `(1 + ε)` × the nearest centroid (L2/cosine,
+unfiltered searches). Default `0` (off); only use when segments are spatially
+clustered, otherwise recall drops. Re-run `make bench-vs-milvus` to refresh the tables above.
+
 ## Re-run notes
 
 - Needs Docker, kind, kubectl, helm, Python 3.11–3.13, Bazel.

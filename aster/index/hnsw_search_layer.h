@@ -97,6 +97,15 @@ inline float NodeScore(const VectorStore& store, VectorView query,
     const uint32_t slot = (*store.node_slots)[id];
     const auto codes = store.packed->PackedAt(slot);
     if (store.metric == Metric::kCosine && HasNormCache(store)) {
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+      if (store.packed->encoding() == VectorEncoding::kFloat32 &&
+          reinterpret_cast<uintptr_t>(codes.data()) % alignof(float) == 0) {
+        const VectorView direct(reinterpret_cast<const float*>(codes.data()),
+                                store.packed->dimension());
+        return CosineSimilarityPreNorm(query, qnorm, direct,
+                                       (*store.norms)[id]);
+      }
+#endif
       thread_local std::vector<float> scratch;
       scratch.resize(store.packed->dimension());
       if (!store.packed->Decode(slot, scratch).ok()) return 0.0f;

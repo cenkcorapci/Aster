@@ -428,6 +428,13 @@ float ScorePacked(Metric metric, VectorEncoding enc, uint32_t dim,
       break;
     }
     case VectorEncoding::kFloat32: {
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+      if (reinterpret_cast<uintptr_t>(packed.data()) % alignof(float) == 0) {
+        return Score(metric, query,
+                     VectorView(reinterpret_cast<const float*>(packed.data()),
+                                dim));
+      }
+#endif
       thread_local std::vector<float> scratch;
       scratch.resize(dim);
       if (!DecodeOne(enc, dim, packed.data(), scratch.data()).ok()) return 0.0f;
