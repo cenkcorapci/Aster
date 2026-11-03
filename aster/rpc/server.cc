@@ -8,6 +8,7 @@
 
 #include <cstring>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
 
 #include <thrift/protocol/TBinaryProtocol.h>
@@ -30,6 +31,18 @@ namespace atp = ::apache::thrift::protocol;
 namespace ats = ::apache::thrift::server;
 namespace att = ::apache::thrift::transport;
 namespace atc = ::apache::thrift::concurrency;
+
+namespace {
+
+void InitializeOpenSSLForProcessLifetime() {
+  static std::once_flag initialized;
+  std::call_once(initialized, [] {
+    att::TSSLSocketFactory::setManualOpenSSLInitialization(true);
+    att::initializeOpenSSL();
+  });
+}
+
+}  // namespace
 
 ThriftServer::ThriftServer(Options options,
                            std::shared_ptr<AsterHandler> handler)
@@ -86,6 +99,7 @@ Status ThriftServer::Listen() {
             "thrift listen: --tls requires --tls-cert and --tls-key");
       }
 
+      InitializeOpenSSLForProcessLifetime();
       auto tls_factory =
           std::make_shared<att::TSSLSocketFactory>(att::SSLProtocol::LATEST);
       // Server-side handshake.
