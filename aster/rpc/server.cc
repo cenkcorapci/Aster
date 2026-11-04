@@ -1,23 +1,28 @@
 #include "aster/rpc/server.h"
 
 #include <arpa/inet.h>
+#include <csignal>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
 #include <cstring>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
 
 #include <thrift/protocol/TBinaryProtocol.h>
 #include <thrift/server/TThreadedServer.h>
 #include <thrift/transport/TBufferTransports.h>
 #include <thrift/transport/TServerSocket.h>
-#include <thrift/transport/TSSLSocket.h>
 #include <thrift/transport/TTransportException.h>
 
-#include "Aster.h"
+#ifndef ASTER_NO_THRIFT_TLS
+#include <thrift/transport/TSSLSocket.h>
 #include "aster/rpc/tls_maybe_server_socket.h"
+#endif
+
+#include "Aster.h"
 
 namespace aster {
 namespace rpc {
@@ -27,6 +32,18 @@ namespace ats = ::apache::thrift::server;
 namespace att = ::apache::thrift::transport;
 namespace atc = ::apache::thrift::concurrency;
 
+namespace {
+
+void InitializeOpenSSLForProcessLifetime() {
+  static std::once_flag initialized;
+  std::call_once(initialized, [] {
+    att::TSSLSocketFactory::setManualOpenSSLInitialization(true);
+    att::initializeOpenSSL();
+  });
+}
+
+}  // namespace
+
 ThriftServer::ThriftServer(Options options,
                            std::shared_ptr<AsterHandler> handler)
     : options_(std::move(options)), handler_(std::move(handler)) {}
@@ -35,6 +52,8 @@ Status ThriftServer::Listen() {
   if (!handler_) {
     return Status::InvalidArgument("ThriftServer requires a handler");
   }
+  // A peer closing mid-write must surface as EPIPE, not kill the process.
+  std::signal(SIGPIPE, SIG_IGN);
 
   // Bind ourselves (supports port 0) then hand the fd to Thrift so
   // TServerFramework::serve() can call listen() without rebinding.
@@ -73,12 +92,14 @@ Status ThriftServer::Listen() {
 
   try {
     if (options_.tls) {
+#ifndef ASTER_NO_THRIFT_TLS
       if (options_.tls_cert_file.empty() || options_.tls_key_file.empty()) {
         ::close(fd);
         return Status::InvalidArgument(
             "thrift listen: --tls requires --tls-cert and --tls-key");
       }
 
+      InitializeOpenSSLForProcessLifetime();
       auto tls_factory =
           std::make_shared<att::TSSLSocketFactory>(att::SSLProtocol::LATEST);
       // Server-side handshake.
@@ -95,6 +116,11 @@ Status ThriftServer::Listen() {
 
       server_socket_ = std::make_shared<MaybeTLSServerSocket>(
           fd, att::SocketType::INET, tls_factory);
+#else
+      ::close(fd);
+      return Status::InvalidArgument(
+          "thrift listen: TLS is not available in static musl builds");
+#endif
     } else {
       server_socket_ = std::make_shared<att::TServerSocket>(
           fd, att::SocketType::INET);

@@ -5,6 +5,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <memory>
+#include <set>
 #include <string>
 #include <stdexcept>
 #include <utility>
@@ -467,6 +468,145 @@ TEST(ThriftServer, ResourceLimitsExceededReturnsAsterError) {
 
   server.Stop();
   th.join();
+}
+
+TEST(ThriftServer, RemoveDropCollectionAndGetNotFound) {
+  const std::string dir = TempDir("aster_thrift_remove");
+  Catalog::Options opt;
+  opt.data_dir = dir;
+  opt.wal_sync = SyncPolicy::kNever;
+  auto cat = Catalog::Open(opt);
+  ASSERT_TRUE(cat.ok());
+
+  auto handler = std::make_shared<AsterHandler>(cat.value().get());
+  ThriftServer::Options sop;
+  sop.host = "127.0.0.1";
+  sop.port = 0;
+  ThriftServer server(sop, handler);
+  ASSERT_TRUE(server.Listen().ok());
+  ASSERT_GT(server.port(), 0);
+
+  std::thread th([&] { server.Serve(); });
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+  {
+    ThriftClient client(server.port());
+    CollectionConfig cfg;
+    cfg.__set_name("demo");
+    VectorConfig vc;
+    vc.__set_dimension(4);
+    vc.__set_metric(DistanceMetric::COSINE);
+    cfg.__set_vector(vc);
+    client->createCollection(cfg.name);
+    client->configureCollection(cfg);
+
+    const auto vec = MakeUnitVector(4, 5);
+    Document doc;
+    doc.__set_id("d1");
+    doc.__set_vector(EncodeVector(vec));
+    doc.__set_timestampMicros(1);
+    client->upsert("demo", doc, ConsistencyLevel::ONE);
+
+    client->remove("demo", "d1", ConsistencyLevel::ONE);
+    try {
+      Document got;
+      client->get(got, "demo", "d1", ConsistencyLevel::ONE);
+      FAIL() << "expected get to throw after remove";
+    } catch (const AsterError& e) {
+      EXPECT_EQ(e.code, static_cast<int32_t>(StatusCode::kNotFound));
+    }
+
+    client->dropCollection("demo");
+    EXPECT_FALSE(cat.value()->GetCollection("demo").has_value());
+  }
+
+  server.Stop();
+  th.join();
+}
+
+TEST(ThriftServer, SearchWithTagsAndEfSearch) {
+  const std::string dir = TempDir("aster_thrift_tags");
+  Catalog::Options opt;
+  opt.data_dir = dir;
+  opt.wal_sync = SyncPolicy::kNever;
+  auto cat = Catalog::Open(opt);
+  ASSERT_TRUE(cat.ok());
+
+  auto handler = std::make_shared<AsterHandler>(cat.value().get());
+  ThriftServer::Options sop;
+  sop.host = "127.0.0.1";
+  sop.port = 0;
+  ThriftServer server(sop, handler);
+  ASSERT_TRUE(server.Listen().ok());
+
+  std::thread th([&] { server.Serve(); });
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+  {
+    ThriftClient client(server.port());
+    CollectionConfig cfg;
+    cfg.__set_name("tagged");
+    VectorConfig vc;
+    vc.__set_dimension(4);
+    vc.__set_metric(DistanceMetric::COSINE);
+    cfg.__set_vector(vc);
+    client->createCollection(cfg.name);
+    client->configureCollection(cfg);
+
+    const auto vec = MakeUnitVector(4, 11);
+    Document doc;
+    doc.__set_id("match");
+    doc.__set_vector(EncodeVector(vec));
+    doc.__set_tags({"keep"});
+    doc.__set_timestampMicros(1);
+    client->upsert("tagged", doc, ConsistencyLevel::ONE);
+
+    Document other = doc;
+    other.__set_id("skip");
+    other.__set_tags({"drop"});
+    other.__set_timestampMicros(2);
+    client->upsert("tagged", other, ConsistencyLevel::ONE);
+
+    SearchRequest req;
+    req.__set_collection("tagged");
+    req.__set_vector(EncodeVector(vec));
+    req.__set_topK(5);
+    req.__set_efSearch(64);
+  std::set<std::string> tags;
+  tags.insert("keep");
+  req.__set_tags(tags);
+    SearchResponse resp;
+    client->search(resp, req);
+    ASSERT_EQ(resp.hits.size(), 1u);
+    EXPECT_EQ(resp.hits[0].id, "match");
+  }
+
+  server.Stop();
+  th.join();
+}
+
+TEST(ThriftServer, ListenRejectsTlsWithoutCert) {
+  ThriftServer::Options sop;
+  sop.host = "127.0.0.1";
+  sop.port = 0;
+  sop.tls = true;
+  sop.tls_insecure = true;
+  auto handler = std::make_shared<AsterHandler>(nullptr);
+  ThriftServer server(sop, handler);
+  EXPECT_FALSE(server.Listen().ok());
+}
+
+TEST(ThriftServer, ListenRejectsNullHandlerAndBadHost) {
+  ThriftServer::Options sop;
+  sop.host = "not-a-host";
+  sop.port = 0;
+  auto handler = std::make_shared<AsterHandler>(nullptr);
+  ThriftServer bad_host(sop, handler);
+  EXPECT_FALSE(bad_host.Listen().ok());
+
+  sop.host = "127.0.0.1";
+  ThriftServer no_handler(sop, nullptr);
+  EXPECT_FALSE(no_handler.Listen().ok());
 }
 
 }  // namespace

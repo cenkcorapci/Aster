@@ -6,6 +6,8 @@
 #include <string>
 #include <vector>
 
+#include "aster/index/vector_encoding.h"
+
 #include "aster/index/bloom.h"
 #include "aster/core/features.h"
 #include "aster/index/vector_index.h"
@@ -403,6 +405,7 @@ TEST(Sstable, WriteReadRoundTrip) {
   EXPECT_EQ(reader.value()->row_count(), 3u);
   EXPECT_EQ(reader.value()->dimension(), 2u);
   EXPECT_EQ(reader.value()->metric(), Metric::kL2);
+  EXPECT_EQ(reader.value()->vector_encoding(), VectorEncoding::kFloat32);
 
   auto a = reader.value()->Get("a");
   ASSERT_TRUE(a.has_value());
@@ -428,6 +431,82 @@ TEST(Sstable, WriteReadRoundTrip) {
   std::remove(path.c_str());
 }
 
+class SstableEncodingTest
+    : public ::testing::TestWithParam<VectorEncoding> {};
+
+TEST_P(SstableEncodingTest, WriteReadPreservesNeighbors) {
+  const VectorEncoding enc = GetParam();
+  const std::string path =
+      ::testing::TempDir() + "/seg_enc_" +
+      std::to_string(static_cast<int>(enc)) + ".ast";
+  std::remove(path.c_str());
+
+  std::vector<Row> rows = {
+      MakeRow("a", {1.0f, 0.0f, 0.0f, 0.0f}, 1),
+      MakeRow("b", {0.0f, 1.0f, 0.0f, 0.0f}, 2),
+      MakeRow("c", {0.9f, 0.1f, 0.0f, 0.0f}, 3),
+  };
+  SstableWriteOptions opts;
+  opts.vector_encoding = enc;
+  ASSERT_TRUE(WriteSstable(path, 7, Metric::kL2, rows, opts).ok());
+
+  auto reader = SstableReader::Open(path);
+  ASSERT_TRUE(reader.ok()) << reader.status().message();
+  EXPECT_EQ(reader.value()->vector_encoding(), enc);
+  ASSERT_NE(reader.value()->packed_vectors(), nullptr);
+  EXPECT_EQ(reader.value()->packed_vectors()->BytesUsed(),
+            PackedPayloadBytes(enc, 4, 3));
+
+  auto a = reader.value()->Get("a");
+  ASSERT_TRUE(a.has_value());
+  ASSERT_EQ(a->vector.size(), 4u);
+  // float16/int8 should keep the unit axis dominant; binary is coarser.
+  if (enc != VectorEncoding::kBinaryRabitq) {
+    EXPECT_GT(a->vector[0], 0.5f);
+  }
+  std::remove(path.c_str());
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    AllEncodings, SstableEncodingTest,
+    ::testing::Values(VectorEncoding::kFloat32, VectorEncoding::kFloat16,
+                      VectorEncoding::kInt8Sq, VectorEncoding::kBinaryRabitq));
+
+TEST(Segment, PackedInt8SavesMemoryAndSearches) {
+  constexpr uint32_t kDim = 512;
+  constexpr size_t kN = 200;
+  auto rows = std::make_shared<std::vector<Row>>();
+  rows->reserve(kN);
+  for (size_t i = 0; i < kN; ++i) {
+    std::vector<float> v(kDim, 0.0f);
+    v[i % kDim] = 1.0f;
+    // Zero-pad so ids stay lexicographically sorted (Segment contract).
+    char id[32];
+    std::snprintf(id, sizeof(id), "id%04zu", i);
+    rows->push_back(
+        MakeRow(id, std::move(v), static_cast<Timestamp>(i + 1)));
+  }
+  const uint64_t f32_bytes = kN * kDim * sizeof(float);
+  auto built =
+      Segment::Build(/*id=*/1, Metric::kL2, rows, VectorEncoding::kInt8Sq);
+  ASSERT_TRUE(built.ok()) << built.status().message();
+  EXPECT_EQ(built.value()->vector_encoding(), VectorEncoding::kInt8Sq);
+  EXPECT_LT(built.value()->VectorBytesUsed(), f32_bytes / 3);
+  EXPECT_EQ(built.value()->VectorBytesUsed(),
+            PackedPayloadBytes(VectorEncoding::kInt8Sq, kDim, kN));
+
+  std::vector<float> q(kDim, 0.0f);
+  q[7] = 1.0f;
+  auto hits = built.value()->Search(q, /*top_k=*/1, /*ef_search=*/0);
+  ASSERT_EQ(hits.size(), 1u);
+  EXPECT_EQ(hits[0].id, "id0007");
+
+  auto got = built.value()->Get("id0007");
+  ASSERT_TRUE(got.has_value());
+  ASSERT_EQ(got->vector.size(), kDim);
+  EXPECT_GT(got->vector[7], 0.5f);
+}
+
 TEST(Sstable, TakeAllMovesVectors) {
   const std::string path = ::testing::TempDir() + "/seg_takeall.ast";
   std::remove(path.c_str());
@@ -447,6 +526,75 @@ TEST(Sstable, TakeAllMovesVectors) {
   EXPECT_EQ(taken[1].id, "b");
   EXPECT_EQ(reader.value()->row_count(), 0u);
   EXPECT_FALSE(reader.value()->Get("a").has_value());
+  std::remove(path.c_str());
+}
+
+TEST(Sstable, MmapColdVectorsAvoidHeapPayload) {
+  constexpr uint32_t kDim = 128;
+  constexpr size_t kN = 2000;
+  const std::string path = ::testing::TempDir() + "/seg_mmap_cold.ast";
+  std::remove(path.c_str());
+
+  std::vector<Row> rows;
+  rows.reserve(kN);
+  for (size_t i = 0; i < kN; ++i) {
+    std::vector<float> v(kDim, 0.0f);
+    v[i % kDim] = 1.0f;
+    char id[32];
+    std::snprintf(id, sizeof(id), "id%05zu", i);
+    rows.push_back(MakeRow(id, std::move(v), static_cast<Timestamp>(i + 1)));
+  }
+  SstableWriteOptions opts;
+  opts.vector_encoding = VectorEncoding::kInt8Sq;
+  ASSERT_TRUE(WriteSstable(path, 9, Metric::kL2, rows, opts).ok());
+
+  StoragePolicy cold;
+  cold.vectors = Residency::kCold;
+  auto reader = SstableReader::Open(path, cold);
+  ASSERT_TRUE(reader.ok()) << reader.status().message();
+  ASSERT_NE(reader.value()->packed_vectors(), nullptr);
+  EXPECT_TRUE(reader.value()->vectors_file_backed());
+  EXPECT_EQ(reader.value()->packed_vectors()->HeapBytesUsed(), 0u);
+  EXPECT_EQ(reader.value()->packed_vectors()->BytesUsed(),
+            PackedPayloadBytes(VectorEncoding::kInt8Sq, kDim, kN));
+
+  auto payload = reader.value()->ReleaseForSegment();
+  ASSERT_TRUE(payload.ok()) << payload.status().message();
+  auto built = Segment::BuildFromPacked(
+      9, Metric::kL2, payload.value().rows, payload.value().packed,
+      payload.value().live_slots, VectorEncoding::kInt8Sq);
+  ASSERT_TRUE(built.ok()) << built.status().message();
+  EXPECT_EQ(built.value()->VectorHeapBytesUsed(), 0u);
+  EXPECT_EQ(built.value()->VectorBytesUsed(),
+            PackedPayloadBytes(VectorEncoding::kInt8Sq, kDim, kN));
+
+  std::vector<float> q(kDim, 0.0f);
+  q[42] = 1.0f;
+  auto hits = built.value()->Search(q, /*top_k=*/1, /*ef_search=*/0);
+  ASSERT_EQ(hits.size(), 1u);
+  EXPECT_EQ(hits[0].id, "id00042");
+  std::remove(path.c_str());
+}
+
+TEST(Sstable, MmapPinnedCopiesPayloadToHeap) {
+  const std::string path = ::testing::TempDir() + "/seg_mmap_pin.ast";
+  std::remove(path.c_str());
+  std::vector<Row> rows = {
+      MakeRow("a", {1.0f, 0.0f, 0.0f, 0.0f}, 1),
+      MakeRow("b", {0.0f, 1.0f, 0.0f, 0.0f}, 2),
+  };
+  SstableWriteOptions opts;
+  opts.vector_encoding = VectorEncoding::kFloat16;
+  ASSERT_TRUE(WriteSstable(path, 3, Metric::kL2, rows, opts).ok());
+
+  StoragePolicy pinned;
+  pinned.vectors = Residency::kPinned;
+  auto reader = SstableReader::Open(path, pinned);
+  ASSERT_TRUE(reader.ok());
+  ASSERT_NE(reader.value()->packed_vectors(), nullptr);
+  EXPECT_FALSE(reader.value()->vectors_file_backed());
+  EXPECT_EQ(reader.value()->packed_vectors()->HeapBytesUsed(),
+            PackedPayloadBytes(VectorEncoding::kFloat16, 4, 2));
   std::remove(path.c_str());
 }
 
@@ -693,6 +841,53 @@ TEST(SizeTiered, PrefersLowerTierWhenBothOverflow) {
   ASSERT_TRUE(pick.has_value());
   EXPECT_EQ(pick->tier, 0);
   EXPECT_EQ(pick->input_indices.size(), 4u);
+}
+
+#if ASTER_ENABLE_HNSW
+TEST(Compaction, InsertIntoLargestWhenGhostFractionLow) {
+  std::vector<Row> big;
+  for (int i = 0; i < 40; ++i) {
+    big.push_back(MakeRow("id" + std::to_string(i),
+                          {static_cast<float>(i), static_cast<float>(i % 3)},
+                          static_cast<Timestamp>(i)));
+  }
+  std::vector<Row> small;
+  for (int i = 0; i < 5; ++i) {
+    small.push_back(MakeRow("new" + std::to_string(i),
+                            {static_cast<float>(i + 1), 0.5f},
+                            static_cast<Timestamp>(100 + i)));
+  }
+  auto seg_big = Segment::Build(1, Metric::kL2, std::move(big));
+  auto seg_small = Segment::Build(2, Metric::kL2, std::move(small));
+
+  HnswParams params;
+  params.m = 8;
+  params.ef_construction = 32;
+  params.ef_search_default = 32;
+  auto merged = CompactSegments(99, Metric::kL2, {seg_big, seg_small},
+                                /*drop_tombstones=*/true, params, 42,
+                                /*enable_insert_into_largest=*/true,
+                                /*insert_largest_staleness_debt_threshold=*/0.5);
+  EXPECT_EQ(merged->row_count(), 45u);
+  EXPECT_TRUE(merged->search_uses_hnsw());
+  const std::vector<float> query = {1.0f, 0.5f};
+  auto hits = merged->Search(query, 3, 32);
+  EXPECT_FALSE(hits.empty());
+}
+#endif
+
+TEST(Segment, TaggedSearchFiltersNonMatches) {
+  std::vector<Row> rows = {
+      MakeRow("a", {1.0f, 0.0f}, 1, false, {"keep"}),
+      MakeRow("b", {0.0f, 1.0f}, 2, false, {"drop"}),
+      MakeRow("c", {0.9f, 0.1f}, 3, false, {"keep"}),
+  };
+  auto segment = Segment::Build(3, Metric::kCosine, std::move(rows));
+  const std::set<std::string> tags = {"keep"};
+  const std::vector<float> query = {1.0f, 0.0f};
+  auto hits = segment->Search(query, 5, 0, tags);
+  ASSERT_EQ(hits.size(), 2u);
+  EXPECT_EQ(hits[0].id, "a");
 }
 
 }  // namespace

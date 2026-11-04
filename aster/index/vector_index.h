@@ -5,6 +5,7 @@
 
 #include "aster/core/features.h"
 #include "aster/core/types.h"
+#include "aster/index/vector_encoding.h"
 
 #if ASTER_ENABLE_HNSW
 #include "aster/index/hnsw_graph.h"  // HnswParams, HnswGraph (M2-T01)
@@ -43,6 +44,13 @@ std::unique_ptr<VectorIndex> BuildExactIndex(Metric metric,
 std::unique_ptr<VectorIndex> BuildExactIndex(
     Metric metric, std::shared_ptr<const std::vector<Row>> rows);
 
+// Exact index over packed codes: `live_slots[row_ordinal]` is the store slot
+// for live rows (UINT32_MAX if tombstone / empty). Decode-to-scratch on score.
+std::unique_ptr<VectorIndex> BuildExactIndex(
+    Metric metric, std::shared_ptr<const std::vector<Row>> rows,
+    std::shared_ptr<const CompactVectorStore> packed,
+    std::shared_ptr<const std::vector<uint32_t>> live_slots);
+
 #if ASTER_ENABLE_HNSW
 // Segmented HNSW: build via HnswBuilder (hnsw_build.h); query via HnswSearch /
 // BuildHnswIndex (hnsw_search.h). Graph: HnswGraph (docs/hnsw-format.md).
@@ -53,8 +61,15 @@ std::unique_ptr<VectorIndex> BuildHnswIndex(Metric metric, HnswParams params,
 // Build an HNSW vector index from a pre-built graph and explicit vectors/ids
 // arrays (used by compaction merge strategies that reuse an in-memory graph).
 std::unique_ptr<VectorIndex> BuildHnswIndexFromGraph(
-    Metric metric, HnswGraph graph,
-    std::vector<std::vector<float>> vectors, std::vector<RowId> ids);
+    Metric metric, HnswGraph graph, std::vector<std::vector<float>> vectors,
+    std::vector<RowId> ids);
+
+// Rehydrate an in-memory HNSW index from a persisted graph + segment rows.
+// Prefers packed scoring when `packed` is non-null (no float32 vector copy).
+std::unique_ptr<VectorIndex> LoadHnswIndexFromGraph(
+    Metric metric, HnswGraph graph, const std::vector<Row>& rows,
+    std::shared_ptr<const CompactVectorStore> packed = nullptr,
+    std::shared_ptr<const std::vector<uint32_t>> live_slots = nullptr);
 
 // Compaction rebuild strategy (docs/indexing.md §6.2): fresh graph over
 // live (non-tombstone, non-empty) rows only — never merge input graphs.

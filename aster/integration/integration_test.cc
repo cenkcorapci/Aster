@@ -14,6 +14,7 @@
 #include "aster/platform/posix_storage.h"
 #include "aster/query/topk.h"
 #include "aster/server/catalog.h"
+#include "aster/server/http_api.h"
 #include "aster/storage/manifest.h"
 #include "aster/storage/sstable.h"
 
@@ -146,7 +147,7 @@ TEST(Integration, PosixLayoutWithSstableAndManifest) {
 
   Manifest m;
   m.generation = 1;
-  m.segments.push_back({1, seg_rel});
+  m.segments.push_back({1, seg_rel, ""});
   const std::string man = root + "/MANIFEST";
   ASSERT_TRUE(WriteManifest(man, m).ok());
 
@@ -364,6 +365,203 @@ TEST(Integration, OpenRemovesOrphansAfterSimulatedCrashFlush) {
   EXPECT_EQ(CountFilesWithPrefix(dir, "seg_"), 1);
   EXPECT_TRUE(reopened.value()->Get("x0").has_value());
   EXPECT_FALSE(reopened.value()->Get("orphan").has_value());
+}
+
+TEST(Integration, HttpApiCatalogParity) {
+  const std::string dir = ::testing::TempDir() + "/aster_integ_http";
+  Catalog::Options opt;
+  opt.data_dir = dir;
+  opt.wal_sync = SyncPolicy::kNever;
+  auto cat = Catalog::Open(opt);
+  ASSERT_TRUE(cat.ok());
+
+  ApiHandler handler(cat.value().get());
+  auto http = [&](const std::string& method, const std::string& path,
+                  const std::string& body = "") {
+    HttpRequest req;
+    req.method = method;
+    req.path = path;
+    req.body = body;
+    return handler.Handle(req);
+  };
+
+  ASSERT_EQ(http("PUT", "/v1/collections/http",
+                 R"({"dimension":4,"metric":"cosine"})").status,
+            201);
+  ASSERT_EQ(
+      http("PUT", "/v1/collections/http/docs/h1",
+           R"({"vector":[1.0,0.0,0.0,0.0],"timestamp":1})").status,
+      200);
+
+  auto got = cat.value()->Get("http", "h1");
+  ASSERT_TRUE(got.ok());
+  ASSERT_TRUE(got.value().has_value());
+
+  auto searched = http("POST", "/v1/collections/http/search",
+                       R"({"vector":[1.0,0.0,0.0,0.0],"top_k":3})");
+  EXPECT_EQ(searched.status, 200);
+  EXPECT_NE(searched.body.find("h1"), std::string::npos);
+
+  ASSERT_TRUE(cat.value()->Flush("http").ok());
+  searched = http("POST", "/v1/collections/http/search",
+                  R"({"vector":[1.0,0.0,0.0,0.0],"top_k":3})");
+  EXPECT_EQ(searched.status, 200);
+  EXPECT_NE(searched.body.find("h1"), std::string::npos);
+}
+
+TEST(Integration, HnswSearchMatchesExactAfterFlush) {
+  const std::string dir = ::testing::TempDir() + "/aster_integ_hnsw";
+  Db::Options options;
+  options.dimension = 8;
+  options.metric = Metric::kCosine;
+  options.data_dir = dir;
+  options.wal_sync = SyncPolicy::kNever;
+  options.compaction_tier_threshold = 0;
+  options.max_segments_before_compact = 0;
+  options.background_index_build = false;
+
+  auto db = Db::Open(options);
+  ASSERT_TRUE(db.ok());
+
+  for (int i = 0; i < 32; ++i) {
+    std::vector<float> v(8);
+    for (int j = 0; j < 8; ++j) {
+      v[j] = static_cast<float>((i + j) % 7) / 7.0f;
+    }
+    double norm2 = 0.0;
+    for (float x : v) norm2 += x * x;
+    const float inv = norm2 > 0 ? static_cast<float>(1.0 / std::sqrt(norm2)) : 1.0f;
+    for (float& x : v) x *= inv;
+    ASSERT_TRUE(db.value()
+                    ->Upsert(MakeRow("d" + std::to_string(i), v,
+                                     static_cast<Timestamp>(i + 1)))
+                    .ok());
+  }
+  ASSERT_TRUE(db.value()->Flush().ok());
+  ASSERT_EQ(db.value()->segment_index_states()[0], SegState::kPending);
+
+  SearchRequest req;
+  req.vector = {1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+  req.top_k = 5;
+  const auto exact_hits = db.value()->Search(req);
+  ASSERT_FALSE(exact_hits.empty());
+
+  ASSERT_TRUE(db.value()->BuildPendingIndexes().ok());
+  ASSERT_TRUE(db.value()->segment_uses_hnsw()[0]);
+
+  req.ef_search = 128;
+  auto ann = db.value()->TrySearch(req);
+  ASSERT_TRUE(ann.ok());
+  ASSERT_FALSE(ann.value().empty());
+
+  std::set<std::string> truth;
+  for (const SearchHit& h : exact_hits) truth.insert(h.id);
+  size_t overlap = 0;
+  for (const SearchHit& h : ann.value()) {
+    if (truth.count(h.id) != 0) ++overlap;
+  }
+  EXPECT_GE(overlap, truth.size() * 4 / 5);
+}
+
+// Compact vector encodings: durable flush packs RAM + disk; reopen recovers.
+TEST(Integration, CompactEncodingInt8DiskAndMemory) {
+  const std::string dir = ::testing::TempDir() + "/aster_integ_int8";
+  constexpr uint32_t kDim = 512;
+  constexpr size_t kN = 256;
+
+  Db::Options options;
+  options.dimension = kDim;
+  options.metric = Metric::kL2;
+  options.data_dir = dir;
+  options.wal_sync = SyncPolicy::kNever;
+  options.vector_encoding = VectorEncoding::kInt8Sq;
+  options.compaction_tier_threshold = 0;
+  options.max_segments_before_compact = 0;
+#if ASTER_ENABLE_HNSW
+  options.background_index_build = false;
+#endif
+
+  {
+    auto db = Db::Open(options);
+    ASSERT_TRUE(db.ok()) << db.status().message();
+    for (size_t i = 0; i < kN; ++i) {
+      std::vector<float> v(kDim, 0.0f);
+      v[i % kDim] = 1.0f;
+      ASSERT_TRUE(
+          db.value()
+              ->Upsert(MakeRow("v" + std::to_string(i), std::move(v),
+                               static_cast<Timestamp>(i + 1)))
+              .ok());
+    }
+    ASSERT_TRUE(db.value()->Flush().ok());
+    EXPECT_EQ(db.value()->segment_count(), 1u);
+
+    SearchRequest req;
+    req.vector.assign(kDim, 0.0f);
+    req.vector[42] = 1.0f;
+    req.top_k = 1;
+    auto hits = db.value()->Search(req);
+    ASSERT_EQ(hits.size(), 1u);
+    EXPECT_EQ(hits[0].id, "v42");
+
+    auto got = db.value()->Get("v42");
+    ASSERT_TRUE(got.has_value());
+    ASSERT_EQ(got->vector.size(), kDim);
+    EXPECT_GT(got->vector[42], 0.5f);
+  }
+
+  // On-disk: int8 payload ≪ float32 for the same N×D.
+  const uint64_t disk = DirBytes(dir);
+  const uint64_t f32_payload = kN * kDim * 4ull;
+  EXPECT_LT(disk, f32_payload);
+
+  auto reopened = Db::Open(options);
+  ASSERT_TRUE(reopened.ok()) << reopened.status().message();
+  SearchRequest req;
+  req.vector.assign(kDim, 0.0f);
+  req.vector[42] = 1.0f;
+  req.top_k = 1;
+  auto hits = reopened.value()->Search(req);
+  ASSERT_EQ(hits.size(), 1u);
+  EXPECT_EQ(hits[0].id, "v42");
+}
+
+TEST(Integration, CompactEncodingBinaryBeatsInt8OnDisk) {
+  auto Run = [](VectorEncoding enc) -> uint64_t {
+    const std::string dir =
+        ::testing::TempDir() + "/aster_integ_enc_" +
+        std::to_string(static_cast<int>(enc));
+    constexpr uint32_t kDim = 512;
+    constexpr size_t kN = 128;
+    Db::Options options;
+    options.dimension = kDim;
+    options.metric = Metric::kL2;
+    options.data_dir = dir;
+    options.wal_sync = SyncPolicy::kNever;
+    options.vector_encoding = enc;
+    options.compaction_tier_threshold = 0;
+    options.max_segments_before_compact = 0;
+#if ASTER_ENABLE_HNSW
+    options.background_index_build = false;
+#endif
+    auto db = Db::Open(options);
+    EXPECT_TRUE(db.ok());
+    for (size_t i = 0; i < kN; ++i) {
+      std::vector<float> v(kDim, 0.0f);
+      v[i % kDim] = 1.0f;
+      EXPECT_TRUE(
+          db.value()
+              ->Upsert(MakeRow("v" + std::to_string(i), std::move(v),
+                               static_cast<Timestamp>(i + 1)))
+              .ok());
+    }
+    EXPECT_TRUE(db.value()->Flush().ok());
+    return DirBytes(dir);
+  };
+
+  const uint64_t int8_disk = Run(VectorEncoding::kInt8Sq);
+  const uint64_t bin_disk = Run(VectorEncoding::kBinaryRabitq);
+  EXPECT_LT(bin_disk, int8_disk);
 }
 
 }  // namespace

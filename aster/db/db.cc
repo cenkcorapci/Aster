@@ -8,7 +8,9 @@
 
 #include <algorithm>
 #include <chrono>
+#include <thread>
 #include <cmath>
+#include <limits>
 #include <cstring>
 #include <queue>
 #include <set>
@@ -584,11 +586,29 @@ Result<std::unique_ptr<Db>> Db::Open(Options options) {
       const std::string path =
           entry.path.empty() ? db->SegmentPath(entry.segment_id)
                              : JoinPath(db->options_.data_dir, entry.path);
-      auto reader = SstableReader::Open(path);
+      auto reader =
+          SstableReader::Open(path, db->options_.storage_policy);
       if (!reader.ok()) return reader.status();
-      auto rows = reader.value()->TakeAll();
-      auto segment = Segment::Build(entry.segment_id, db->options_.metric,
-                                    std::move(rows));
+      auto payload = reader.value()->ReleaseForSegment();
+      if (!payload.ok()) return payload.status();
+      auto& pl = payload.value();
+      // Prefer file encoding for RAM packing; fall back to Db option.
+      const VectorEncoding enc =
+          pl.encoding != VectorEncoding::kFloat32
+              ? pl.encoding
+              : db->options_.vector_encoding;
+      Result<std::shared_ptr<const Segment>> built =
+          Status::Internal("unset");
+      if (pl.packed) {
+        built = Segment::BuildFromPacked(entry.segment_id, db->options_.metric,
+                                         pl.rows, pl.packed, pl.live_slots,
+                                         enc);
+      } else {
+        built = Segment::Build(entry.segment_id, db->options_.metric, pl.rows,
+                               enc);
+      }
+      if (!built.ok()) return built.status();
+      auto segment = std::move(built.value());
 #if ASTER_ENABLE_HNSW
       // READY graphs are derived data: if the manifest names a .hnsw and the
       // file exists, rebuild the in-memory graph and mark READY. Missing or
@@ -599,10 +619,28 @@ Result<std::unique_ptr<Db>> Db::Open(Options options) {
               : JoinPath(db->options_.data_dir, entry.hnsw_path);
       if (!entry.hnsw_path.empty() && FileExists(hnsw_path)) {
         if (segment->TryBeginIndexBuild()) {
-          auto hnsw =
-              BuildSegmentHnsw(db->options_.metric, db->options_.hnsw_params,
-                               db->options_.hnsw_rng_seed, segment->rows());
-          segment->CompleteIndexBuild(std::move(hnsw));
+          auto loaded = HnswGraph::LoadFromFile(hnsw_path);
+          if (loaded.ok()) {
+            std::unique_ptr<VectorIndex> hnsw;
+            if (segment->SharePackedVectors() && segment->ShareLiveSlots()) {
+              hnsw = LoadHnswIndexFromGraph(
+                  db->options_.metric, std::move(loaded).value(),
+                  segment->rows(), segment->SharePackedVectors(),
+                  segment->ShareLiveSlots());
+            } else {
+              const auto materialized = segment->MaterializedRows();
+              hnsw = LoadHnswIndexFromGraph(db->options_.metric,
+                                            std::move(loaded).value(),
+                                            materialized);
+            }
+            if (hnsw) {
+              segment->CompleteIndexBuild(std::move(hnsw));
+            } else {
+              segment->AbortIndexBuild();
+            }
+          } else {
+            segment->AbortIndexBuild();
+          }
         }
       }
 #endif
@@ -829,15 +867,19 @@ Row Db::Reconcile(const RowId& id) const {
 }
 
 std::optional<Row> Db::Get(const RowId& id) const {
-  std::lock_guard lock(mu_);
-  Row row = Reconcile(id);
+  Row row = GetRaw(id);
   if (row.tombstone) return std::nullopt;
   return row;
 }
 
+Row Db::GetRaw(const RowId& id) const {
+  std::lock_guard lock(mu_);
+  return Reconcile(id);
+}
+
 std::vector<SearchHit> Db::SearchLocked(const SearchRequest& request) const {
   // COLD workers drop the LRU block cache before each search; non-evictable
-  // upper-layer pins remain (docs/indexing.md §10.3.1 / client-api.md).
+  // upper-layer pins remain (docs/indexing.md §10.3.1).
   if (ClearsBlockCacheOnSearch(options_.storage_mode) && options_.object_store) {
     options_.object_store->ClearCache();
   }
@@ -862,7 +904,35 @@ std::vector<SearchHit> Db::SearchLocked(const SearchRequest& request) const {
   candidates.reserve(1 + segments_.size());
   candidates.push_back(MemtableTopK(memtable_, options_.metric, request.vector,
                                     fetch_k, request.tags));
-  for (const auto& segment : segments_) {
+  std::vector<const Segment*> targets;
+  targets.reserve(segments_.size());
+  for (const auto& segment : segments_) targets.push_back(segment.get());
+  if (options_.segment_prune_epsilon > 0.0 && request.tags.empty() &&
+      targets.size() > 1 && options_.metric != Metric::kDot) {
+    // SPANN query-aware pruning: keep segments with
+    // dist(q, centroid) <= (1 + eps) * min dist(q, centroid).
+    std::vector<double> dist(targets.size(), -1.0);
+    double best = std::numeric_limits<double>::infinity();
+    for (size_t i = 0; i < targets.size(); ++i) {
+      const auto& c = targets[i]->Centroid();
+      if (c.size() != request.vector.size()) continue;
+      dist[i] = options_.metric == Metric::kL2
+                    ? std::sqrt(static_cast<double>(
+                          L2Squared(request.vector, c)))
+                    : 1.0 - static_cast<double>(
+                                CosineSimilarity(request.vector, c));
+      best = std::min(best, dist[i]);
+    }
+    if (std::isfinite(best)) {
+      const double limit = (1.0 + options_.segment_prune_epsilon) * best;
+      std::vector<const Segment*> kept;
+      for (size_t i = 0; i < targets.size(); ++i) {
+        if (dist[i] < 0.0 || dist[i] <= limit) kept.push_back(targets[i]);
+      }
+      targets.swap(kept);
+    }
+  }
+  for (const Segment* segment : targets) {
     candidates.push_back(segment->Search(request.vector, fetch_k,
                                          request.ef_search, request.tags));
   }
@@ -910,15 +980,21 @@ Status Db::FlushLocked() {
   if (memtable_.empty()) return Status::Ok();
   const uint64_t id = next_segment_id_++;
   auto rows = std::make_shared<std::vector<Row>>(memtable_.Take());
-  auto segment = Segment::Build(id, options_.metric, rows);
-  write_arena_.Reset();
 
+  auto RestoreMemtable = [&]() {
+    for (Row& row : *rows) memtable_.Apply(std::move(row));
+    --next_segment_id_;
+    memtable_live_since_ = std::chrono::steady_clock::now();
+  };
+
+  // Persist SSTable, then reopen via mmap so sealed vectors are not heap-copied.
   if (!options_.data_dir.empty()) {
-    if (auto st = WriteSstable(SegmentPath(id), id, options_.metric, *rows);
+    SstableWriteOptions sstable_opts;
+    sstable_opts.vector_encoding = options_.vector_encoding;
+    if (auto st = WriteSstable(SegmentPath(id), id, options_.metric, *rows,
+                               sstable_opts);
         !st.ok()) {
-      for (Row& row : *rows) memtable_.Apply(std::move(row));
-      --next_segment_id_;
-      memtable_live_since_ = std::chrono::steady_clock::now();
+      RestoreMemtable();
       return st;
     }
     char name[64];
@@ -926,22 +1002,57 @@ Status Db::FlushLocked() {
                   static_cast<unsigned long long>(id));
     if (auto st = MirrorObjectLocked(name, SegmentPath(id)); !st.ok()) {
       ::remove(SegmentPath(id).c_str());
-      for (Row& row : *rows) memtable_.Apply(std::move(row));
-      --next_segment_id_;
-      memtable_live_since_ = std::chrono::steady_clock::now();
+      RestoreMemtable();
       return st;
     }
-  }
 
-  segments_.push_back(std::move(segment));
-  RequestIndexBuildLocked();
-
-  if (!options_.data_dir.empty()) {
+    auto reader = SstableReader::Open(SegmentPath(id), options_.storage_policy);
+    if (!reader.ok()) {
+      ::remove(SegmentPath(id).c_str());
+      RestoreMemtable();
+      return reader.status();
+    }
+    auto payload = reader.value()->ReleaseForSegment();
+    if (!payload.ok()) {
+      ::remove(SegmentPath(id).c_str());
+      RestoreMemtable();
+      return payload.status();
+    }
+    auto& pl = payload.value();
+    Result<std::shared_ptr<const Segment>> built = Status::Internal("unset");
+    if (pl.packed) {
+      built = Segment::BuildFromPacked(id, options_.metric, pl.rows, pl.packed,
+                                       pl.live_slots, pl.encoding);
+    } else {
+      built = Segment::Build(id, options_.metric, pl.rows,
+                             options_.vector_encoding);
+    }
+    if (!built.ok()) {
+      ::remove(SegmentPath(id).c_str());
+      RestoreMemtable();
+      return built.status();
+    }
+    write_arena_.Reset();
+    segments_.push_back(std::move(built.value()));
+    RequestIndexBuildLocked();
     if (auto st = PublishManifest(); !st.ok()) return st;
     if (wal_.has_value()) {
       if (auto st = wal_->Truncate(); !st.ok()) return st;
     }
+    return MaybeCompact();
   }
+
+  auto built =
+      Segment::Build(id, options_.metric, rows, options_.vector_encoding);
+  if (!built.ok()) {
+    RestoreMemtable();
+    return built.status();
+  }
+  auto segment = std::move(built.value());
+  write_arena_.Reset();
+
+  segments_.push_back(std::move(segment));
+  RequestIndexBuildLocked();
   return MaybeCompact();
 }
 
@@ -1031,8 +1142,10 @@ Status Db::CompactSelectedLocked(const std::vector<size_t>& indices) {
   const bool omit_empty = full_overlap && compacted->row_count() == 0;
 
   if (!options_.data_dir.empty() && !omit_empty) {
+    SstableWriteOptions sstable_opts;
+    sstable_opts.vector_encoding = options_.vector_encoding;
     if (auto st = WriteSstable(SegmentPath(id), id, options_.metric,
-                               compacted->rows());
+                               compacted->MaterializedRows(), sstable_opts);
         !st.ok()) {
       return st;
     }
@@ -1111,10 +1224,10 @@ bool Db::BuildOneSegmentIndex(std::shared_ptr<const Segment> segment) {
   if (!segment) return false;
   if (segment->index_state() != SegState::kBuilding) return false;
 
-  std::unique_ptr<VectorIndex> hnsw =
-      BuildSegmentHnsw(options_.metric, options_.hnsw_params,
-                       options_.hnsw_rng_seed, segment->rows());
-
+  // Build needs float views once; durable READY search then scores from the
+  // segment's packed/mmap store so we do not retain a second float corpus.
+  const auto materialized = segment->MaterializedRows();
+  std::unique_ptr<VectorIndex> hnsw;
   if (!options_.data_dir.empty()) {
     if (auto st = EnsureDir(JoinPath(options_.data_dir, "index")); !st.ok()) {
       std::lock_guard lock(mu_);
@@ -1125,8 +1238,32 @@ bool Db::BuildOneSegmentIndex(std::shared_ptr<const Segment> segment) {
     }
     if (auto st = WriteHnswAtomic(HnswPath(segment->id()), options_.metric,
                                   options_.hnsw_params, options_.hnsw_rng_seed,
-                                  segment->id(), segment->rows());
+                                  segment->id(), materialized);
         !st.ok()) {
+      std::lock_guard lock(mu_);
+      if (segment->index_state() == SegState::kBuilding) {
+        segment->AbortIndexBuild();
+      }
+      return false;
+    }
+    auto loaded = HnswGraph::LoadFromFile(HnswPath(segment->id()));
+    if (!loaded.ok()) {
+      std::lock_guard lock(mu_);
+      if (segment->index_state() == SegState::kBuilding) {
+        segment->AbortIndexBuild();
+      }
+      return false;
+    }
+    if (segment->SharePackedVectors() && segment->ShareLiveSlots()) {
+      hnsw = LoadHnswIndexFromGraph(options_.metric, std::move(loaded).value(),
+                                    segment->rows(),
+                                    segment->SharePackedVectors(),
+                                    segment->ShareLiveSlots());
+    } else {
+      hnsw = LoadHnswIndexFromGraph(options_.metric, std::move(loaded).value(),
+                                    materialized);
+    }
+    if (!hnsw) {
       std::lock_guard lock(mu_);
       if (segment->index_state() == SegState::kBuilding) {
         segment->AbortIndexBuild();
@@ -1143,6 +1280,16 @@ bool Db::BuildOneSegmentIndex(std::shared_ptr<const Segment> segment) {
       return false;
     }
     if (auto st = PinHnswUpperLayersLocked(segment->id()); !st.ok()) {
+      std::lock_guard lock(mu_);
+      if (segment->index_state() == SegState::kBuilding) {
+        segment->AbortIndexBuild();
+      }
+      return false;
+    }
+  } else {
+    hnsw = BuildSegmentHnsw(options_.metric, options_.hnsw_params,
+                            options_.hnsw_rng_seed, materialized);
+    if (!hnsw) {
       std::lock_guard lock(mu_);
       if (segment->index_state() == SegState::kBuilding) {
         segment->AbortIndexBuild();
@@ -1176,21 +1323,50 @@ bool Db::BuildOneSegmentIndex(std::shared_ptr<const Segment> segment) {
 
 Status Db::BuildPendingIndexes() {
 #if ASTER_ENABLE_HNSW
+  std::unordered_map<uint64_t, int> failures;
+  constexpr int kMaxAttempts = 3;
+  Status last_error = Status::Ok();
+
   for (;;) {
     std::shared_ptr<const Segment> target;
+    uint64_t seg_id = 0;
+    bool others_building = false;
     {
       std::lock_guard lock(mu_);
       for (const auto& seg : segments_) {
-        if (seg->index_state() == SegState::kPending &&
-            seg->TryBeginIndexBuild()) {
+        if (seg->index_state() != SegState::kPending) continue;
+        if (failures[seg->id()] >= kMaxAttempts) continue;
+        if (seg->TryBeginIndexBuild()) {
           target = seg;
+          seg_id = seg->id();
           break;
         }
       }
+      if (!target) {
+        for (const auto& seg : segments_) {
+          if (seg->index_state() == SegState::kPending) {
+            if (!last_error.ok()) return last_error;
+            return Status::IoError("index build incomplete: pending segments remain");
+          }
+          if (seg->index_state() == SegState::kBuilding) {
+            others_building = true;
+          }
+        }
+        if (!others_building) return last_error;
+      }
     }
-    if (!target) return Status::Ok();
+    if (!target) {
+      // The background index thread owns these segments; wait for it so
+      // callers see READY graphs on return.
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      continue;
+    }
     if (!BuildOneSegmentIndex(std::move(target))) {
-      // Aborted or compacted; continue draining remaining PENDING.
+      ++failures[seg_id];
+      if (failures[seg_id] >= kMaxAttempts) {
+        last_error = Status::IoError("index build failed for segment " +
+                                     std::to_string(seg_id));
+      }
       continue;
     }
   }

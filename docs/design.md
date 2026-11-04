@@ -3,13 +3,12 @@
 Target architecture: Cassandra-style peer-to-peer vector database with LSM
 storage and **per-segment HNSW** indexes. C++20, Bazel, CPU-only search.
 
-**Status (pre-alpha):** single-node `Db` with memtable, WAL, SSTables, exact
-search, and compaction works. Segmented HNSW, Thrift RPC, gossip, and
-replication are roadmap — see [development-plan.md](development-plan.md).
+For milestone status and delivery gates, see the
+[development plan](development-plan.md).
 
 Normative indexing lifecycle: [indexing.md](indexing.md) + `tla/`.  
 On-disk format: [sstable-format.md](sstable-format.md).  
-SaaS / S3 economics: [business-plan.md](business-plan.md).
+Sealed vector packing / mmap residency: [vector-encoding.md](vector-encoding.md).
 
 ## Goals
 
@@ -43,6 +42,41 @@ Client → any coordinator node
 - Failure detection: Phi Accrual
 
 Every node can coordinate. No master.
+
+### C++
+
+`Coordinator` executes the replication protocol over independently durable
+`Db` instances. A transport registers local or remote replica endpoints with
+the same interface; this example uses three already-open durable instances.
+
+```cpp
+#include "aster/distributed/replication.h"
+
+aster::CoordinatorOptions options;
+options.replication_factor = 3;
+options.hint_directory = "/var/lib/aster/hints";
+auto opened = aster::Coordinator::Open(options);
+if (!opened.ok()) { /* handle opened.status() */ }
+std::unique_ptr<aster::Coordinator> coordinator = std::move(opened.value());
+
+coordinator->AddReplica("node-a", node_a.get());
+coordinator->AddReplica("node-b", node_b.get());
+coordinator->AddReplica("node-c", node_c.get());
+
+aster::Row row;
+row.id = "doc-42";
+row.vector = {0.1f, 0.2f};
+row.timestamp = 42;
+coordinator->Write(row, aster::ConsistencyLevel::kQuorum);
+
+auto read = coordinator->Read("doc-42", aster::ConsistencyLevel::kQuorum);
+```
+
+Each acknowledged replica has synchronously appended the row to its WAL.
+When a replica is unreachable, the coordinator fsyncs a coalesced hint before
+returning; call `DrainHints("node-c")` after that replica rejoins. Quorum
+reads merge the newest row and repair older reachable copies, including
+tombstones.
 
 ## Storage (LSM)
 
@@ -80,8 +114,8 @@ for hierarchical attributes.
 Logical row: `id`, float32 vector, optional metadata, optional tags,
 timestamps / version for LWW.
 
-Product API is **collection-centric** (dimension, metric, index settings) —
-see [client-api.md](client-api.md). Wire surface: `aster/rpc/aster.thrift`.
+Product API is **collection-centric** (dimension, metric, index settings).
+Wire surface: `aster/rpc/aster.thrift`. HTTP JSON: [tutorials/http-api.md](tutorials/http-api.md).
 
 ## Segmented HNSW
 
@@ -113,7 +147,8 @@ later.
 ### CPU
 
 SIMD distance kernels (AVX2/512, NEON, scalar). Metrics: L2, dot, cosine.
-Aligned contiguous vectors; optional float16 / int8 quantization later.
+Aligned contiguous vectors; compact encodings (`float16` / `int8_sq` /
+`binary_rabitq`) via `VectorEncoding` — see [`vector-encoding.md`](vector-encoding.md).
 
 Detail and lifecycle states: [indexing.md](indexing.md).
 
@@ -129,14 +164,17 @@ Coordinator → replica set → parallel segment HNSW → merge → filter → r
 
 ## Memory tiers
 
-| Tier | Keep hot |
-| --- | --- |
-| Hot | Upper HNSW layers, manifests, blooms, sparse indexes, tag dict |
-| Warm | Lower graph / adjacency |
-| Cold | Vector payloads, metadata |
+| Tier | Keep hot | Default residency |
+| --- | --- | --- |
+| Hot | Upper HNSW layers, manifests, blooms, sparse indexes, tag dict | pinned |
+| Warm | Lower graph / adjacency (cached when beneficial) | cold / cached |
+| Cold | Vector payloads, metadata | **mmap cold** (shipped for sealed vectors) |
 
-SSD: mmap vectors/graph, larger segments. HDD: upper layers in RAM,
-locality-aware reorder on compact, sequential vector pages.
+Sealed SSTable vector blocks use `MappedFile` + `StoragePolicy`
+([vector-encoding.md](vector-encoding.md)): cold demand-pages, cached
+prefaults, pinned heap-copies. Design rationale and deferred milestones:
+[ram-efficiency.md](ram-efficiency.md). SSD: mmap vectors, larger segments.
+HDD / object store: upper layers pinned; locality-aware reorder on compact.
 
 ## Networking & ops
 
@@ -188,6 +226,5 @@ Worth exploring after the baseline works:
 
 Differentiator: **Cassandra-style LSM + immutable per-segment HNSW**, not a
 globally mutable distributed graph. That preserves write throughput, keeps
-locking simple, and scales with vnode ownership. SaaS cost advantage comes
-from the same immutability when compute is ephemeral and S3 holds truth
-([business-plan.md](business-plan.md)).
+locking simple, and scales with vnode ownership. The same immutability lets
+sealed vectors stay mmap/file-backed so corpus size need not track worker RAM.

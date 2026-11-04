@@ -30,9 +30,13 @@ class ApiHandler {
 
   HttpResponse Handle(const HttpRequest& req) const;
 
+  // Reported via the aster_build_info metric.
+  void set_version(std::string version) { version_ = std::move(version); }
+
  private:
   Catalog* catalog_;
   std::string expected_api_key_;
+  std::string version_ = "unknown";
 };
 
 // Blocking single-threaded accept loop (good enough for local SaaS MVP).

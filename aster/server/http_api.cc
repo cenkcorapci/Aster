@@ -1,6 +1,7 @@
 #include "aster/server/http_api.h"
 
 #include <arpa/inet.h>
+#include <csignal>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -68,6 +69,9 @@ HttpResponse FromStatus(const Status& st) {
     case StatusCode::kCorruption:
       code = 500;
       break;
+    case StatusCode::kResourceExhausted:
+      code = 429;
+      break;
     default:
       code = 500;
       break;
@@ -88,6 +92,29 @@ std::string QueryParam(const std::string& query, const char* key) {
   return {};
 }
 
+// Decodes %XX escapes (invalid escapes are kept verbatim). '+' is left as-is
+// because this is applied to path segments, not form data.
+std::string PercentDecode(const std::string& in) {
+  auto hexval = [](char c) -> int {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+  };
+  std::string out;
+  out.reserve(in.size());
+  for (size_t i = 0; i < in.size(); ++i) {
+    if (in[i] == '%' && i + 2 < in.size() && hexval(in[i + 1]) >= 0 &&
+        hexval(in[i + 2]) >= 0) {
+      out += static_cast<char>(hexval(in[i + 1]) * 16 + hexval(in[i + 2]));
+      i += 2;
+    } else {
+      out += in[i];
+    }
+  }
+  return out;
+}
+
 std::vector<std::string> SplitPath(const std::string& path) {
   std::vector<std::string> parts;
   size_t i = 0;
@@ -96,7 +123,7 @@ std::vector<std::string> SplitPath(const std::string& path) {
     if (i >= path.size()) break;
     size_t j = i;
     while (j < path.size() && path[j] != '/') ++j;
-    parts.push_back(path.substr(i, j - i));
+    parts.push_back(PercentDecode(path.substr(i, j - i)));
     i = j;
   }
   return parts;
@@ -125,10 +152,16 @@ HttpResponse ApiHandler::Handle(const HttpRequest& req) const {
         .Set(static_cast<int64_t>(u.vectors_estimate));
     reg.Gauge("segment_count").Set(static_cast<int64_t>(u.segments));
     reg.Gauge("memtable_rows").Set(static_cast<int64_t>(u.memtable_rows));
+    reg.Gauge("compaction_backlog")
+        .Set(static_cast<int64_t>(u.compaction_backlog));
     HttpResponse r;
     r.status = 200;
-    r.content_type = "text/plain; version=0.0.4";
-    r.body = reg.Render();
+    r.content_type = "text/plain; version=0.0.4; charset=utf-8";
+    r.body = reg.RenderPrometheus();
+    r.body += "# HELP aster_build_info Build information (value is always 1)\n";
+    r.body += "# TYPE aster_build_info gauge\n";
+    r.body += "aster_build_info{version=\"" + json::Escape(version_) +
+              "\"} 1\n";
     return r;
   }
   if (req.method == "GET" && req.path == "/v1/usage") {
@@ -188,7 +221,17 @@ HttpResponse ApiHandler::Handle(const HttpRequest& req) const {
       std::ostringstream os;
       os << "{\"name\":\"" << json::Escape(info->name)
          << "\",\"dimension\":" << info->dimension << ",\"metric\":\""
-         << Catalog::MetricToString(info->metric) << "\"}";
+         << Catalog::MetricToString(info->metric) << "\"";
+#if ASTER_ENABLE_HNSW
+      if (info->hnsw_m > 0) os << ",\"hnsw_m\":" << info->hnsw_m;
+      if (info->hnsw_ef_construction > 0) {
+        os << ",\"hnsw_ef_construction\":" << info->hnsw_ef_construction;
+      }
+      if (info->hnsw_ef_search_default > 0) {
+        os << ",\"hnsw_ef_search_default\":" << info->hnsw_ef_search_default;
+      }
+#endif
+      os << "}";
       return {200, "application/json", os.str()};
     }
     if (req.method == "PUT") {
@@ -206,13 +249,70 @@ HttpResponse ApiHandler::Handle(const HttpRequest& req) const {
       auto metric = Catalog::MetricFromString(metric_name);
       if (!metric.ok()) return FromStatus(metric.status());
       info.metric = metric.value();
-      auto st = catalog_->CreateCollection(info);
-      if (!st.ok() && st.message().find("already exists") != std::string::npos) {
-        return {200, "application/json",
-                std::string("{\"name\":\"") + json::Escape(name) +
-                    "\",\"status\":\"exists\"}"};
+      if (auto sm = json::GetString(req.body, "storage_mode")) {
+        const std::string& mode = *sm;
+        if (mode == "hot" || mode == "HOT") {
+          info.storage_mode = StorageMode::kHot;
+        } else if (mode == "warm" || mode == "WARM") {
+          info.storage_mode = StorageMode::kWarm;
+        } else if (mode == "cold" || mode == "COLD") {
+          info.storage_mode = StorageMode::kCold;
+        } else {
+          return JsonStatus(400, "unknown storage_mode");
+        }
       }
-      if (!st.ok()) return FromStatus(st);
+      if (auto mv = json::GetInt(req.body, "max_vectors")) {
+        if (*mv < 0) return JsonStatus(400, "max_vectors invalid");
+        info.resource_limits.max_vectors = static_cast<uint64_t>(*mv);
+      }
+      if (auto mb = json::GetInt(req.body, "memory_budget_bytes")) {
+        if (*mb < 0) return JsonStatus(400, "memory_budget_bytes invalid");
+        info.resource_limits.memory_budget_bytes = static_cast<size_t>(*mb);
+      }
+      if (auto qps = json::GetInt(req.body, "max_qps")) {
+        if (*qps < 0) return JsonStatus(400, "max_qps invalid");
+        info.resource_limits.max_qps = static_cast<uint32_t>(*qps);
+      }
+      if (auto sq = json::GetInt(req.body, "storage_quota_bytes")) {
+        if (*sq < 0) return JsonStatus(400, "storage_quota_bytes invalid");
+        info.resource_limits.storage_quota_bytes = static_cast<uint64_t>(*sq);
+      }
+      if (auto iso = json::GetString(req.body, "isolation")) {
+        auto level = IsolationLevelFromString(*iso);
+        if (!level) return JsonStatus(400, "unknown isolation");
+        info.resource_limits.isolation = *level;
+      }
+#if ASTER_ENABLE_HNSW
+      if (auto hm = json::GetInt(req.body, "hnsw_m")) {
+        if (*hm <= 0) return JsonStatus(400, "hnsw_m invalid");
+        info.hnsw_m = static_cast<uint32_t>(*hm);
+      }
+      if (auto hefc = json::GetInt(req.body, "hnsw_ef_construction")) {
+        if (*hefc <= 0) return JsonStatus(400, "hnsw_ef_construction invalid");
+        info.hnsw_ef_construction = static_cast<uint32_t>(*hefc);
+      }
+      if (auto hefs = json::GetInt(req.body, "hnsw_ef_search")) {
+        if (*hefs <= 0) return JsonStatus(400, "hnsw_ef_search invalid");
+        info.hnsw_ef_search_default = static_cast<uint32_t>(*hefs);
+      }
+      if (auto hefs = json::GetInt(req.body, "hnsw_ef_search_default")) {
+        if (*hefs <= 0) {
+          return JsonStatus(400, "hnsw_ef_search_default invalid");
+        }
+        info.hnsw_ef_search_default = static_cast<uint32_t>(*hefs);
+      }
+#endif
+      auto st = catalog_->CreateCollection(info);
+      if (!st.ok()) {
+        const std::string& msg = st.message();
+        if (msg.find("already exists") != std::string::npos ||
+            msg.find("already configured") != std::string::npos) {
+          return {200, "application/json",
+                  std::string("{\"name\":\"") + json::Escape(name) +
+                      "\",\"status\":\"exists\"}"};
+        }
+        return FromStatus(st);
+      }
       return {201, "application/json",
               std::string("{\"name\":\"") + json::Escape(name) +
                   "\",\"status\":\"created\"}"};
@@ -225,20 +325,40 @@ HttpResponse ApiHandler::Handle(const HttpRequest& req) const {
     return JsonStatus(405, "method not allowed");
   }
 
-  // /v1/collections/{name}/flush|compact|search
+  // /v1/collections/{name}/flush|compact|search|stats
   if (parts.size() == 4 && parts[0] == "v1" && parts[1] == "collections") {
     const std::string& name = parts[2];
     const std::string& action = parts[3];
+    if (action == "stats" && req.method == "GET") {
+      auto stats = catalog_->Stats(name);
+      if (!stats) return JsonStatus(404, "collection not found");
+      std::ostringstream os;
+      os << "{\"name\":\"" << json::Escape(name)
+         << "\",\"dimension\":" << stats->dimension << ",\"metric\":\""
+         << Catalog::MetricToString(stats->metric)
+         << "\",\"vectors_estimate\":" << stats->vectors_estimate
+         << ",\"segment_count\":" << stats->segments
+         << ",\"memtable_rows\":" << stats->memtable_rows
+         << ",\"write_memory_bytes\":" << stats->write_memory_bytes
+         << ",\"compaction_backlog\":" << stats->compaction_backlog << "}";
+      return {200, "application/json", os.str()};
+    }
     if (action == "flush" && req.method == "POST") {
       const auto t0 = std::chrono::steady_clock::now();
-      auto st = catalog_->Flush(name);
+      CatalogFlushStats flush_stats;
+      auto st = catalog_->Flush(name, &flush_stats);
       const auto ms =
           std::chrono::duration<double, std::milli>(
               std::chrono::steady_clock::now() - t0)
               .count();
       MetricsRegistry::Instance().Histogram("flush_latency_ms").Observe(ms);
       if (!st.ok()) return FromStatus(st);
-      return {200, "application/json", "{\"status\":\"flushed\"}"};
+      std::ostringstream os;
+      os << "{\"status\":\"flushed\""
+         << ",\"memtable_flush_seconds\":" << flush_stats.memtable_flush_seconds
+         << ",\"index_build_seconds\":" << flush_stats.index_build_seconds
+         << "}";
+      return {200, "application/json", os.str()};
     }
     if (action == "compact" && req.method == "POST") {
       auto st = catalog_->Compact(name);
@@ -301,6 +421,7 @@ HttpResponse ApiHandler::Handle(const HttpRequest& req) const {
     if (req.method == "GET") {
       auto row = catalog_->Get(name, id);
       if (!row.ok()) return FromStatus(row.status());
+      MetricsRegistry::Instance().Counter("gets_total").Inc();
       if (!row.value()) return JsonStatus(404, "document not found");
       const Row& r = *row.value();
       std::ostringstream os;
@@ -316,7 +437,8 @@ HttpResponse ApiHandler::Handle(const HttpRequest& req) const {
         first = false;
         os << '"' << json::Escape(t) << '"';
       }
-      os << "],\"timestamp\":" << r.timestamp << "}";
+      os << "],\"timestamp\":" << r.timestamp << ",\"metadata\":\""
+         << json::Escape(r.metadata) << "\"}";
       return {200, "application/json", os.str()};
     }
     if (req.method == "PUT") {
@@ -383,6 +505,8 @@ HttpServer::HttpServer(Options options, ApiHandler handler)
     : options_(std::move(options)), handler_(std::move(handler)) {}
 
 Status HttpServer::Listen() {
+  // A client disconnecting mid-response must not kill the process.
+  std::signal(SIGPIPE, SIG_IGN);
   listen_fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
   if (listen_fd_ < 0) return Status::IoError("socket failed");
   int yes = 1;
@@ -543,6 +667,7 @@ void HttpServer::HandleClient(int fd) {
   else if (resp.status == 401) out << " Unauthorized";
   else if (resp.status == 404) out << " Not Found";
   else if (resp.status == 405) out << " Method Not Allowed";
+  else if (resp.status == 429) out << " Too Many Requests";
   else out << " Error";
   out << "\r\n"
       << "Content-Type: " << resp.content_type << "\r\n"

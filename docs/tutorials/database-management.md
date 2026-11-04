@@ -176,7 +176,7 @@ Details: [deploy/sim-arduino/README.md](../../deploy/sim-arduino/README.md).
 5. Back up `data_dir` (manifest + `seg_*.ast` + `WAL`) as a consistent set
    after a flush (or while the process is stopped).
 
-## What’s not here yet
+## Limits
 
 - Multi-collection server / Thrift RPC (M4)
 - Filtered ANN with roaring post-filter (M2 remaining tasks) — search is

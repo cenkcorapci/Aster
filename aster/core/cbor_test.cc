@@ -124,6 +124,94 @@ TEST(Cbor, EmptyMetadataObject) {
   EXPECT_EQ(json.value(), "{}");
 }
 
+TEST(Cbor, LargeIntAndByteString) {
+  const int64_t big = 1'000'000'000'000ll;
+  auto enc = Encode(Value::Int(big));
+  ASSERT_TRUE(enc.ok());
+  auto dec = Decode(enc.value());
+  ASSERT_TRUE(dec.ok());
+  EXPECT_EQ(dec.value().as_int(), big);
+
+  const std::string payload(300, 'x');
+  Value::Map m;
+  m.emplace("blob", Value::Bytes(payload));
+  auto enc_map = Encode(Value::FromMap(std::move(m)));
+  ASSERT_TRUE(enc_map.ok());
+  auto dec_map = Decode(enc_map.value());
+  ASSERT_TRUE(dec_map.ok());
+  EXPECT_EQ(dec_map.value().as_map().at("blob").as_bytes(), payload);
+}
+
+TEST(Cbor, JsonParseErrors) {
+  EXPECT_FALSE(ParseJson("").ok());
+  EXPECT_FALSE(ParseJson("{").ok());
+  EXPECT_FALSE(ParseJson("{\"a\":}").ok());
+  EXPECT_FALSE(ParseJson("[1,]").ok());
+}
+
+TEST(Cbor, Float32Encoding) {
+  auto enc = Encode(Value::Float(3.14f));
+  ASSERT_TRUE(enc.ok());
+  auto dec = Decode(enc.value());
+  ASSERT_TRUE(dec.ok());
+  EXPECT_NEAR(dec.value().as_float(), 3.14f, 1e-5f);
+}
+
+TEST(Cbor, DecodeInvalidMajorTypes) {
+  EXPECT_FALSE(Decode(std::string("\x7f", 1)).ok());  // undefined major
+  EXPECT_FALSE(Decode(std::string("\xc0", 1)).ok());  // invalid simple
+}
+
+TEST(Cbor, EncodeLongStringAndArray) {
+  std::string long_s(300, 'z');
+  auto enc = Encode(Value::String(long_s));
+  ASSERT_TRUE(enc.ok());
+  auto dec = Decode(enc.value());
+  ASSERT_TRUE(dec.ok());
+  EXPECT_EQ(dec.value().as_string(), long_s);
+
+  Value::Array arr;
+  for (int i = 0; i < 30; ++i) {
+    arr.push_back(Value::Int(i));
+  }
+  enc = Encode(Value::FromArray(std::move(arr)));
+  ASSERT_TRUE(enc.ok());
+  dec = Decode(enc.value());
+  ASSERT_TRUE(dec.ok());
+  EXPECT_EQ(dec.value().as_array().size(), 30u);
+}
+
+TEST(Cbor, JsonScientificAndLiterals) {
+  auto parsed = ParseJson(R"({"n":1.5e2,"neg":-3,"t":true,"f":false,"z":null})");
+  ASSERT_TRUE(parsed.ok());
+  const auto& m = parsed.value().as_map();
+  EXPECT_TRUE(m.at("t").as_bool());
+  EXPECT_FALSE(m.at("f").as_bool());
+  EXPECT_TRUE(m.at("z").is_null());
+  EXPECT_NEAR(m.at("n").as_float(), 150.0, 1e-6);
+  EXPECT_EQ(m.at("neg").as_int(), -3);
+}
+
+TEST(Cbor, JsonParseInvalidLiterals) {
+  EXPECT_FALSE(ParseJson("nul").ok());
+  EXPECT_FALSE(ParseJson("tru").ok());
+  EXPECT_FALSE(ParseJson("fals").ok());
+  EXPECT_FALSE(ParseJson("?").ok());
+  EXPECT_FALSE(ParseJson("[1,2").ok());
+  EXPECT_FALSE(ParseJson("{\"a\":1,}").ok());
+}
+
+TEST(Cbor, DecodeToJsonEscapesControlChars) {
+  Value::Map m;
+  m.emplace("c", Value::String(std::string("\x01\b\f", 3)));
+  m.emplace("bytes", Value::Bytes("raw"));
+  auto enc = Encode(Value::FromMap(std::move(m)));
+  ASSERT_TRUE(enc.ok());
+  auto json = DecodeToJson(enc.value());
+  ASSERT_TRUE(json.ok());
+  EXPECT_NE(json.value().find("\\u"), std::string::npos);
+}
+
 }  // namespace
 }  // namespace cbor
 }  // namespace aster

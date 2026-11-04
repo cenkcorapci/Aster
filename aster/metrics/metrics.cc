@@ -175,7 +175,38 @@ void MetricsRegistry::RegisterDefaults() {
   return *it->second;
 }
 
-std::string MetricsRegistry::Render() const {
+std::string MetricsRegistry::Render() const { return RenderImpl(false); }
+
+std::string MetricsRegistry::RenderPrometheus() const {
+  return RenderImpl(true);
+}
+
+std::string MetricsRegistry::PrometheusName(const std::string& name,
+                                            bool is_counter,
+                                            bool is_histogram) {
+  auto ends_with = [&name](const char* suffix) {
+    const std::string sfx(suffix);
+    return name.size() >= sfx.size() &&
+           name.compare(name.size() - sfx.size(), sfx.size(), sfx) == 0;
+  };
+  if (name == "segment_count") return "aster_segments";
+  if (name == "collection_count") return "aster_collections";
+  std::string base = name;
+  if (is_histogram) {
+    // Internal histograms observe milliseconds; exposition converts to
+    // seconds (Prometheus base unit).
+    if (ends_with("_ms")) {
+      base = name.substr(0, name.size() - 3) + "_seconds";
+    } else if (!ends_with("_seconds")) {
+      base = name + "_seconds";
+    }
+  } else if (is_counter && !ends_with("_total")) {
+    base = name + "_total";
+  }
+  return "aster_" + base;
+}
+
+std::string MetricsRegistry::RenderImpl(bool prometheus_names) const {
   std::string out;
 
   auto help_for = [this](const std::string& name) -> const std::string& {
@@ -184,8 +215,10 @@ std::string MetricsRegistry::Render() const {
     return it == help_.end() ? kEmpty : it->second;
   };
 
-  for (const auto& [name, counter] : counters_) {
-    const auto& help = help_for(name);
+  for (const auto& [internal, counter] : counters_) {
+    const std::string name =
+        prometheus_names ? PrometheusName(internal, true, false) : internal;
+    const auto& help = help_for(internal);
     if (!help.empty()) {
       out += "# HELP " + name + " " + help + "\n";
     }
@@ -193,8 +226,10 @@ std::string MetricsRegistry::Render() const {
     out += name + " " + std::to_string(counter->Value()) + "\n";
   }
 
-  for (const auto& [name, gauge] : gauges_) {
-    const auto& help = help_for(name);
+  for (const auto& [internal, gauge] : gauges_) {
+    const std::string name =
+        prometheus_names ? PrometheusName(internal, false, false) : internal;
+    const auto& help = help_for(internal);
     if (!help.empty()) {
       out += "# HELP " + name + " " + help + "\n";
     }
@@ -202,20 +237,23 @@ std::string MetricsRegistry::Render() const {
     out += name + " " + std::to_string(gauge->Value()) + "\n";
   }
 
-  for (const auto& [name, hist] : histograms_) {
-    const auto& help = help_for(name);
+  for (const auto& [internal, hist] : histograms_) {
+    const std::string name =
+        prometheus_names ? PrometheusName(internal, false, true) : internal;
+    const auto& help = help_for(internal);
     if (!help.empty()) {
       out += "# HELP " + name + " " + help + "\n";
     }
     out += "# TYPE " + name + " histogram\n";
+    const double scale = prometheus_names ? 0.001 : 1.0;  // ms -> s
     const auto& buckets = hist->Buckets();
     for (size_t i = 0; i < buckets.size(); ++i) {
-      out += name + "_bucket{le=\"" + FormatLe(buckets[i]) + "\"} " +
+      out += name + "_bucket{le=\"" + FormatLe(buckets[i] * scale) + "\"} " +
              std::to_string(hist->BucketCount(i)) + "\n";
     }
     out += name + "_bucket{le=\"+Inf\"} " +
            std::to_string(hist->InfCount()) + "\n";
-    out += name + "_sum " + FormatDouble(hist->Sum()) + "\n";
+    out += name + "_sum " + FormatDouble(hist->Sum() * scale) + "\n";
     out += name + "_count " + std::to_string(hist->Count()) + "\n";
   }
 

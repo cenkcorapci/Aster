@@ -14,6 +14,7 @@
 #include <random>
 #include <string>
 
+#include "aster/core/version.h"
 #include "aster/db/db.h"
 #include "aster/distributed/ring.h"
 #include "aster/rpc/handler.h"
@@ -23,9 +24,20 @@
 #include "aster/cli/toml_config_loader.h"
 
 namespace {
-constexpr const char* kVersion = "0.1.0-dev";
+constexpr const char* kVersion = ASTER_VERSION_STRING;
 constexpr uint32_t kDim = 16;
 constexpr int kRows = 1000;
+
+uint16_t ParsePortOrExit(const char* text) {
+  char* end = nullptr;
+  const long v = std::strtol(text, &end, 10);
+  if (end == text || *end != '\0' || v < 0 || v > 65535) {
+    std::fprintf(stderr, "error: invalid --port: %s (expected 0..65535)\n",
+                 text);
+    std::exit(2);
+  }
+  return static_cast<uint16_t>(v);
+}
 
 void PrintUsage(const char* argv0) {
   std::fprintf(stderr,
@@ -159,7 +171,7 @@ int RunServe(int argc, char** argv) {
       host = need("--host");
       host_set = true;
     } else if (std::strcmp(argv[i], "--port") == 0) {
-      port = static_cast<uint16_t>(std::atoi(need("--port")));
+      port = ParsePortOrExit(need("--port"));
       port_set = true;
     } else if (std::strcmp(argv[i], "--api-key") == 0) {
       api_key = need("--api-key");
@@ -224,6 +236,7 @@ int RunServe(int argc, char** argv) {
   }
 
   aster::ApiHandler handler(catalog.value().get(), api_key);
+  handler.set_version(kVersion);
   aster::HttpServer::Options hop;
   hop.host = host;
   hop.port = port;
@@ -237,7 +250,7 @@ int RunServe(int argc, char** argv) {
               server.port());
   std::printf("data_dir=%s  api_key=%s\n", data_dir.c_str(),
               api_key.empty() ? "(none)" : "(set)");
-  std::printf("endpoints: /health /metrics /v1/collections /v1/usage\n");
+  std::printf("endpoints: /health /metrics /v1/collections /v1/usage /v1/collections/{name}/stats\n");
   server.Serve();
   return 0;
 }
@@ -280,7 +293,7 @@ int RunServeRpc(int argc, char** argv) {
       host = need("--host");
       host_set = true;
     } else if (std::strcmp(argv[i], "--port") == 0) {
-      port = static_cast<uint16_t>(std::atoi(need("--port")));
+      port = ParsePortOrExit(need("--port"));
       port_set = true;
     } else if (std::strcmp(argv[i], "--tls") == 0) {
       tls = true;

@@ -36,6 +36,31 @@ Db::Options SmallDb() {
   return options;
 }
 
+TEST(Db, SegmentPruningSkipsFarSegmentsOnly) {
+  Db::Options options = SmallDb();
+  options.segment_prune_epsilon = 0.5;
+  options.compaction_tier_threshold = 0;
+  Db db(options);
+  ASSERT_TRUE(db.Upsert(MakeRow("near", {0.0f, 0.0f}, 1)).ok());
+  ASSERT_TRUE(db.Upsert(MakeRow("near2", {0.1f, 0.0f}, 2)).ok());
+  ASSERT_TRUE(db.Flush().ok());
+  ASSERT_TRUE(db.Upsert(MakeRow("far", {100.0f, 100.0f}, 3)).ok());
+  ASSERT_TRUE(db.Upsert(MakeRow("far2", {100.0f, 101.0f}, 4)).ok());
+  ASSERT_TRUE(db.Flush().ok());
+
+  SearchRequest req;
+  req.vector = {0.0f, 0.0f};
+  req.top_k = 4;
+  const auto hits = db.Search(req);
+  ASSERT_EQ(hits.size(), 2u);  // far segment pruned
+  EXPECT_EQ(hits[0].id, "near");
+
+  req.vector = {100.0f, 100.0f};
+  const auto far_hits = db.Search(req);
+  ASSERT_FALSE(far_hits.empty());
+  EXPECT_EQ(far_hits[0].id, "far");
+}
+
 TEST(Db, SearchSpansMemtableAndSegments) {
   Db db(SmallDb());
   ASSERT_TRUE(db.Upsert(MakeRow("seg-row", {1.0f, 0.0f}, 10)).ok());

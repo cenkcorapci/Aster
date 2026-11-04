@@ -5,7 +5,73 @@ The project follows a single-version policy; see [docs/versioning.md](docs/versi
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-11-03
+
+### Performance
+- AVX-512 / AVX2 / NEON dot and L2 kernels use four independent accumulators
+  (~3.5× faster 2048-dim `Dot` in a microbenchmark on Apple Silicon).
+- Float32 packed vectors are scored in place during HNSW search (no per-node
+  decode into a scratch buffer) when aligned on little-endian hosts.
+
 ### Added
+- Opt-in SPANN-style query-aware segment pruning
+  (`Db::Options::segment_prune_epsilon`, default `0` = off) for unfiltered
+  L2 / cosine searches; `Segment::Centroid()`.
+
+## [1.0.0] - 2026-10-30
+
+First stable release. Pre-alpha status removed; server, Bazel module, and
+clients share the single version `1.0.0` (see [versioning.md](docs/versioning.md)).
+
+### Changed
+- Sealed SSTable vectors are **mmap'd by default** (`StoragePolicy::vectors =
+  kCold`): flush/reopen no longer copies the packed payload into anonymous
+  RSS or expands `DecodeAll` float32 on open. Prefer
+  `Segment::VectorHeapBytesUsed()` for RAM accounting;
+  `VectorBytesUsed()` remains logical/on-disk size.
+- READY HNSW search scores from the sealed packed/mmap store (no second
+  float32 corpus). Direct int8 / binary distance kernels avoid decode-to-float
+  on L2/Dot hot paths.
+- Docs updated for mmap residency; removed completed `docs/superpowers/`
+  planning artifacts and dangling links to previously deleted task/business/
+  client-api docs. Root README documentation map is the index.
+- Added [ram-efficiency.md](docs/ram-efficiency.md): design choices for sealed
+  mmap residency, encoding vs placement, and deferred PQ/graph-disk work.
+- Added `//aster/bench:ram_stress_bench` and published single-node (50k×384)
+  + 3-node RF=3 (30k×384) cold-mmap stress results in
+  [ram-efficiency.md](docs/ram-efficiency.md).
+- CLI reports `ASTER_VERSION_STRING` instead of a hard-coded `0.1.0-dev`.
+
+### Fixed
+- `--port` is validated (0..65535, numeric); previously invalid values
+  silently wrapped around.
+- HTTP JSON reader now unescapes `\n \r \t \uXXXX` (previously `\n` became `n`);
+  `json::Escape` escapes control characters.
+- HTTP API percent-decodes path segments (document ids with spaces, `%`, UTF-8).
+
+### Added
+- `MappedFile`, `StoragePolicy` / `Residency` (`cold`/`cached`/`pinned`),
+  bounded `PageCache`, and `//aster/bench:ram_efficiency_bench` for
+  heap-vs-file-backed measurement. Docs: [vector-encoding.md](docs/vector-encoding.md).
+- Compact vector encodings for sealed segments (`VectorEncoding`: float32,
+  float16, int8 SQ, binary RaBitQ-style): ~4× / ~30× smaller RAM+disk for
+  200k×512 workloads via `Db::Options::vector_encoding` and SSTable header
+  byte. Docs: [vector-encoding.md](docs/vector-encoding.md); tests
+  `//aster/index:vector_encoding_test`, storage + integration coverage.
+- Python client HTTP transport (`clients/python`, `aster-client`):
+  `create_collection`, `upsert`, `search(top_k, ef_search, tags)`, `get`,
+  `delete`, `health`, `stats`, with live-server tests.
+- `GET /v1/collections/{name}/stats` (vectors, segments, memtable rows,
+  write memory, compaction backlog); `GET /v1/collections/{name}/docs/{id}`
+  now returns `metadata`.
+- `/metrics` is Prometheus-conformant (`promtool check metrics` clean):
+  `aster_` prefix, counters `*_total`, latency histograms in seconds,
+  `aster_build_info{version}`. **Breaking:** old unprefixed names
+  (`read_latency_ms`, `searches_total`, `segment_count`, ...) are gone from
+  `/metrics`; `deploy/sim-grafana` dashboard updated.
+- `compaction_backlog` gauge is now populated (segments above the tier
+  threshold); `gets_total` is now incremented.
+- GHCR multi-arch image workflow (`.github/workflows/publish-image.yml`).
 - M2-T10: HNSW recall@10 CI gate (`//aster/qa:recall_gate_test`, nightly
   `//aster/qa:recall_gate_nightly_test`) — SIFT/GloVe-like subsets must
   reach ≥ 0.95 @ ef=128 vs exact; workflows `.github/workflows/recall-gate.yml`

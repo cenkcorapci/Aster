@@ -14,7 +14,9 @@ cc_library(
     hdrs = [
         "compaction.h",
         "memtable.h",
+        "page_cache.h",
         "segment.h",
+        "storage_policy.h",
     ],
     deps = [
         "//aster/core",
@@ -45,6 +47,7 @@ cc_library(
         ":memory",
         "//aster/core",
         "//aster/index",
+        "//aster/platform:mapped_file",
         "@lz4//:lz4",
         "@zstd//:zstd",
     ],

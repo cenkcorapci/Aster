@@ -1,11 +1,22 @@
-"""Aster Python client.
+"""Aster Python client (HTTP JSON transport against ``aster serve``)."""
 
-Facade layer over the Thrift-generated protocol (//aster/rpc:aster.thrift).
-Transport and generated code land in milestone M5; this module fixes the
-public API surface.
-"""
+from aster.client import (
+    AsterConnectionError,
+    AsterError,
+    Client,
+    Collection,
+    Document,
+    Hit,
+    NotFoundError,
+)
 
-from aster.client import Client, Collection, Hit
-
-__all__ = ["Client", "Collection", "Hit"]
-__version__ = "0.1.0"
+__all__ = [
+    "AsterConnectionError",
+    "AsterError",
+    "Client",
+    "Collection",
+    "Document",
+    "Hit",
+    "NotFoundError",
+]
+__version__ = "0.2.0"

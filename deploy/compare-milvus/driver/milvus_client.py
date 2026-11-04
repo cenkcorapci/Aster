@@ -67,10 +67,15 @@ class MilvusCluster:
         self,
         ids: Sequence[str],
         vectors: np.ndarray,
+        batch_size: int = 256,
     ) -> Dict[str, Any]:
         assert self._col is not None
         t0 = time.perf_counter()
-        self._col.insert([list(ids), vectors.tolist()])
+        n = len(ids)
+        for i in range(0, n, batch_size):
+            sl_ids = ids[i : i + batch_size]
+            sl_vecs = vectors[i : i + batch_size]
+            self._col.insert([list(sl_ids), sl_vecs.tolist()])
         insert_s = time.perf_counter() - t0
 
         t1 = time.perf_counter()
@@ -90,7 +95,6 @@ class MilvusCluster:
         self._col.load()
         load_s = time.perf_counter() - t3
 
-        n = len(ids)
         return {
             "vectors": n,
             "insert_seconds": insert_s,

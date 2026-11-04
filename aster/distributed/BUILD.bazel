@@ -7,15 +7,20 @@ cc_library(
     name = "distributed",
     srcs = [
         "gossip.cc",
+        "replication.cc",
         "rebalance.cc",
         "ring.cc",
     ],
     hdrs = [
         "gossip.h",
+        "replication.h",
         "rebalance.h",
         "ring.h",
     ],
-    deps = ["//aster/core"],
+    deps = [
+        "//aster/core",
+        "//aster/db",
+    ],
 )
 
 cc_test(
@@ -23,6 +28,7 @@ cc_test(
     size = "small",
     srcs = [
         "gossip_test.cc",
+        "replication_test.cc",
         "rebalance_test.cc",
         "ring_test.cc",
     ],

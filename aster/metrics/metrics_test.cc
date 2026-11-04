@@ -97,6 +97,34 @@ TEST(MetricsRegistry, SingletonInstanceSharesState) {
   EXPECT_NE(text.find("# TYPE gossip_messages counter"), std::string::npos);
 }
 
+TEST(MetricsRegistry, RenderPrometheusUsesConformantNames) {
+  MetricsRegistry registry;
+  registry.Counter("searches_total").Inc(2);
+  registry.Histogram("read_latency_ms").Observe(3.0);
+  registry.Gauge("segment_count").Set(4);
+  registry.Gauge("collection_count").Set(1);
+
+  const std::string text = registry.RenderPrometheus();
+  EXPECT_NE(text.find("# TYPE aster_searches_total counter"),
+            std::string::npos);
+  EXPECT_NE(text.find("aster_searches_total 2\n"), std::string::npos);
+  EXPECT_NE(text.find("# TYPE aster_read_latency_seconds histogram"),
+            std::string::npos);
+  EXPECT_NE(text.find("aster_read_latency_seconds_bucket{le=\"0.005\"} 1\n"),
+            std::string::npos);
+  EXPECT_NE(text.find("# TYPE aster_hnsw_search_latency_seconds histogram"),
+            std::string::npos);
+  EXPECT_NE(text.find("aster_read_latency_seconds_sum 0.003\n"),
+            std::string::npos);
+  EXPECT_NE(text.find("aster_segments 4\n"), std::string::npos);
+  EXPECT_NE(text.find("aster_collections 1\n"), std::string::npos);
+  EXPECT_NE(text.find("# TYPE aster_gossip_messages_total counter"),
+            std::string::npos);
+  EXPECT_EQ(text.find("\nread_latency_ms"), std::string::npos);
+  EXPECT_EQ(MetricsRegistry::PrometheusName("custom", true, false),
+            "aster_custom_total");
+}
+
 TEST(Histogram, DefaultLatencyBucketsAreSorted) {
   auto buckets = DefaultLatencyBucketsMs();
   ASSERT_FALSE(buckets.empty());

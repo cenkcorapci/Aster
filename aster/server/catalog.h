@@ -8,6 +8,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "aster/core/features.h"
 #include "aster/core/status.h"
 #include "aster/core/types.h"
 #include "aster/db/db.h"
@@ -22,6 +23,12 @@ struct CollectionInfo {
   Metric metric = Metric::kCosine;
   StorageMode storage_mode = StorageMode::kHot;
   ResourceLimits resource_limits{};
+#if ASTER_ENABLE_HNSW
+  // 0 = Db default (m=16, ef_construction=128, ef_search_default=128).
+  uint32_t hnsw_m = 0;
+  uint32_t hnsw_ef_construction = 0;
+  uint32_t hnsw_ef_search_default = 0;
+#endif
 };
 
 struct UsageStats {
@@ -33,6 +40,25 @@ struct UsageStats {
   size_t vectors_estimate = 0;
   size_t segments = 0;
   size_t memtable_rows = 0;
+  // Segments above compaction_tier_threshold, summed across collections.
+  size_t compaction_backlog = 0;
+};
+
+// Per-collection statistics (GET /v1/collections/{name}/stats).
+struct CollectionStats {
+  uint32_t dimension = 0;
+  Metric metric = Metric::kCosine;
+  size_t vectors_estimate = 0;
+  size_t segments = 0;
+  size_t memtable_rows = 0;
+  size_t write_memory_bytes = 0;
+  size_t compaction_backlog = 0;
+};
+
+// Optional breakdown returned by Catalog::Flush (memtable seal vs HNSW build).
+struct CatalogFlushStats {
+  double memtable_flush_seconds = 0.0;
+  double index_build_seconds = 0.0;
 };
 
 // Multi-collection facade over aster::Db for the single-node SaaS kernel.
@@ -84,10 +110,13 @@ class Catalog {
                                  const RowId& id) const;
   Result<std::vector<SearchHit>> Search(const std::string& collection,
                                         const SearchRequest& request) const;
-  Status Flush(const std::string& collection);
+  Status Flush(const std::string& collection,
+               CatalogFlushStats* stats = nullptr);
   Status Compact(const std::string& collection);
 
   UsageStats Usage() const;
+  // nullopt when the collection does not exist or is not yet configured.
+  std::optional<CollectionStats> Stats(const std::string& collection) const;
 
  private:
   explicit Catalog(Options options);

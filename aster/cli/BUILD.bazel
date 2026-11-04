@@ -10,6 +10,7 @@ cc_binary(
         "//conditions:default": [],
     }),
     deps = [
+        "//aster/core",
         "//aster/db",
         "//aster/distributed",
         "//aster/rpc:thrift_server",

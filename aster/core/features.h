@@ -1,6 +1,6 @@
 #pragma once
 
-// Compile-time deployment profiles (docs/code-structure.md, docs/tasks.md M3-T05).
+// Compile-time deployment profiles (docs/code-structure.md).
 // Exactly one of ASTER_PROFILE_TINY / EDGE / SERVER should be set via -D.
 // If none is set, SERVER is the default (full feature surface).
 

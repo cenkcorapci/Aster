@@ -73,6 +73,30 @@ jobs:
           fail-on-error: false
           fail-on-empty: false
 
+  comparison-driver-tests:
+    name: Comparison driver tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: deploy/compare-milvus/driver/requirements.txt
+
+      - name: Install comparison driver dependencies
+        run: pip install -r deploy/compare-milvus/driver/requirements.txt
+
+      - name: Run offline comparison and installer tests
+        run: |
+          make bench-vs-test
+          make install-test
+
   # Native aarch64 + Edge profile (ARM NEON distance kernels). M3-T06.
   # Local equivalents: bazel test --config=raspberry_pi //aster/...
   #   or ./scripts/build-matrix.sh --full (zig cross from non-Pi hosts).
@@ -157,3 +181,32 @@ jobs:
 
       - name: Generate client Thrift stubs
         run: bazel build //clients:thrift_stubs
+
+  python-client:
+    name: Python client (live server)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Install OpenSSL headers (Thrift TLS)
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev
+
+      - name: Set up Bazel
+        uses: bazel-contrib/setup-bazel@0.19.0
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}-python-client
+          repository-cache: true
+          cache-save: ${{ github.event_name != 'pull_request' }}
+
+      - name: Build aster
+        run: bazel build //aster/cli:aster
+
+      - name: Test Python client against aster serve
+        run: |
+          ASTER_BIN="$(bazel cquery //aster/cli:aster --output=files 2>/dev/null | head -1)"
+          export ASTER_BIN="$PWD/${ASTER_BIN}"
+          python3 -m unittest discover -s clients/python/tests -t clients/python -v

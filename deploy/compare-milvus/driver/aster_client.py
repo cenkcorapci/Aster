@@ -33,11 +33,26 @@ class AsterShardClient:
             time.sleep(2)
         raise RuntimeError(f"aster not healthy at {self.base_url}: {last}")
 
-    def ensure_collection(self, dimension: int, metric: str = "cosine") -> None:
+    def ensure_collection(
+        self,
+        dimension: int,
+        metric: str = "cosine",
+        *,
+        hnsw_m: int = 0,
+        hnsw_ef_construction: int = 0,
+        hnsw_ef_search: int = 0,
+    ) -> None:
+        body: dict[str, object] = {"dimension": dimension, "metric": metric}
+        if hnsw_m > 0:
+            body["hnsw_m"] = hnsw_m
+        if hnsw_ef_construction > 0:
+            body["hnsw_ef_construction"] = hnsw_ef_construction
+        if hnsw_ef_search > 0:
+            body["hnsw_ef_search"] = hnsw_ef_search
         r = self.session.put(
             self._url(f"/v1/collections/{self.collection}"),
             headers={"Content-Type": "application/json"},
-            data=json.dumps({"dimension": dimension, "metric": metric}),
+            data=json.dumps(body),
             timeout=self.timeout,
         )
         if r.status_code in (200, 201):
@@ -54,14 +69,23 @@ class AsterShardClient:
 
     def upsert(self, doc_id: str, vector: Sequence[float]) -> None:
         body = {"vector": list(map(float, vector)), "timestamp": 1}
-        r = self.session.put(
-            self._url(f"/v1/collections/{self.collection}/docs/{doc_id}"),
-            headers={"Content-Type": "application/json"},
-            data=json.dumps(body),
-            timeout=self.timeout,
-        )
-        if r.status_code not in (200, 201):
-            raise RuntimeError(f"upsert {doc_id}: {r.status_code} {r.text}")
+        last: Optional[Exception] = None
+        for attempt in range(5):
+            try:
+                r = self.session.put(
+                    self._url(f"/v1/collections/{self.collection}/docs/{doc_id}"),
+                    headers={"Content-Type": "application/json"},
+                    data=json.dumps(body),
+                    timeout=self.timeout,
+                )
+                if r.status_code in (200, 201):
+                    return
+                raise RuntimeError(f"upsert {doc_id}: {r.status_code} {r.text}")
+            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+                last = e
+                time.sleep(0.25 * (2**attempt))
+                self.wait_healthy(attempts=30)
+        raise RuntimeError(f"upsert {doc_id} failed after retries: {last}")
 
     def upsert_batch(self, ids: Sequence[str], vectors: Sequence[Sequence[float]]) -> None:
         from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -69,23 +93,30 @@ class AsterShardClient:
         def one(doc_id: str, vec: Sequence[float]) -> None:
             self.upsert(doc_id, vec)
 
-        # Bound concurrency — HTTP/1 keep-alive to one shard.
-        workers = min(8, max(1, len(ids)))
+        # Bound concurrency — large dim JSON + memtable; keep below OOM.
+        workers = min(4, max(1, len(ids)))
         with ThreadPoolExecutor(max_workers=workers) as pool:
             futs = [pool.submit(one, i, v) for i, v in zip(ids, vectors)]
             for f in as_completed(futs):
                 f.result()
 
-    def flush(self) -> None:
+    def flush(self) -> dict[str, float]:
         r = self.session.post(
             self._url(f"/v1/collections/{self.collection}/flush"),
             timeout=self.timeout,
         )
         if r.status_code != 200:
             raise RuntimeError(f"flush: {r.status_code} {r.text}")
+        body = r.json()
+        return {
+            "memtable_flush_seconds": float(body.get("memtable_flush_seconds", 0.0)),
+            "index_build_seconds": float(body.get("index_build_seconds", 0.0)),
+        }
 
-    def search(self, vector: Sequence[float], top_k: int) -> List[Tuple[str, float]]:
-        body = {"vector": list(map(float, vector)), "top_k": top_k}
+    def search(self, vector: Sequence[float], top_k: int, ef_search: int = 0) -> List[Tuple[str, float]]:
+        body: dict[str, Any] = {"vector": list(map(float, vector)), "top_k": top_k}
+        if ef_search > 0:
+            body["ef_search"] = ef_search
         t0 = time.perf_counter()
         r = self.session.post(
             self._url(f"/v1/collections/{self.collection}/search"),
@@ -104,7 +135,7 @@ class AsterShardClient:
 
 
 class AsterCluster:
-    """Client-side scatter-gather over Aster shards (distributed exact search)."""
+    """Client-side scatter-gather over Aster shards (HNSW per segment)."""
 
     def __init__(self, shard_urls: List[str], collection: str = "bench"):
         self.shards = [AsterShardClient(u, collection=collection) for u in shard_urls]
@@ -114,9 +145,21 @@ class AsterCluster:
         for s in self.shards:
             s.wait_healthy()
 
-    def ensure_collections(self, dimension: int) -> None:
+    def ensure_collections(
+        self,
+        dimension: int,
+        *,
+        hnsw_m: int = 0,
+        hnsw_ef_construction: int = 0,
+        hnsw_ef_search: int = 0,
+    ) -> None:
         for s in self.shards:
-            s.ensure_collection(dimension)
+            s.ensure_collection(
+                dimension,
+                hnsw_m=hnsw_m,
+                hnsw_ef_construction=hnsw_ef_construction,
+                hnsw_ef_search=hnsw_ef_search,
+            )
 
     def upsert_routed(
         self,
@@ -139,17 +182,21 @@ class AsterCluster:
             total += len(batch_ids)
         return total
 
-    def flush_all(self) -> None:
+    def flush_all(self) -> dict[str, float]:
+        totals = {"memtable_flush_seconds": 0.0, "index_build_seconds": 0.0}
         for s in self.shards:
-            s.flush()
+            stats = s.flush()
+            totals["memtable_flush_seconds"] += stats["memtable_flush_seconds"]
+            totals["index_build_seconds"] += stats["index_build_seconds"]
+        return totals
 
-    def search(self, vector: Sequence[float], top_k: int) -> Tuple[List[Tuple[str, float]], float]:
+    def search(self, vector: Sequence[float], top_k: int, ef_search: int = 0) -> Tuple[List[Tuple[str, float]], float]:
         t0 = time.perf_counter()
         # Over-fetch per shard so merge can reconstruct global top-k.
         per = top_k
         shard_hits = []
         for s in self.shards:
-            shard_hits.append(s.search(vector, per))
+            shard_hits.append(s.search(vector, per, ef_search=ef_search))
         merged = merge_topk(shard_hits, top_k)
         ms = (time.perf_counter() - t0) * 1000.0
         return merged, ms

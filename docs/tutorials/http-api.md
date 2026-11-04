@@ -1,10 +1,9 @@
-# Tutorial: HTTP API (single-node SaaS kernel)
+# Tutorial: HTTP API
 
-JSON API over multi-collection durable storage — Phase 1 kernel from the
-[business plan](../business-plan.md). Local server today; control plane / S3
-later.
+JSON API over multi-collection durable storage. For planned delivery work, see
+the [development plan](../development-plan.md).
 
-Search is **exact** until HNSW (M2). Auth is an optional shared API key.
+Search uses per-segment HNSW indexes (exact for small data). Auth is an optional shared API key.
 
 ## Start the server
 
@@ -69,11 +68,6 @@ data_dir/
     seg_000001.ast
   …
 ```
-
-## What’s next
-
-Still open for SaaS: segmented HNSW + compression (Phase 1), S3/spot workers
-(Phase 2), signup/billing/keys (Phase 3). See [business-plan.md](../business-plan.md).
 
 Related: [database management](database-management.md),
 [client libraries](client-libraries.md).

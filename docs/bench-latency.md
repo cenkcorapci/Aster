@@ -47,11 +47,10 @@ The bench writes a single JSON object to `--out-json`:
 - `avg_ms`: mean latency
 - `pass`: boolean for the configured `p50_ms < threshold` gate
 
-## How to interpret p50
+## p50
 
 `p50_ms` is the median of per-query timings captured by the bench’s timed
 loop. If `p50_ms` is close to the 5ms threshold, small CPU frequency / load
 changes can flip the pass/fail result; for that reason, CI publishes the
 full JSON artifact and PRs are expected to regress only when both median and
 tail move.
-

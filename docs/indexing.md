@@ -3,10 +3,12 @@
 Normative reference for vector indexing: HNSW, immutable per-segment
 graphs inside the LSM engine, and distributed search behavior.
 
-**Implementation status:** search today uses the **exact** index
-(`BuildExactIndex`). Segmented HNSW is milestone **M2**. Lifecycle
-invariants are already specified in
-[`tla/AsterLsmIndex.tla`](../tla/AsterLsmIndex.tla) and
+**Implementation status:** segmented HNSW is implemented (PENDING exact →
+READY graph search; see [`development-plan.md`](development-plan.md)).
+Sealed vector payloads default to **mmap / cold residency**
+([`vector-encoding.md`](vector-encoding.md);
+[`ram-efficiency.md`](ram-efficiency.md)). Lifecycle invariants are
+specified in [`tla/AsterLsmIndex.tla`](../tla/AsterLsmIndex.tla) and
 [`tla/AsterReplication.tla`](../tla/AsterReplication.tla) — do not change
 those semantics without updating the specs.
 
@@ -15,7 +17,7 @@ Contents:
 
 1. [Background: the ANN problem](#1-background-the-ann-problem)
 2. [HNSW: the algorithm](#2-hnsw-the-algorithm)
-3. [Why not one big mutable graph](#3-why-not-one-big-mutable-graph)
+3. [Immutable graphs](#3-immutable-graphs)
 4. [Segmented HNSW: indexing inside the LSM tree](#4-segmented-hnsw-indexing-inside-the-lsm-tree)
 5. [Deletes, updates, and visibility rules](#5-deletes-updates-and-visibility-rules)
 6. [Compaction and graph maintenance](#6-compaction-and-graph-maintenance)
@@ -48,6 +50,32 @@ recall@k = |returned ∩ true_top_k| / k
 
 Aster uses HNSW graphs as its ANN index and always measures them against
 the exact scan (`BuildExactIndex` in `aster/index/vector_index.h`).
+
+### C++
+
+Choose build-time graph parameters on `Db::Options`, then choose the
+per-query work budget with `ef_search`. This requires an HNSW-enabled build;
+Tiny uses the same `SearchRequest` with exact search instead.
+
+```cpp
+aster::Db::Options options;
+options.dimension = 384;
+options.metric = aster::Metric::kCosine;
+options.data_dir = "/var/lib/aster/docs";
+options.hnsw_params.m = 16;
+options.hnsw_params.ef_construction = 128;
+options.hnsw_params.ef_search_default = 64;
+
+auto opened = aster::Db::Open(options);
+if (!opened.ok()) { /* handle opened.status() */ }
+std::unique_ptr<aster::Db> db = std::move(opened.value());
+
+aster::SearchRequest request;
+request.vector = query;
+request.top_k = 10;
+request.ef_search = 128;  // 0 uses ef_search_default
+auto hits = db->TrySearch(request);
+```
 
 Uniform scoring rule: Aster converts every metric to a "higher is better"
 score (`Score()` in `aster/index/distance.h`), i.e. `-L2²`, `dot`, or
@@ -156,7 +184,7 @@ Build cost is `O(N · log N · ef_construction · d)` in practice; building is
 the expensive part of HNSW, which is precisely why Aster never rebuilds
 graphs on the write path (section 4).
 
-## 3. Why not one big mutable graph
+## 3. Immutable graphs
 
 The classic deployment (one global, mutable HNSW protected by locks) fails
 Aster's requirements:
@@ -512,20 +540,25 @@ property of the graph — that is what the exact-baseline CI gate is for.
 All hot loops reduce to L2²/dot over contiguous float32. Per
 `design.md`: AVX2/AVX-512/NEON kernels behind runtime dispatch, 32-byte
 aligned vector blocks, scalar fallback everywhere (the current
-implementation). float16 and int8 (scalar-quantized) storage halve/quarter
-memory bandwidth at small recall cost — applied per collection via
-`VectorEncoding`, with reranking on float32 for int8.
+implementation). Compact encodings via `VectorEncoding` / `Db::Options::vector_encoding`
+([`vector-encoding.md`](vector-encoding.md)): float16 (~2×), int8 SQ (~4×),
+binary RaBitQ-style (~32×). Sealed segments **mmap** uncompressed vector
+blocks by default (`StoragePolicy::vectors = kCold`); anonymous heap for the
+payload is zero when file-backed. Exact / HNSW search scores packed codes
+(direct int8/binary kernels where possible); Cosine may decode to a scratch
+buffer. Optional float rerank remains a future knob.
 
 ### 10.2 Memory layout
 
 Per segment (hot → cold): entry point + upper layers (tiny, always RAM);
 layer-0 adjacency (the bulk of the graph: `N · M0 · 4` bytes with delta +
-varint encoding); vector block (mmap; the OS page cache is the cache);
-metadata (cold, never touched by traversal).
+varint encoding); vector block (**mmap**; OS page cache is the cache;
+`VectorHeapBytesUsed()` reports anonymous copies only); metadata (cold,
+never touched by traversal).
 
-Rule of thumb at `M=16` (`M0=32`): graph ≈ 128 B/vector + vectors
-themselves (1536 B at 384d float32) — the graph is <10% overhead, so
-memory planning is dominated by vectors and controlled by encoding.
+Rule of thumb at `M=16` (`M0=32`): graph ≈ 128 B/vector. With cold mmap +
+`int8_sq` / `binary_rabitq`, steady-state **anonymous** RAM is dominated by
+navigation state and query scratch — not the full vector corpus.
 
 ### 10.3 Disk/S3 tiers
 
@@ -569,7 +602,7 @@ query path is the memtable (single-writer, RCU-style snapshot reads in M1).
 | --- | --- |
 | Higher recall, same index | `ef_search` ↑ (per query — no rebuild) |
 | Higher recall ceiling | `M` ↑, `ef_construction` ↑ (rebuild; +memory, +build time) |
-| Lower memory | int8/float16 encoding; `M` ↓; COLD storage mode |
+| Lower memory | `vector_encoding=int8_sq` or `binary_rabitq`; keep `storage_policy.vectors=cold` (default mmap); `M` ↓; COLD storage mode |
 | Faster writes | bigger memtable, async indexing (default), LZ4 instead of Zstd |
 | Fewer per-query graph searches | more aggressive compaction (T ↓) |
 | Cheap harsh-filter queries | rely on bitmap fallback — do not raise `ef` |
@@ -588,7 +621,7 @@ query path is the memtable (single-writer, RCU-style snapshot reads in M1).
 | `shadowed_compact_threshold` | 0.3 | — | Shadow/tombstone fraction forcing compaction |
 | `fetch_k` policy | `2k+16` | — | Per-segment over-fetch, adaptive with filters |
 
-Accuracy profiles (`client-api.md`) map deterministically onto HNSW params:
+Accuracy profiles (`AccuracyProfile` on `Db::Options`) map deterministically onto HNSW params:
 
 | Profile | `m` | `ef_construction` | `ef_search_default` | `max_layers` |
 | --- | ---: | ---: | ---: | ---: |

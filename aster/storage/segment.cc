@@ -2,19 +2,23 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iterator>
 #include <map>
 #include <queue>
 #include <utility>
 #include <unordered_set>
 
 #include "aster/core/features.h"
+#include "aster/core/status.h"
 #include "aster/index/distance.h"
+#include "aster/index/vector_encoding.h"
 
 #if ASTER_ENABLE_HNSW
 #include <random>
 
 #include "aster/index/hnsw_build.h"
 #include "aster/index/hnsw_graph.h"
+#include "aster/index/hnsw_search_layer.h"
 #include "aster/index/vector_index.h"
 #endif
 
@@ -25,7 +29,9 @@ namespace {
 // and the exact path when a tag predicate is present).
 std::vector<SearchHit> ScoreMatchingOrdinals(
     Metric metric, const std::vector<Row>& rows, const TagBitmap& matching,
-    VectorView query, uint32_t top_k) {
+    VectorView query, uint32_t top_k,
+    const CompactVectorStore* packed,
+    const std::vector<uint32_t>* live_slots) {
   if (matching.empty() || top_k == 0 || query.empty()) return {};
 
   float qnorm = 0.0f;
@@ -37,18 +43,29 @@ std::vector<SearchHit> ScoreMatchingOrdinals(
   using Node = std::pair<float, uint32_t>;
   auto worse = [](const Node& a, const Node& b) { return a.first > b.first; };
   std::priority_queue<Node, std::vector<Node>, decltype(worse)> heap(worse);
+  thread_local std::vector<float> scratch;
 
   for (uint32_t ord : matching.ordinals()) {
     if (ord >= rows.size()) continue;
     const Row& row = rows[ord];
-    if (row.tombstone || row.vector.empty()) continue;
+    if (row.tombstone) continue;
+
+    VectorView vec = row.vector;
+    if (vec.empty() && packed && live_slots && ord < live_slots->size() &&
+        (*live_slots)[ord] != 0xFFFFFFFFu) {
+      scratch.resize(packed->dimension());
+      if (!packed->Decode((*live_slots)[ord], scratch).ok()) continue;
+      vec = scratch;
+    }
+    if (vec.empty()) continue;
+
     float score;
     if (metric == Metric::kCosine) {
       float n2 = 0.0f;
-      for (float x : row.vector) n2 += x * x;
-      score = CosineSimilarityPreNorm(query, qnorm, row.vector, std::sqrt(n2));
+      for (float x : vec) n2 += x * x;
+      score = CosineSimilarityPreNorm(query, qnorm, vec, std::sqrt(n2));
     } else {
-      score = Score(metric, query, row.vector);
+      score = Score(metric, query, vec);
     }
     if (heap.size() < top_k) {
       heap.emplace(score, ord);
@@ -71,17 +88,93 @@ std::vector<SearchHit> ScoreMatchingOrdinals(
 
 std::shared_ptr<const Segment> Segment::Build(
     uint64_t id, Metric metric, std::shared_ptr<std::vector<Row>> rows) {
-  std::shared_ptr<const std::vector<Row>> shared = std::move(rows);
-  TagIndex tags = TagIndex::Build(*shared);
-  auto index = BuildExactIndex(metric, shared);
-  return std::shared_ptr<const Segment>(new Segment(
-      id, metric, std::move(shared), std::move(index), std::move(tags)));
+  auto built = Build(id, metric, std::move(rows), VectorEncoding::kFloat32);
+  // float32 Build always succeeds.
+  return built.ok() ? std::move(built.value()) : nullptr;
 }
 
 std::shared_ptr<const Segment> Segment::Build(uint64_t id, Metric metric,
                                               std::vector<Row> rows) {
   return Build(id, metric,
                std::make_shared<std::vector<Row>>(std::move(rows)));
+}
+
+Result<std::shared_ptr<const Segment>> Segment::Build(
+    uint64_t id, Metric metric, std::shared_ptr<std::vector<Row>> rows,
+    VectorEncoding encoding) {
+  if (!rows) return Status::InvalidArgument("rows required");
+  if (!IsKnownVectorEncoding(static_cast<uint8_t>(encoding))) {
+    return Status::InvalidArgument("unknown vector encoding");
+  }
+
+  TagIndex tags = TagIndex::Build(*rows);
+  std::shared_ptr<const CompactVectorStore> packed;
+  std::shared_ptr<const std::vector<uint32_t>> live_slots;
+  std::unique_ptr<VectorIndex> index;
+
+  if (encoding == VectorEncoding::kFloat32) {
+    std::shared_ptr<const std::vector<Row>> shared = std::move(rows);
+    index = BuildExactIndex(metric, shared);
+    return std::shared_ptr<const Segment>(new Segment(
+        id, metric, std::move(shared), std::move(index), std::move(tags),
+        encoding, nullptr, nullptr));
+  }
+
+  uint32_t dim = 0;
+  for (const Row& row : *rows) {
+    if (!row.tombstone && !row.vector.empty()) {
+      dim = static_cast<uint32_t>(row.vector.size());
+      break;
+    }
+  }
+  auto encoded = CompactVectorStore::Encode(encoding, dim, *rows);
+  if (!encoded.ok()) return encoded.status();
+  packed = std::make_shared<const CompactVectorStore>(std::move(encoded.value()));
+
+  auto slots = std::make_shared<std::vector<uint32_t>>(rows->size(), 0xFFFFFFFFu);
+  uint32_t slot = 0;
+  for (size_t i = 0; i < rows->size(); ++i) {
+    if ((*rows)[i].tombstone) continue;
+    (*slots)[i] = slot++;
+    (*rows)[i].vector.clear();
+    (*rows)[i].vector.shrink_to_fit();
+  }
+  live_slots = std::move(slots);
+
+  std::shared_ptr<const std::vector<Row>> shared = std::move(rows);
+  index = BuildExactIndex(metric, shared, packed, live_slots);
+  return std::shared_ptr<const Segment>(new Segment(
+      id, metric, std::move(shared), std::move(index), std::move(tags),
+      encoding, std::move(packed), std::move(live_slots)));
+}
+
+Result<std::shared_ptr<const Segment>> Segment::BuildFromPacked(
+    uint64_t id, Metric metric, std::shared_ptr<std::vector<Row>> rows,
+    std::shared_ptr<const CompactVectorStore> packed,
+    std::shared_ptr<const std::vector<uint32_t>> live_slots,
+    VectorEncoding encoding) {
+  if (!rows) return Status::InvalidArgument("rows required");
+  if (!packed) return Status::InvalidArgument("packed store required");
+  if (!live_slots) return Status::InvalidArgument("live_slots required");
+  if (live_slots->size() != rows->size()) {
+    return Status::InvalidArgument("live_slots size mismatch");
+  }
+  if (!IsKnownVectorEncoding(static_cast<uint8_t>(encoding))) {
+    return Status::InvalidArgument("unknown vector encoding");
+  }
+  // Ensure live rows do not retain float payloads.
+  for (Row& row : *rows) {
+    if (!row.tombstone) {
+      row.vector.clear();
+      row.vector.shrink_to_fit();
+    }
+  }
+  TagIndex tags = TagIndex::Build(*rows);
+  std::shared_ptr<const std::vector<Row>> shared = std::move(rows);
+  auto index = BuildExactIndex(metric, shared, packed, live_slots);
+  return std::shared_ptr<const Segment>(new Segment(
+      id, metric, std::move(shared), std::move(index), std::move(tags),
+      encoding, std::move(packed), std::move(live_slots)));
 }
 
 bool Segment::TryBeginIndexBuild() const {
@@ -102,13 +195,99 @@ void Segment::AbortIndexBuild() const {
   index_state_ = SegState::kPending;
 }
 
+Status Segment::DecodeRowVector(size_t ordinal, std::vector<float>* out) const {
+  if (!out) return Status::InvalidArgument("out required");
+  if (!rows_ || ordinal >= rows_->size()) {
+    return Status::InvalidArgument("row ordinal OOB");
+  }
+  const Row& row = (*rows_)[ordinal];
+  if (!row.vector.empty()) {
+    *out = row.vector;
+    return Status::Ok();
+  }
+  if (!packed_ || !live_slots_ || ordinal >= live_slots_->size()) {
+    out->clear();
+    return Status::Ok();
+  }
+  const uint32_t slot = (*live_slots_)[ordinal];
+  if (slot == 0xFFFFFFFFu) {
+    out->clear();
+    return Status::Ok();
+  }
+  out->assign(packed_->dimension(), 0.0f);
+  return packed_->Decode(slot, *out);
+}
+
+uint64_t Segment::VectorBytesUsed() const {
+  if (packed_) return packed_->BytesUsed();
+  uint64_t bytes = 0;
+  if (!rows_) return 0;
+  for (const Row& row : *rows_) {
+    if (row.tombstone) continue;
+    bytes += row.vector.size() * sizeof(float);
+  }
+  return bytes;
+}
+
+uint64_t Segment::VectorHeapBytesUsed() const {
+  if (packed_) return packed_->HeapBytesUsed();
+  return VectorBytesUsed();
+}
+
+std::vector<Row> Segment::MaterializedRows() const {
+  std::vector<Row> out;
+  if (!rows_) return out;
+  out.reserve(rows_->size());
+  for (size_t i = 0; i < rows_->size(); ++i) {
+    Row row = (*rows_)[i];
+    if (!row.tombstone && row.vector.empty()) {
+      (void)DecodeRowVector(i, &row.vector);
+    }
+    out.push_back(std::move(row));
+  }
+  return out;
+}
+
+const std::vector<float>& Segment::Centroid() const {
+  std::call_once(centroid_once_, [this] {
+    if (!rows_) return;
+    std::vector<double> sum;
+    std::vector<float> tmp;
+    size_t live = 0;
+    for (size_t i = 0; i < rows_->size(); ++i) {
+      const Row& row = (*rows_)[i];
+      if (row.tombstone) continue;
+      VectorView v{row.vector};
+      if (v.empty()) {
+        if (!DecodeRowVector(i, &tmp).ok()) continue;
+        v = VectorView{tmp};
+      }
+      if (sum.empty()) sum.assign(v.size(), 0.0);
+      if (v.size() != sum.size()) continue;
+      for (size_t d = 0; d < v.size(); ++d) sum[d] += v[d];
+      ++live;
+    }
+    if (live == 0) return;
+    centroid_.resize(sum.size());
+    for (size_t d = 0; d < sum.size(); ++d) {
+      centroid_[d] = static_cast<float>(sum[d] / static_cast<double>(live));
+    }
+  });
+  return centroid_;
+}
+
 std::optional<Row> Segment::Get(const RowId& row_id) const {
   const auto& rows = *rows_;
   auto it = std::lower_bound(
       rows.begin(), rows.end(), row_id,
       [](const Row& row, const RowId& id) { return row.id < id; });
   if (it == rows.end() || it->id != row_id) return std::nullopt;
-  return *it;
+  Row row = *it;
+  if (!row.tombstone && row.vector.empty()) {
+    const size_t ordinal = static_cast<size_t>(std::distance(rows.begin(), it));
+    (void)DecodeRowVector(ordinal, &row.vector);
+  }
+  return row;
 }
 
 std::vector<SearchHit> Segment::Search(
@@ -124,7 +303,8 @@ std::vector<SearchHit> Segment::Search(
   // Tag predicate: score only bitmap-matching ordinals so non-matches never
   // consume fetch_k slots (docs/indexing.md §7).
   return ScoreMatchingOrdinals(metric_, *rows_, tag_index_.Matching(tags),
-                               query, top_k);
+                               query, top_k, packed_.get(),
+                               live_slots_ ? live_slots_.get() : nullptr);
 }
 
 std::shared_ptr<const Segment> CompactSegments(
@@ -138,9 +318,12 @@ std::shared_ptr<const Segment> CompactSegments(
 #endif
 ) {
   // LWW merge: for each id keep the newest version across all inputs.
+  // Materialize packed vectors so the merged segment always owns float32
+  // (re-packing is the caller's choice via Segment::Build(..., encoding)).
   std::map<RowId, Row> merged;
   for (const auto& segment : inputs) {
-    for (const Row& row : segment->rows()) {
+    const auto rows = segment->MaterializedRows();
+    for (const Row& row : rows) {
       auto it = merged.find(row.id);
       if (it == merged.end()) {
         merged.emplace(row.id, row);
@@ -163,13 +346,14 @@ std::shared_ptr<const Segment> CompactSegments(
     // become "ghosts" when we reuse an input graph).
     std::unordered_set<RowId> live_output_ids;
     live_output_ids.reserve(segment->row_count());
-    for (const Row& row : segment->rows()) {
+    const auto materialized = segment->MaterializedRows();
+    for (const Row& row : materialized) {
       if (row.tombstone || row.vector.empty()) continue;
       live_output_ids.insert(row.id);
     }
 
     auto Rebuild = [&]() {
-      return RebuildHnswFromLiveRows(metric, hnsw_params, segment->rows(),
+      return RebuildHnswFromLiveRows(metric, hnsw_params, materialized,
                                      hnsw_rng_seed);
     };
 
@@ -222,80 +406,21 @@ std::shared_ptr<const Segment> CompactSegments(
         return static_cast<uint8_t>(level);
       };
 
-      struct ScoredNode {
-        float score = 0.0f;  // higher is better
-        uint32_t id = 0;
-      };
-      struct BetterFirst {
-        bool operator()(const ScoredNode& a, const ScoredNode& b) const {
-          if (a.score != b.score) return a.score < b.score;
-          return a.id > b.id;
+      using hnsw_internal::BuildNormCache;
+      using hnsw_internal::QueryNorm;
+      using hnsw_internal::ScoredNode;
+      using hnsw_internal::SearchLayer;
+      using hnsw_internal::VectorStore;
+
+      auto AppendVector = [&](std::vector<std::vector<float>>& vectors,
+                              std::vector<float>& norms,
+                              const std::vector<float>& vec) {
+        vectors.push_back(vec);
+        if (metric == Metric::kCosine) {
+          float n2 = 0.0f;
+          for (float x : vec) n2 += x * x;
+          norms.push_back(std::sqrt(n2));
         }
-      };
-      struct WorseFirst {
-        bool operator()(const ScoredNode& a, const ScoredNode& b) const {
-          if (a.score != b.score) return a.score > b.score;
-          return a.id < b.id;
-        }
-      };
-
-      auto NodeScore = [&](VectorView query,
-                           const std::vector<std::vector<float>>& vectors,
-                           uint32_t id) -> float {
-        return Score(metric, query, vectors[id]);
-      };
-
-      auto SearchLayer = [&](VectorView query, const std::vector<uint32_t>& eps,
-                              uint32_t ef, uint16_t layer,
-                              const HnswGraph& graph,
-                              const std::vector<std::vector<float>>& vectors)
-          -> std::vector<ScoredNode> {
-        if (eps.empty() || ef == 0) return {};
-        std::unordered_set<uint32_t> visited;
-        visited.reserve(ef * 4);
-
-        std::priority_queue<ScoredNode, std::vector<ScoredNode>, BetterFirst>
-            candidates;
-        std::priority_queue<ScoredNode, std::vector<ScoredNode>, WorseFirst>
-            w;
-
-        for (uint32_t ep : eps) {
-          if (!visited.insert(ep).second) continue;
-          const float s = NodeScore(query, vectors, ep);
-          candidates.push({s, ep});
-          w.push({s, ep});
-        }
-        if (w.empty()) return {};
-        while (w.size() > ef) w.pop();
-
-        while (!candidates.empty()) {
-          const ScoredNode c = candidates.top();
-          candidates.pop();
-          if (c.score < w.top().score) break;
-
-          for (uint32_t e : graph.Neighbors(c.id, layer)) {
-            if (!visited.insert(e).second) continue;
-            const float s = NodeScore(query, vectors, e);
-            if (w.size() < ef || s > w.top().score) {
-              candidates.push({s, e});
-              w.push({s, e});
-              if (w.size() > ef) w.pop();
-            }
-          }
-        }
-
-        std::vector<ScoredNode> result;
-        result.reserve(w.size());
-        while (!w.empty()) {
-          result.push_back(w.top());
-          w.pop();
-        }
-        std::sort(result.begin(), result.end(),
-                  [](const ScoredNode& a, const ScoredNode& b) {
-                    if (a.score != b.score) return a.score > b.score;
-                    return a.id < b.id;
-                  });
-        return result;
       };
 
       auto MaxDegree = [&](uint16_t layer) -> uint32_t {
@@ -347,8 +472,13 @@ std::shared_ptr<const Segment> CompactSegments(
         std::vector<std::vector<float>> vectors =
             live_inputs[largest_idx].vectors;
         std::vector<RowId> ids = live_inputs[largest_idx].ids;
+        std::vector<float> norms = BuildNormCache(metric, vectors);
 
         std::mt19937_64 rng(hnsw_rng_seed + 1);
+
+        const auto graph_neighbors = [&graph](uint32_t node, uint16_t layer) {
+          return graph.Neighbors(node, layer);
+        };
 
         for (size_t si = 0; si < inputs.size(); ++si) {
           if (si == largest_idx) continue;
@@ -363,20 +493,24 @@ std::shared_ptr<const Segment> CompactSegments(
             const uint32_t row_ordinal = static_cast<uint32_t>(vectors.size());
             auto added = graph.AddNode(row_ordinal, level);
             if (!added.ok()) return Rebuild();
-            vectors.push_back(vec);
+            AppendVector(vectors, norms, vec);
             ids.push_back(id);
 
             const uint32_t node = added.value();
             if (node == 0) continue;
 
+            VectorStore store{&vectors, nullptr, nullptr,
+                              metric == Metric::kCosine ? &norms : nullptr,
+                              metric, static_cast<uint32_t>(vectors.size())};
             VectorView query{vectors[node]};
+            const float qnorm = QueryNorm(metric, query);
             uint32_t ep = old_entry;
 
             // Greedy descent from previous top down to level+1.
             if (old_max_level > level) {
               for (uint16_t lc = old_max_level; lc > level; --lc) {
-                auto nearest =
-                    SearchLayer(query, {ep}, /*ef=*/1, lc, graph, vectors);
+                auto nearest = SearchLayer(store, query, qnorm, graph_neighbors,
+                                           {ep}, /*ef=*/1, lc);
                 if (!nearest.empty()) ep = nearest.front().id;
               }
             }
@@ -386,8 +520,8 @@ std::shared_ptr<const Segment> CompactSegments(
 
             for (int lc = static_cast<int>(insert_top); lc >= 0; --lc) {
               const uint16_t layer = static_cast<uint16_t>(lc);
-              auto found = SearchLayer(query, {ep}, hnsw_params.ef_construction,
-                                        layer, graph, vectors);
+              auto found = SearchLayer(store, query, qnorm, graph_neighbors,
+                                       {ep}, hnsw_params.ef_construction, layer);
 
               std::vector<std::pair<uint32_t, VectorView>> cands;
               cands.reserve(found.size());

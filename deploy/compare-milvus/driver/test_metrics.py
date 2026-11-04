@@ -35,7 +35,23 @@ def test_agreement() -> None:
     assert agg["mean_jaccard_at_k"] > 0.5
 
 
+def test_empty_and_rank_edge_cases() -> None:
+    assert jaccard_at_k([], [], 10) == 1.0
+    assert recall_at_k([], [], 10) == 1.0
+    assert jaccard_at_k([("a", 1.0)], [], 10) == 0.0
+    assert recall_at_k([], [("a", 1.0)], 10) == 0.0
+    shifted = summarize_query_pair(
+        [("a", 1.0), ("b", 0.9)],
+        [("b", 0.9), ("a", 1.0)],
+        2,
+    )
+    assert shifted["common_ids"] == 2
+    assert shifted["exact_rank_matches"] == 0
+    assert shifted["mean_abs_rank_delta"] == 1.0
+
+
 if __name__ == "__main__":
     test_merge_and_shard()
     test_agreement()
+    test_empty_and_rank_edge_cases()
     print("ok")

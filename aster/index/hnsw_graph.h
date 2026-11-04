@@ -22,7 +22,7 @@ struct HnswParams {
   uint32_t max_layers = 16;
 };
 
-// Product-level accuracy presets (docs/client-api.md).
+// Product-level accuracy presets (docs/design.md).
 //
 // M8-T04 requires that picking a profile deterministically maps onto concrete
 // HNSW build/search parameters:

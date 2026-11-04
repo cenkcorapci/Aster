@@ -4,15 +4,22 @@
 
 #include <algorithm>
 #include <queue>
-#include <unordered_set>
 #include <utility>
+#include <vector>
 
 #include "aster/index/distance.h"
+#include "aster/index/hnsw_search_layer.h"
 
 namespace aster {
 namespace {
 
 constexpr uint32_t kMaxNodes = 50'000'000u;
+
+using hnsw_internal::BuildNormCache;
+using hnsw_internal::QueryNorm;
+using hnsw_internal::ScoredNode;
+using hnsw_internal::SearchLayer;
+using hnsw_internal::VectorStore;
 
 uint8_t ReadU8(std::string_view b, size_t& off) {
   return static_cast<uint8_t>(b[off++]);
@@ -46,93 +53,6 @@ Status Need(std::string_view b, size_t off, size_t n) {
 
 uint32_t MaxDegreeForLayer(const HnswParams& p, uint16_t layer) {
   return layer == 0 ? HnswLayer0MaxDegree(p) : p.m;
-}
-
-struct ScoredNode {
-  float score = 0.0f;
-  uint32_t id = 0;
-};
-
-struct BetterFirst {
-  bool operator()(const ScoredNode& a, const ScoredNode& b) const {
-    if (a.score != b.score) return a.score < b.score;
-    return a.id > b.id;
-  }
-};
-
-struct WorseFirst {
-  bool operator()(const ScoredNode& a, const ScoredNode& b) const {
-    if (a.score != b.score) return a.score > b.score;
-    return a.id < b.id;
-  }
-};
-
-float NodeScore(Metric metric, VectorView query,
-                const std::vector<std::vector<float>>& vectors, uint32_t id) {
-  return Score(metric, query, vectors[id]);
-}
-
-std::vector<ScoredNode> SearchLayerPinned(
-    Metric metric, VectorView query,
-    const std::vector<std::vector<float>>& vectors,
-    const HnswUpperLayerPin& pin, HnswLayer0NeighborFn layer0,
-    const std::vector<uint32_t>& entry_points, uint32_t ef, uint16_t layer) {
-  if (entry_points.empty() || ef == 0) return {};
-
-  std::unordered_set<uint32_t> visited;
-  visited.reserve(ef * 4);
-
-  std::priority_queue<ScoredNode, std::vector<ScoredNode>, BetterFirst>
-      candidates;
-  std::priority_queue<ScoredNode, std::vector<ScoredNode>, WorseFirst> w;
-
-  for (uint32_t ep : entry_points) {
-    if (!visited.insert(ep).second) continue;
-    const float s = NodeScore(metric, query, vectors, ep);
-    candidates.push({s, ep});
-    w.push({s, ep});
-  }
-  if (w.empty()) return {};
-
-  while (w.size() > ef) w.pop();
-
-  while (!candidates.empty()) {
-    const ScoredNode c = candidates.top();
-    candidates.pop();
-    if (c.score < w.top().score) break;
-
-    std::vector<uint32_t> neighbors;
-    if (layer == 0) {
-      auto got = layer0(c.id);
-      if (!got.ok()) return {};
-      neighbors = std::move(got).value();
-    } else {
-      neighbors = pin.Neighbors(c.id, layer);
-    }
-
-    for (uint32_t e : neighbors) {
-      if (!visited.insert(e).second) continue;
-      const float s = NodeScore(metric, query, vectors, e);
-      if (w.size() < ef || s > w.top().score) {
-        candidates.push({s, e});
-        w.push({s, e});
-        if (w.size() > ef) w.pop();
-      }
-    }
-  }
-
-  std::vector<ScoredNode> result;
-  result.reserve(w.size());
-  while (!w.empty()) {
-    result.push_back(w.top());
-    w.pop();
-  }
-  std::sort(result.begin(), result.end(),
-            [](const ScoredNode& a, const ScoredNode& b) {
-              if (a.score != b.score) return a.score > b.score;
-              return a.id < b.id;
-            });
-  return result;
 }
 
 }  // namespace
@@ -352,11 +272,36 @@ Result<std::vector<uint32_t>> HnswReadLayer0Neighbors(
 std::vector<std::pair<uint32_t, float>> HnswSearchPinned(
     Metric metric, const HnswUpperLayerPin& pin, HnswLayer0NeighborFn layer0,
     const std::vector<std::vector<float>>& vectors, VectorView query,
-    uint32_t top_k, uint32_t ef_search) {
+    uint32_t top_k, uint32_t ef_search,
+    const std::vector<float>* precomputed_norms) {
   if (pin.node_count() == 0 || top_k == 0 || query.empty()) return {};
   if (vectors.size() != pin.node_count()) return {};
   if (pin.entry_point() == HnswGraph::kNoEntry) return {};
   if (!layer0) return {};
+
+  std::vector<float> owned_norms;
+  const std::vector<float>* norms_ptr = nullptr;
+  if (metric == Metric::kCosine) {
+    if (precomputed_norms != nullptr &&
+        precomputed_norms->size() == vectors.size()) {
+      norms_ptr = precomputed_norms;
+    } else {
+      owned_norms = BuildNormCache(metric, vectors);
+      norms_ptr = &owned_norms;
+    }
+  }
+  VectorStore store{&vectors, nullptr, nullptr, norms_ptr, metric,
+                    static_cast<uint32_t>(vectors.size())};
+  const float qnorm = QueryNorm(metric, query);
+
+  const auto neighbors_fn = [&pin, layer0](uint32_t node, uint16_t layer) {
+    if (layer == 0) {
+      auto got = layer0(node);
+      if (!got.ok()) return std::vector<uint32_t>{};
+      return std::move(got).value();
+    }
+    return pin.Neighbors(node, layer);
+  };
 
   uint32_t ef = ef_search;
   if (ef == 0) ef = pin.params().ef_search_default;
@@ -365,14 +310,13 @@ std::vector<std::pair<uint32_t, float>> HnswSearchPinned(
   uint32_t ep = pin.entry_point();
   const uint16_t top = pin.max_level();
   for (uint16_t lc = top; lc > 0; --lc) {
-    auto nearest = SearchLayerPinned(metric, query, vectors, pin, layer0, {ep},
-                                     /*ef=*/1, lc);
+    auto nearest =
+        SearchLayer(store, query, qnorm, neighbors_fn, {ep}, /*ef=*/1, lc);
     if (!nearest.empty()) ep = nearest.front().id;
   }
 
   auto found =
-      SearchLayerPinned(metric, query, vectors, pin, layer0, {ep}, ef,
-                        /*layer=*/0);
+      SearchLayer(store, query, qnorm, neighbors_fn, {ep}, ef, /*layer=*/0);
   if (found.size() > top_k) found.resize(top_k);
 
   std::vector<std::pair<uint32_t, float>> out;

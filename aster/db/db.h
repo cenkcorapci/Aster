@@ -36,6 +36,7 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 #include "aster/core/features.h"
@@ -47,6 +48,7 @@
 #include "aster/db/storage_mode.h"
 #include "aster/storage/memtable.h"
 #include "aster/storage/segment.h"
+#include "aster/storage/storage_policy.h"
 #include "aster/storage/wal.h"
 
 #if ASTER_ENABLE_HNSW
@@ -74,6 +76,12 @@ class Db {
   struct Options {
     uint32_t dimension = 0;  // 0 = do not enforce on Upsert
     Metric metric = Metric::kCosine;
+    // Sealed-segment vector packing (RAM + SSTable). Memtable/WAL stay
+    // float32. See docs/vector-encoding.md.
+    VectorEncoding vector_encoding = VectorEncoding::kFloat32;
+    // Residency of sealed vectors / HNSW layers (default: cold mmap vectors).
+    // See aster/storage/storage_policy.h and docs/vector-encoding.md.
+    StoragePolicy storage_policy{};
     // Soft size trigger: background flush when memtable reaches this many
     // approximate bytes. Also checked on the write path.
     size_t memtable_flush_bytes = 64 << 20;
@@ -82,6 +90,11 @@ class Db {
     // Empty = in-memory only (constructor). Non-empty = durable (prefer Open).
     std::string data_dir;
     SyncPolicy wal_sync = SyncPolicy::kAlways;
+    // SPANN-style query-aware pruning (NeurIPS 2021): when > 0, unfiltered
+    // searches skip segments whose centroid is farther from the query than
+    // (1 + epsilon) x the closest segment centroid (L2 / cosine only). Only
+    // safe when segments are spatially clustered; 0 disables (exact fan-out).
+    double segment_prune_epsilon = 0.0;
     // Size-tiered compaction: merge when a size bucket has this many
     // similar-sized segments (Cassandra-style; see docs/indexing.md §6.1).
     // 0 disables size-tiered auto-compaction.
@@ -97,10 +110,10 @@ class Db {
     // Also mirrored in resource_limits.memory_budget_bytes when set via
     // SetResourceLimits / CollectionConfig.
     size_t memory_budget_bytes = 0;
-    // Per-collection quotas + isolation (docs/client-api.md § Resources).
+    // Per-collection quotas + isolation (docs/design.md / Db::Options).
     // Safe online via SetResourceLimits(). 0 numeric fields = unlimited.
     ResourceLimits resource_limits{};
-    // HOT / WARM / COLD cache layout (docs/client-api.md). Safe to change
+    // HOT / WARM / COLD cache layout (docs/design.md). Safe to change
     // online via SetStorageMode(). Default HOT keeps the historical local path.
     StorageMode storage_mode = StorageMode::kHot;
     // Optional S3-compatible object store used by WARM/COLD mirroring and
@@ -150,6 +163,11 @@ class Db {
   // or the newest version is a tombstone.
   std::optional<Row> Get(const RowId& id) const;
 
+  // Point lookup including tombstones. A missing row is represented by a
+  // tombstone with timestamp 0. Distributed read repair uses this to ensure
+  // deletes win over stale live replicas.
+  Row GetRaw(const RowId& id) const;
+
   // Exact (brute-force) top-k over memtable + segments; higher score is
   // always better. request.tags is an AND post-filter when non-empty.
   // Enforces max_qps when configured; returns ResourceExhausted on exceed.
@@ -193,14 +211,14 @@ class Db {
 
   // Current storage cache mode (HOT / WARM / COLD).
   StorageMode storage_mode() const;
-  // Online mode switch (docs/client-api.md: cache mode is safe online).
+  // Online mode switch (docs/design.md: cache mode is safe online).
   // WARM/COLD require Options::object_store. Switching into WARM/COLD mirrors
   // live segment/index objects and (re)pins HNSW upper layers.
   Status SetStorageMode(StorageMode mode);
 
   // Current per-collection resource limits + isolation.
   ResourceLimits resource_limits() const;
-  // Online quota / isolation update (docs/client-api.md: limits are safe
+  // Online quota / isolation update (docs/design.md: limits are safe
   // online). Also syncs Options::memory_budget_bytes from the limits struct.
   Status SetResourceLimits(ResourceLimits limits);
 

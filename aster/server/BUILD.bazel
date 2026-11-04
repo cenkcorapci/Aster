@@ -37,6 +37,7 @@ cc_test(
     }),
     deps = [
         ":server",
+        "//aster/index",
         "@googletest//:gtest_main",
     ],
 )

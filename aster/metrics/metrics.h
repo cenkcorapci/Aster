@@ -70,7 +70,21 @@ class MetricsRegistry {
   // Renders Prometheus text exposition format (HELP/TYPE + samples).
   std::string Render() const;
 
+  // Prometheus-conformant exposition for `/metrics` (passes
+  // `promtool check metrics`): every name gets the `aster_` prefix, counters
+  // end in `_total`, latency histograms are converted from ms to seconds (`*_seconds`), and
+  // `*_count` gauges are renamed so they cannot collide with histogram
+  // `_count` series (segment_count -> aster_segments,
+  // collection_count -> aster_collections).
+  std::string RenderPrometheus() const;
+
+  // Maps an internal metric name to its exposition name.
+  static std::string PrometheusName(const std::string& name, bool is_counter,
+                                    bool is_histogram);
+
  private:
+  std::string RenderImpl(bool prometheus_names) const;
+
   void RegisterDefaults();
 
   std::map<std::string, std::unique_ptr<::aster::Counter>> counters_;
