@@ -183,6 +183,47 @@ bazel run //aster/bench:ram_stress_bench -- \
   --single-n 50000 --cluster-n 30000 --dim 384 --encoding int8_sq --searches 500
 ```
 
+## Large exact-scan benchmark (2026-11-20)
+
+The `ram_stress_bench` single-node workload was run on an Apple M4 with
+32 GiB RAM and macOS 26.6.2, using optimized (`-c opt`) builds before and
+after the 1.0.2 changes. Each run loaded 10 million synthetic normalized
+384-dimensional vectors, `int8_sq`, L2, cold mmap, WAL sync disabled, and
+HNSW background build disabled. The deterministic harness performed 20
+sequential top-10 searches after reopen, including the first query.
+
+| Metric | 1.0.1 | 1.0.2 |
+| --- | ---: | ---: |
+| Search p50 | 2100.474 ms | 256.051 ms |
+| Search QPS | 0.5 | 3.9 |
+| Peak process RSS | 5790.0 MiB | 6073.7 MiB |
+| Search errors | 0 | 0 |
+
+This is about 8.2× lower median latency in this workload, not an ANN
+benchmark or a general production capacity claim. Twenty queries are too few
+to characterize tail latency, and the shared machine was not isolated.
+The benchmark does not measure recall. The optimized path keeps exhaustive
+scanning, uses ARM64 NEON for packed int8 L2 scoring, and uses up to four
+threads for large unfiltered server-profile searches over multiple exact
+int8 segments. That trades CPU concurrency for latency; HNSW, filtered
+queries, other encodings and small scans do not use the parallel fan-out.
+The NEON reduction uses double-precision accumulation in a different order
+than the scalar loop, so scores at floating-point ties can differ slightly.
+As in [Faiss's implementation notes](https://github.com/facebookresearch/faiss/wiki/Implementation-notes),
+efficient distance kernels and workload shape matter; its batch-oriented BLAS
+and approximate indexes are different techniques and were not used here.
+
+```bash
+bazel build -c opt //aster/bench:ram_stress_bench
+bench_dir="$(mktemp -d)"
+nice -n 10 bazel-bin/aster/bench/ram_stress_bench \
+  --single-only --single-n 10000000 --dim 384 --encoding int8_sq \
+  --searches 20 --root "$bench_dir/data"
+```
+
+The benchmark deletes its `--root` directory and the run needs several GiB
+of disk and RAM.
+
 ## Longer-term scale targets
 
 After warm-up with a corpus larger than the RAM budget, treat these as

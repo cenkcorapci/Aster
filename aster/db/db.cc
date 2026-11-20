@@ -7,7 +7,10 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <exception>
+#include <system_error>
 #include <thread>
 #include <cmath>
 #include <limits>
@@ -932,9 +935,60 @@ std::vector<SearchHit> Db::SearchLocked(const SearchRequest& request) const {
       targets.swap(kept);
     }
   }
-  for (const Segment* segment : targets) {
-    candidates.push_back(segment->Search(request.vector, fetch_k,
-                                         request.ef_search, request.tags));
+#if defined(ASTER_PROFILE_SERVER) && !defined(ASTER_BAREMETAL)
+  size_t exact_rows = 0;
+  bool parallel_exact = request.top_k > 0 && !request.vector.empty() &&
+                        request.tags.empty() && options_.metric == Metric::kL2 &&
+                        targets.size() >= 4;
+  if (parallel_exact) {
+    for (const Segment* segment : targets) {
+      if (segment->search_uses_hnsw() ||
+          segment->vector_encoding() != VectorEncoding::kInt8Sq) {
+        parallel_exact = false;
+        break;
+      }
+      exact_rows += segment->row_count();
+    }
+    parallel_exact = parallel_exact && exact_rows >= 250000;
+  }
+  const unsigned workers = std::min(4u, std::thread::hardware_concurrency());
+  if (parallel_exact && workers > 1) {
+    candidates.resize(1 + targets.size());
+    std::atomic<size_t> next{0};
+    std::vector<std::exception_ptr> errors(workers);
+    auto scan = [&](unsigned worker) {
+      try {
+        for (;;) {
+          const size_t i = next.fetch_add(1, std::memory_order_relaxed);
+          if (i >= targets.size()) break;
+          candidates[i + 1] = targets[i]->Search(
+              request.vector, fetch_k, request.ef_search, request.tags);
+        }
+      } catch (...) {
+        errors[worker] = std::current_exception();
+      }
+    };
+    std::vector<std::jthread> threads;
+    threads.reserve(workers - 1);
+    for (unsigned worker = 1; worker < workers; ++worker) {
+      try {
+        threads.emplace_back(scan, worker);
+      } catch (const std::system_error&) {
+        break;
+      }
+    }
+    scan(0);
+    for (auto& thread : threads) thread.join();
+    for (const auto& error : errors) {
+      if (error) std::rethrow_exception(error);
+    }
+  } else
+#endif
+  {
+    for (const Segment* segment : targets) {
+      candidates.push_back(segment->Search(request.vector, fetch_k,
+                                           request.ef_search, request.tags));
+    }
   }
 
   std::vector<SearchHit> merged = MergeTopK(candidates, fetch_k);

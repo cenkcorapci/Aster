@@ -76,6 +76,46 @@ TEST(Db, SearchSpansMemtableAndSegments) {
   EXPECT_EQ(hits[1].id, "mem-row");
 }
 
+#if defined(ASTER_PROFILE_SERVER)
+TEST(Db, LargePackedSearchMatchesFilteredScanWithUpdatesAndDeletes) {
+  Db::Options options = SmallDb();
+  options.vector_encoding = VectorEncoding::kInt8Sq;
+  options.compaction_tier_threshold = 0;
+  options.max_segments_before_compact = 0;
+#if ASTER_ENABLE_HNSW
+  options.background_index_build = false;
+#endif
+  Db db(options);
+  for (int segment = 0; segment < 4; ++segment) {
+    for (int i = 0; i < 62500; ++i) {
+      const auto id = std::to_string(segment) + "-" + std::to_string(i);
+      const float x = i == 0 ? 0.1f * (segment + 1) : 10.0f + i % 10;
+      ASSERT_TRUE(db.Upsert(MakeRow(id, {x, 0.0f}, 1, {"all"})).ok());
+    }
+    ASSERT_TRUE(db.Flush().ok());
+  }
+  ASSERT_EQ(db.segment_count(), 4u);
+  ASSERT_TRUE(db.Upsert(MakeRow("0-0", {2.0f, 0.0f}, 2, {"all"})).ok());
+  ASSERT_TRUE(db.Delete("1-0", 2).ok());
+
+  SearchRequest req;
+  req.vector = {0.0f, 0.0f};
+  req.top_k = 3;
+  const auto parallel = db.Search(req);
+  req.tags = {"all"};
+  const auto filtered = db.Search(req);
+  ASSERT_EQ(parallel.size(), 3u);
+  ASSERT_EQ(filtered.size(), parallel.size());
+  EXPECT_EQ(parallel[0].id, "2-0");
+  EXPECT_EQ(parallel[1].id, "3-0");
+  EXPECT_EQ(parallel[2].id, "0-0");
+  for (size_t i = 0; i < parallel.size(); ++i) {
+    EXPECT_EQ(parallel[i].id, filtered[i].id);
+    EXPECT_FLOAT_EQ(parallel[i].score, filtered[i].score);
+  }
+}
+#endif
+
 TEST(Db, DeleteHidesRowEvenIfIndexedInSegment) {
   Db db(SmallDb());
   ASSERT_TRUE(db.Upsert(MakeRow("a", {1.0f, 0.0f}, 10)).ok());

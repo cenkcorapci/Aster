@@ -5,6 +5,18 @@ The project follows a single-version policy; see [docs/versioning.md](docs/versi
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-11-20
+
+### Performance
+- Accelerate packed int8 L2 scoring with ARM64 NEON in optimized builds.
+- Search large unfiltered exact int8 segments in parallel on server builds,
+  using up to four workers. On the documented 10M × 384 workload, optimized
+  median search latency improved from 2100 ms to 256 ms; see
+  [RAM efficiency](docs/ram-efficiency.md) for conditions and limitations.
+
+### Fixed
+- Keep Thrift OpenSSL initialized through process shutdown.
+
 ## [1.0.1] - 2026-11-03
 
 ### Performance

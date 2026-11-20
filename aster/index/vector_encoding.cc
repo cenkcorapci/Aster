@@ -7,10 +7,51 @@
 
 #include "aster/index/distance.h"
 
+#if defined(__aarch64__) && defined(__OPTIMIZE__)
+#include <arm_neon.h>
+#endif
+
 namespace aster {
 namespace {
 
 constexpr uint32_t kBinaryRabitqSeed = 0xA57E9u;
+
+#if defined(__aarch64__) && defined(__OPTIMIZE__)
+double Int8L2Neon(const float* query, const int8_t* codes, float scale,
+                  uint32_t dim) {
+  float64x2_t sums[4] = {vdupq_n_f64(0), vdupq_n_f64(0),
+                          vdupq_n_f64(0), vdupq_n_f64(0)};
+  const float64x2_t scales = vdupq_n_f64(static_cast<double>(scale));
+  uint32_t i = 0;
+  for (; i + 8 <= dim; i += 8) {
+    const int16x8_t c16 = vmovl_s8(vld1_s8(codes + i));
+    const int32x4_t c0 = vmovl_s16(vget_low_s16(c16));
+    const int32x4_t c1 = vmovl_s16(vget_high_s16(c16));
+    const float32x4_t q0 = vld1q_f32(query + i);
+    const float32x4_t q1 = vld1q_f32(query + i + 4);
+    const float64x2_t q[4] = {
+        vcvt_f64_f32(vget_low_f32(q0)), vcvt_f64_f32(vget_high_f32(q0)),
+        vcvt_f64_f32(vget_low_f32(q1)), vcvt_f64_f32(vget_high_f32(q1))};
+    const float64x2_t c[4] = {
+        vcvtq_f64_s64(vmovl_s32(vget_low_s32(c0))),
+        vcvtq_f64_s64(vmovl_s32(vget_high_s32(c0))),
+        vcvtq_f64_s64(vmovl_s32(vget_low_s32(c1))),
+        vcvtq_f64_s64(vmovl_s32(vget_high_s32(c1)))};
+    for (int j = 0; j < 4; ++j) {
+      const float64x2_t d = vsubq_f64(q[j], vmulq_f64(c[j], scales));
+      sums[j] = vaddq_f64(sums[j], vmulq_f64(d, d));
+    }
+  }
+  double sum = vaddvq_f64(vaddq_f64(vaddq_f64(sums[0], sums[1]),
+                                    vaddq_f64(sums[2], sums[3])));
+  for (; i < dim; ++i) {
+    const double d = static_cast<double>(query[i]) -
+                     static_cast<double>(codes[i]) * static_cast<double>(scale);
+    sum += d * d;
+  }
+  return sum;
+}
+#endif
 
 void WriteF32LE(uint8_t* out, float v) {
   uint32_t u = 0;
@@ -392,6 +433,9 @@ float ScorePacked(Metric metric, VectorEncoding enc, uint32_t dim,
       const int8_t* codes =
           reinterpret_cast<const int8_t*>(packed.data() + 4);
       if (metric == Metric::kL2) {
+#if defined(__aarch64__) && defined(__OPTIMIZE__)
+        return static_cast<float>(-Int8L2Neon(query.data(), codes, scale, dim));
+#else
         double sum = 0.0;
         for (uint32_t i = 0; i < dim; ++i) {
           const double d =
@@ -400,6 +444,7 @@ float ScorePacked(Metric metric, VectorEncoding enc, uint32_t dim,
           sum += d * d;
         }
         return static_cast<float>(-sum);
+#endif
       }
       // Dot / Cosine: reconstruct via scale * code (same as decode path for
       // cosine energy); keep cosine via decode for norm fidelity.

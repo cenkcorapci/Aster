@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <random>
 #include <vector>
 
@@ -151,6 +152,36 @@ TEST(CompactVectorStore, Int8SqRoundTripAndSize) {
     total_rmse += Rmse(src, got.value());
   }
   EXPECT_LT(total_rmse / static_cast<double>(kN), 0.05);
+}
+
+TEST(VectorEncoding, PackedInt8L2MatchesDoubleReference) {
+  for (uint32_t dim : {1u, 7u, 8u, 9u, 15u, 16u, 31u, 384u, 513u}) {
+    for (uint32_t seed = 0; seed < 20; ++seed) {
+      auto vector = MakeVector(dim, seed);
+      auto query = MakeVector(dim, seed + 100);
+      if (seed == 0) std::fill(vector.begin(), vector.end(), 0.0f);
+      auto store = CompactVectorStore::Encode(VectorEncoding::kInt8Sq, dim,
+                                              vector.data(), 1);
+      ASSERT_TRUE(store.ok());
+      const auto bytes = store.value().PackedAt(0);
+      const uint32_t bits = static_cast<uint32_t>(bytes[0]) |
+                            (static_cast<uint32_t>(bytes[1]) << 8) |
+                            (static_cast<uint32_t>(bytes[2]) << 16) |
+                            (static_cast<uint32_t>(bytes[3]) << 24);
+      float scale;
+      std::memcpy(&scale, &bits, sizeof(scale));
+      double expected = 0.0;
+      for (uint32_t i = 0; i < dim; ++i) {
+        const double diff = static_cast<double>(query[i]) -
+            static_cast<double>(static_cast<int8_t>(bytes[4 + i])) * scale;
+        expected += diff * diff;
+      }
+      const float score = ScorePacked(Metric::kL2, VectorEncoding::kInt8Sq,
+                                      dim, query, bytes);
+      EXPECT_FLOAT_EQ(score, static_cast<float>(-expected))
+          << "dimension=" << dim << " seed=" << seed;
+    }
+  }
 }
 
 TEST(CompactVectorStore, BinaryRabitqSizeAndEnergy) {
