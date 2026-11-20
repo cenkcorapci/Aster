@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <type_traits>
 
 #include "aster/index/distance.h"
 
@@ -17,26 +18,36 @@ namespace {
 constexpr uint32_t kBinaryRabitqSeed = 0xA57E9u;
 
 #if defined(__aarch64__) && defined(__OPTIMIZE__)
-double Int8L2Neon(const float* query, const int8_t* codes, float scale,
-                  uint32_t dim) {
+template <typename Query>
+double Int8L2Neon(const Query* query, const int8_t* codes, float scale,
+                  size_t dim) {
   float64x2_t sums[4] = {vdupq_n_f64(0), vdupq_n_f64(0),
                           vdupq_n_f64(0), vdupq_n_f64(0)};
   const float64x2_t scales = vdupq_n_f64(static_cast<double>(scale));
-  uint32_t i = 0;
+  size_t i = 0;
   for (; i + 8 <= dim; i += 8) {
     const int16x8_t c16 = vmovl_s8(vld1_s8(codes + i));
     const int32x4_t c0 = vmovl_s16(vget_low_s16(c16));
     const int32x4_t c1 = vmovl_s16(vget_high_s16(c16));
-    const float32x4_t q0 = vld1q_f32(query + i);
-    const float32x4_t q1 = vld1q_f32(query + i + 4);
-    const float64x2_t q[4] = {
-        vcvt_f64_f32(vget_low_f32(q0)), vcvt_f64_f32(vget_high_f32(q0)),
-        vcvt_f64_f32(vget_low_f32(q1)), vcvt_f64_f32(vget_high_f32(q1))};
+    float64x2_t q[4];
+    if constexpr (std::is_same_v<Query, double>) {
+      q[0] = vld1q_f64(query + i);
+      q[1] = vld1q_f64(query + i + 2);
+      q[2] = vld1q_f64(query + i + 4);
+      q[3] = vld1q_f64(query + i + 6);
+    } else {
+      const float32x4_t q0 = vld1q_f32(query + i);
+      const float32x4_t q1 = vld1q_f32(query + i + 4);
+      q[0] = vcvt_f64_f32(vget_low_f32(q0));
+      q[1] = vcvt_f64_f32(vget_high_f32(q0));
+      q[2] = vcvt_f64_f32(vget_low_f32(q1));
+      q[3] = vcvt_f64_f32(vget_high_f32(q1));
+    }
+    const float32x4_t cf0 = vcvtq_f32_s32(c0);
+    const float32x4_t cf1 = vcvtq_f32_s32(c1);
     const float64x2_t c[4] = {
-        vcvtq_f64_s64(vmovl_s32(vget_low_s32(c0))),
-        vcvtq_f64_s64(vmovl_s32(vget_high_s32(c0))),
-        vcvtq_f64_s64(vmovl_s32(vget_low_s32(c1))),
-        vcvtq_f64_s64(vmovl_s32(vget_high_s32(c1)))};
+        vcvt_f64_f32(vget_low_f32(cf0)), vcvt_f64_f32(vget_high_f32(cf0)),
+        vcvt_f64_f32(vget_low_f32(cf1)), vcvt_f64_f32(vget_high_f32(cf1))};
     for (int j = 0; j < 4; ++j) {
       const float64x2_t d = vsubq_f64(q[j], vmulq_f64(c[j], scales));
       sums[j] = vaddq_f64(sums[j], vmulq_f64(d, d));
@@ -492,6 +503,24 @@ float ScorePacked(Metric metric, VectorEncoding enc, uint32_t dim,
   scratch.resize(dim);
   if (!DecodeOne(enc, dim, packed.data(), scratch.data()).ok()) return 0.0f;
   return Score(metric, query, scratch);
+}
+
+float ScorePackedInt8L2(std::span<const double> query,
+                        std::span<const uint8_t> packed) {
+  if (packed.size() < 4 || query.size() > packed.size() - 4) return 0.0f;
+  const float scale = ReadF32LE(packed.data());
+  const auto* codes = reinterpret_cast<const int8_t*>(packed.data() + 4);
+#if defined(__aarch64__) && defined(__OPTIMIZE__)
+  return static_cast<float>(
+      -Int8L2Neon(query.data(), codes, scale, query.size()));
+#else
+  double sum = 0.0;
+  for (size_t i = 0; i < query.size(); ++i) {
+    const double d = query[i] - static_cast<double>(codes[i]) * scale;
+    sum += d * d;
+  }
+  return static_cast<float>(-sum);
+#endif
 }
 
 Status CompactVectorStore::Decode(size_t index, std::span<float> out) const {

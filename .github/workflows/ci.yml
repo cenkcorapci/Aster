@@ -39,6 +39,14 @@ jobs:
       - name: Run unit and integration tests
         run: bazel test //aster/... --test_output=errors
 
+      - name: Build Thrift server without TLS
+        run: bazel build --copt=-DASTER_NO_THRIFT_TLS //aster/rpc:thrift_server
+
+      - name: Build static container binaries
+        run: |
+          bazel build --config=linux_musl_amd64 //aster/cli:aster //aster/bench:aster-bench //deploy/docker:su-exec
+          bazel build --config=linux_musl_arm64 //aster/cli:aster //aster/bench:aster-bench //deploy/docker:su-exec
+
       - name: Collect test results
         if: always()
         run: |

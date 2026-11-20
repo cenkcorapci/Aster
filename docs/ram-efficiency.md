@@ -224,6 +224,43 @@ nice -n 10 bazel-bin/aster/bench/ram_stress_bench \
 The benchmark deletes its `--root` directory and the run needs several GiB
 of disk and RAM.
 
+### 1.0.3: prepared query for packed exact scans
+
+On the same Apple M4 host, a subsequent change converts the query to double
+once per exact segment scan, rather than converting it for every packed
+vector. It also converts int8 codes to double through an exact float
+representation in the NEON kernel. Scoring still uses double-precision
+differences and accumulation. This applies to optimized ARM64 int8 L2
+exact scans; other platforms, metrics, and encodings retain their existing
+paths.
+
+The following separate runs compare optimized 1.0.2 with the follow-up on
+the same 384-dimensional workload and settings described above. They used
+50 sequential searches at 1 million vectors and 30 at 10 million, with each
+process run at lower priority. The 10-million-vector comparison was repeated
+in reverse order (1.0.3 first). All runs had zero reported search errors.
+
+| Vectors | Metric | 1.0.2 | 1.0.3 |
+| --- | --- | ---: | ---: |
+| 1 million | Search p50 (ms) | 25.296 | 21.555 |
+| 1 million | Searches per second | 39.0 | 46.6 |
+| 1 million | Peak process RSS (MiB) | 974.1 | 1316.5 |
+| 10 million | Search p50 (ms) | 252.060 | 214.753 |
+| 10 million | Searches per second | 3.9 | 4.7 |
+| 10 million | Peak process RSS (MiB) | 5880.5 | 5574.1 |
+| 10 million, reverse order | Search p50 (ms) | 270.200 | 219.680 |
+| 10 million, reverse order | Searches per second | 3.7 | 4.5 |
+| 10 million, reverse order | Peak process RSS (MiB) | 6570.7 | 5569.4 |
+
+At 10 million, median latency was about 14.8% and 18.7% lower in the two runs
+(1.17× and 1.23× faster). The machine was shared, and peak RSS is a
+whole-process high-water mark affected by loading and caching, not evidence
+that the change reduces memory use.
+These runs do not establish tail latency, recall, or production capacity.
+The benchmark command above can be used with `--single-n 1000000 --searches
+50` or `--single-n 10000000 --searches 30`; compare against a separate
+optimized build of tag `v1.0.2`.
+
 ## Longer-term scale targets
 
 After warm-up with a corpus larger than the RAM budget, treat these as

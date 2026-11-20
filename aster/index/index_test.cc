@@ -8,6 +8,7 @@
 
 #include "aster/index/bloom.h"
 #include "aster/index/distance.h"
+#include "aster/index/vector_encoding.h"
 #include "aster/index/vector_index.h"
 
 #if ASTER_ENABLE_HNSW
@@ -70,6 +71,37 @@ TEST(ExactIndex, ReturnsNearestNeighborsInScoreOrder) {
   EXPECT_EQ(hits[0].id, "row-0");
   EXPECT_EQ(hits[1].id, "row-2");
   EXPECT_GE(hits[0].score, hits[1].score);
+}
+
+TEST(ExactIndex, PackedInt8ScoresMatchIndividualScoring) {
+  constexpr uint32_t dim = 9;
+  const std::vector<float> vectors = {
+      1, 2, 3, 4, 5, 6, 7, 8, 9,
+      -1, -2, -3, -4, -5, -6, -7, -8, -9,
+      2, 3, 4, 5, 6, 7, 8, 9, 10};
+  auto encoded = CompactVectorStore::Encode(VectorEncoding::kInt8Sq, dim,
+                                             vectors.data(), 3);
+  ASSERT_TRUE(encoded.ok());
+  auto packed = std::make_shared<CompactVectorStore>(std::move(encoded.value()));
+  auto rows = std::make_shared<std::vector<Row>>(4);
+  (*rows)[0].id = "two";
+  (*rows)[1].tombstone = true;
+  (*rows)[2].id = "zero";
+  (*rows)[3].id = "one";
+  auto slots = std::make_shared<std::vector<uint32_t>>(
+      std::initializer_list<uint32_t>{2, 0xFFFFFFFFu, 0, 1});
+  auto index = BuildExactIndex(Metric::kL2, rows, packed, slots);
+  const std::vector<float> query = {1, 2, 3, 4, 5, 6, 7, 8, 9};
+  auto hits = index->Search(query, 3, 0);
+  ASSERT_EQ(hits.size(), 3u);
+  EXPECT_EQ(hits[0].id, "zero");
+  EXPECT_EQ(hits[1].id, "two");
+  EXPECT_EQ(hits[2].id, "one");
+  for (const auto& hit : hits) {
+    const size_t slot = hit.id == "zero" ? 0 : (hit.id == "one" ? 1 : 2);
+    EXPECT_FLOAT_EQ(hit.score, ScorePacked(Metric::kL2, VectorEncoding::kInt8Sq,
+                                          dim, query, packed->PackedAt(slot)));
+  }
 }
 
 TEST(ExactIndex, TopKLargerThanIndex) {

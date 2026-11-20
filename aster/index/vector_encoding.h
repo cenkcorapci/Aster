@@ -46,6 +46,10 @@ Status DecodeVector(VectorEncoding enc, uint32_t dim,
 float ScorePacked(Metric metric, VectorEncoding enc, uint32_t dim,
                   VectorView query, std::span<const uint8_t> packed);
 
+// Int8 L2 score with a query converted to double once for repeated scans.
+float ScorePackedInt8L2(std::span<const double> query,
+                        std::span<const uint8_t> packed);
+
 // Contiguous packed store for N vectors — RAM or file-backed counterpart of
 // the SSTable vector block. Sealed segments prefer a MappedFile view so the
 // payload is not duplicated into anonymous RSS.

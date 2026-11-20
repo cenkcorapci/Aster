@@ -6,9 +6,9 @@
 
 #define ASTER_VERSION_MAJOR 1
 #define ASTER_VERSION_MINOR 0
-#define ASTER_VERSION_PATCH 2
+#define ASTER_VERSION_PATCH 3
 
-#define ASTER_VERSION_STRING "1.0.2"
+#define ASTER_VERSION_STRING "1.0.3"
 
 // True when (major, minor, patch) is at least (maj, min, pat).
 #define ASTER_VERSION_AT_LEAST(maj, min, pat)                     \

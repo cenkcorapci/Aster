@@ -142,6 +142,13 @@ class ExactIndexPacked final : public VectorIndex {
     thread_local std::vector<float> tls_scratch;
     tls_scratch.resize(packed_->dimension());
 
+#if defined(__aarch64__) && defined(__OPTIMIZE__)
+    const bool prepared_int8_l2 =
+        metric_ == Metric::kL2 && packed_->encoding() == VectorEncoding::kInt8Sq &&
+        query.size() == packed_->dimension();
+    std::vector<double> prepared_query;
+    if (prepared_int8_l2) prepared_query.assign(query.begin(), query.end());
+#endif
     for (size_t j = 0; j < live_.size(); ++j) {
       const size_t ord = live_[j];
       const uint32_t slot = (*live_slots_)[ord];
@@ -150,6 +157,10 @@ class ExactIndexPacked final : public VectorIndex {
       if (metric_ == Metric::kCosine) {
         if (!packed_->Decode(slot, tls_scratch).ok()) continue;
         score = CosineSimilarityPreNorm(query, qnorm, tls_scratch, norms_[j]);
+#if defined(__aarch64__) && defined(__OPTIMIZE__)
+      } else if (prepared_int8_l2) {
+        score = ScorePackedInt8L2(prepared_query, packed);
+#endif
       } else {
         score = ScorePacked(metric_, packed_->encoding(), packed_->dimension(),
                             query, packed);

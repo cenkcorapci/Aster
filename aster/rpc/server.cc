@@ -32,6 +32,7 @@ namespace ats = ::apache::thrift::server;
 namespace att = ::apache::thrift::transport;
 namespace atc = ::apache::thrift::concurrency;
 
+#ifndef ASTER_NO_THRIFT_TLS
 namespace {
 
 void InitializeOpenSSLForProcessLifetime() {
@@ -43,6 +44,7 @@ void InitializeOpenSSLForProcessLifetime() {
 }
 
 }  // namespace
+#endif
 
 ThriftServer::ThriftServer(Options options,
                            std::shared_ptr<AsterHandler> handler)

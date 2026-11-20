@@ -5,6 +5,17 @@ The project follows a single-version policy; see [docs/versioning.md](docs/versi
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-11-20
+
+### Performance
+- Prepare the query once per segment for optimized ARM64 packed int8 L2
+  exact scans. Two 10M × 384 comparisons showed 14.8% and 18.7% lower median
+  latency than 1.0.2; see [RAM efficiency](docs/ram-efficiency.md) for
+  workload details and limitations.
+
+### Fixed
+- Build the Thrift server without TLS for static musl container images.
+
 ## [1.0.2] - 2026-11-20
 
 ### Performance

@@ -180,6 +180,16 @@ TEST(VectorEncoding, PackedInt8L2MatchesDoubleReference) {
                                       dim, query, bytes);
       EXPECT_FLOAT_EQ(score, static_cast<float>(-expected))
           << "dimension=" << dim << " seed=" << seed;
+      const std::vector<double> prepared_query(query.begin(), query.end());
+      EXPECT_FLOAT_EQ(ScorePackedInt8L2(prepared_query, bytes), score)
+          << "dimension=" << dim << " seed=" << seed;
+      const std::vector<double> prepared_self(vector.begin(), vector.end());
+      EXPECT_FLOAT_EQ(
+          ScorePackedInt8L2(prepared_self, bytes),
+          ScorePacked(Metric::kL2, VectorEncoding::kInt8Sq, dim, vector, bytes))
+          << "near-match dimension=" << dim << " seed=" << seed;
+      EXPECT_EQ(ScorePackedInt8L2(prepared_query, bytes.first(bytes.size() - 1)),
+                0.0f);
     }
   }
 }
